@@ -1,47 +1,39 @@
-# app.py
 import os
 import re
 import json
 from datetime import datetime
 
-import pandas as pd
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ============================================================
-# CONFIG (ENV)
-# ============================================================
-# Coloque no Render (ou no .env local):
-# SHEET_ID=1FAQ-cTeZlh4mZXw-Ya0ipX9JfP92j-9B_4QpcPb3Me8
-# GOOGLE_SERVICE_ACCOUNT_JSON={...conteúdo do json...}
-#
-# Admin:
-# ADMIN_USER=admin
-# ADMIN_PASS=admin123
 
+# =========================
+# CONFIG ENV
+# =========================
 SHEET_ID = os.getenv("SHEET_ID", "").strip()
 SA_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123")
-
-SECRET_KEY = os.getenv("SECRET_KEY", "troque-esta-secret-bem-grande")
+SECRET_KEY = os.getenv("SECRET_KEY", "troque-esta-chave")
 
 WS_BASE = os.getenv("WS_BASE", "BASE")
 WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES")
 WS_LISTAS = os.getenv("WS_LISTAS", "LISTAS")
 
-# ============================================================
+
+# =========================
 # APP
-# ============================================================
+# =========================
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
-# ============================================================
+
+# =========================
 # HELPERS
-# ============================================================
+# =========================
 def norm(s):
     if s is None:
         return ""
@@ -51,36 +43,42 @@ def norm(s):
 
 def connect_gs():
     if not SHEET_ID:
-        raise RuntimeError("Faltou definir SHEET_ID nas variáveis de ambiente.")
+        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
     if not SA_JSON:
-        raise RuntimeError("Faltou definir GOOGLE_SERVICE_ACCOUNT_JSON nas variáveis de ambiente.")
-
+        raise RuntimeError("Faltou GOOGLE_SERVICE_ACCOUNT_JSON nas variáveis de ambiente.")
     info = json.loads(SA_JSON)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
+        "https://www.googleapis.com/auth/drive",
     ]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
-    sh = gc.open_by_key(SHEET_ID)
-    return sh
-
-def ws_get_df(ws):
-    data = ws.get_all_records()
-    df = pd.DataFrame(data)
-    if df.empty:
-        return df
-    df.columns = [norm(c) for c in df.columns]
-    for c in df.columns:
-        df[c] = df[c].astype(str).replace({"nan": "", "None": ""}).fillna("")
-    return df
+    return gc.open_by_key(SHEET_ID)
 
 def ensure_headers(ws, headers):
-    # garante que a linha 1 tem os cabeçalhos esperados
     row1 = ws.row_values(1)
     if [norm(x) for x in row1] != headers:
         ws.clear()
         ws.append_row(headers)
+
+def get_all_records(ws):
+    # gspread get_all_records usa a primeira linha como header
+    return ws.get_all_records()
+
+def pick_col(headers, candidates):
+    # match case-insensitive
+    hmap = {norm(h).lower(): h for h in headers}
+    for cand in candidates:
+        k = norm(cand).lower()
+        if k in hmap:
+            return hmap[k]
+    # contains fallback
+    for h in headers:
+        hl = norm(h).lower()
+        for cand in candidates:
+            if norm(cand).lower() in hl:
+                return h
+    return None
 
 def is_admin():
     return session.get("user_type") == "admin"
@@ -100,22 +98,22 @@ def row_color_class(status_cor):
         return "row-orange"
     return ""
 
-def pick_col(df, candidates):
-    cols = {norm(c).lower(): c for c in df.columns}
-    for cand in candidates:
-        k = norm(cand).lower()
-        if k in cols:
-            return cols[k]
-    for c in df.columns:
-        cl = norm(c).lower()
-        for cand in candidates:
-            if norm(cand).lower() in cl:
-                return c
-    return None
+def unique_list(values):
+    out = []
+    seen = set()
+    for v in values:
+        v = norm(v)
+        if not v:
+            continue
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
 
-# ============================================================
+
+# =========================
 # TEMPLATES
-# ============================================================
+# =========================
 BASE_HTML = """
 <!doctype html>
 <html lang="pt-br">
@@ -188,17 +186,14 @@ LOGIN_BODY = """
     <div style="margin-top:12px;">
       <button type="submit">Entrar</button>
     </div>
-    <p class="small" style="margin-top:12px;">
-      Representante: usuário = código / senha = código.<br>
-      Admin: usuário = {{ admin_user }} / senha = definida em ADMIN_PASS.
-    </p>
   </form>
 </div>
 """
 
-# ============================================================
+
+# =========================
 # ROUTES
-# ============================================================
+# =========================
 @app.route("/", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -211,7 +206,6 @@ def login():
             flash("Logado como ADMIN.", "ok")
             return redirect(url_for("dashboard"))
 
-        # representante: user=senha=código
         if u and p and u == p and u.isdigit():
             session["user_type"] = "rep"
             session["user_login"] = u
@@ -221,7 +215,7 @@ def login():
 
         flash("Login inválido.", "err")
 
-    body = render_template_string(LOGIN_BODY, admin_user=ADMIN_USER)
+    body = render_template_string(LOGIN_BODY)
     return render_template_string(BASE_HTML, title="Login", subtitle="Acesso", logged=False, body=body)
 
 @app.route("/logout")
@@ -239,114 +233,105 @@ def dashboard():
     ws_ed = sh.worksheet(WS_EDICOES)
     ws_listas = sh.worksheet(WS_LISTAS)
 
-    # listas dropdown
-    df_list = ws_get_df(ws_listas)
-    meses = df_list.get("Mês", pd.Series([], dtype=str)).replace({"nan": ""}).tolist() if not df_list.empty else []
-    semanas = df_list.get("Semana Atendimento", pd.Series([], dtype=str)).replace({"nan": ""}).tolist() if not df_list.empty else []
-    status_list = df_list.get("Status Cliente", pd.Series([], dtype=str)).replace({"nan": ""}).tolist() if not df_list.empty else []
-    meses = [m for m in meses if norm(m)]
-    semanas = [s for s in semanas if norm(s)]
-    status_list = [s for s in status_list if norm(s)]
-
-    # base
-    df = ws_get_df(ws_base)
-    if df.empty:
+    base_rows = get_all_records(ws_base)
+    if not base_rows:
         flash("A aba BASE está vazia.", "err")
-        return render_template_string(BASE_HTML, title="Dashboard", subtitle="Base vazia", logged=True,
-                                      user_login=session.get("user_login"), user_type=session.get("user_type"),
+        return render_template_string(BASE_HTML, title="Dashboard", subtitle="Base vazia",
+                                      logged=True, user_login=session.get("user_login"),
+                                      user_type=session.get("user_type"),
                                       body="<div class='card'>Sem dados na BASE.</div>")
 
-    # colunas essenciais
-    key_col = pick_col(df, ["Codigo Grupo Cliente","Código Grupo Cliente","Codigo Cliente","Código Cliente","COD_CLIENTE","Cliente"])
-    rep_col = pick_col(df, ["Codigo Representante","Código Representante","CODIGO REPRESENTANTE","COD_REP"])
-    sup_col = pick_col(df, ["Supervisor","Código Supervisor","Codigo Supervisor","COD_SUP"])
-    cor_col = pick_col(df, ["STATUS COR","Status Cor","COR","Status COR"])
+    headers = [norm(h) for h in ws_base.row_values(1)]
+
+    key_col = pick_col(headers, ["Codigo Grupo Cliente","Código Grupo Cliente","Codigo Cliente","Código Cliente","COD_CLIENTE","Cliente"])
+    rep_col = pick_col(headers, ["Codigo Representante","Código Representante","CODIGO REPRESENTANTE","COD_REP"])
+    sup_col = pick_col(headers, ["Supervisor","Código Supervisor","Codigo Supervisor","COD_SUP"])
+    cor_col = pick_col(headers, ["STATUS COR","Status Cor","COR","Status COR"])
 
     if not key_col or not rep_col:
         flash("BASE precisa ter uma coluna chave (cliente/grupo) e Codigo Representante.", "err")
         return redirect(url_for("logout"))
 
-    # aplica filtro por permissão
-    if not is_admin():
-        rep_code = session.get("rep_code")
-        df = df[df[rep_col].astype(str) == str(rep_code)]
+    # listas dropdown
+    lista_rows = get_all_records(ws_listas)
+    meses, semanas, status_list = [], [], []
+    for r in lista_rows:
+        if "Mês" in r: meses.append(r.get("Mês",""))
+        if "Semana Atendimento" in r: semanas.append(r.get("Semana Atendimento",""))
+        if "Status Cliente" in r: status_list.append(r.get("Status Cliente",""))
+    meses = unique_list(meses)
+    semanas = unique_list(semanas)
+    status_list = unique_list(status_list)
 
-    # filtros admin
+    # garante headers edições
+    ed_headers = ["timestamp","user_type","user_login","rep_code","client_key",
+                  "Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]
+    ensure_headers(ws_ed, ed_headers)
+
+    ed_rows = get_all_records(ws_ed)
+    latest = {}
+    for r in ed_rows:
+        ck = norm(r.get("client_key",""))
+        if ck:
+            latest[ck] = {
+                "Data Agenda Visita": norm(r.get("Data Agenda Visita","")),
+                "Mês": norm(r.get("Mês","")),
+                "Semana Atendimento": norm(r.get("Semana Atendimento","")),
+                "Status Cliente": norm(r.get("Status Cliente","")),
+            }
+
+    # filtros
     sup_sel = norm(request.args.get("sup", ""))
     rep_sel = norm(request.args.get("rep", ""))
     q = norm(request.args.get("q", ""))
 
-    if is_admin() and sup_col and sup_sel:
-        df = df[df[sup_col].astype(str) == sup_sel]
-    if is_admin() and rep_sel:
-        df = df[df[rep_col].astype(str) == rep_sel]
+    out_rows = []
+    for r in base_rows:
+        # normaliza chaves
+        ck = norm(r.get(key_col, ""))
+        repc = norm(r.get(rep_col, ""))
 
-    if q:
-        # busca em colunas comuns
-        candidates = [key_col, rep_col]
-        for c in ["Grupo Cliente", "Cidade", "Cliente"]:
-            cc = pick_col(df, [c])
-            if cc:
-                candidates.append(cc)
-        mask = False
-        for c in list(dict.fromkeys(candidates)):
-            mask = mask | df[c].astype(str).str.contains(q, case=False, na=False)
-        df = df[mask]
+        if not is_admin():
+            if repc != session.get("rep_code"):
+                continue
 
-    # carrega edições e aplica por cima (última vence)
-    ed_headers = ["timestamp","user_type","user_login","rep_code","client_key",
-                  "Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]
-    ensure_headers(ws_ed, ed_headers)
-    df_ed = ws_get_df(ws_ed)
+        if is_admin() and sup_col and sup_sel:
+            if norm(r.get(sup_col, "")) != sup_sel:
+                continue
+        if is_admin() and rep_sel:
+            if repc != rep_sel:
+                continue
 
-    latest = {}
-    if not df_ed.empty and "client_key" in df_ed.columns:
-        for _, r in df_ed.iterrows():
-            ck = norm(r.get("client_key",""))
-            if ck:
-                latest[ck] = {
-                    "Data Agenda Visita": norm(r.get("Data Agenda Visita","")),
-                    "Mês": norm(r.get("Mês","")),
-                    "Semana Atendimento": norm(r.get("Semana Atendimento","")),
-                    "Status Cliente": norm(r.get("Status Cliente","")),
-                }
+        if q:
+            hay = " ".join([norm(v) for v in r.values()])
+            if q.lower() not in hay.lower():
+                continue
 
-    def apply_edit(row):
-        ck = norm(row.get(key_col,""))
+        # aplica última edição
         if ck in latest:
-            for k,v in latest[ck].items():
-                row[k] = v
-        return row
+            r["Data Agenda Visita"] = latest[ck]["Data Agenda Visita"]
+            r["Mês"] = latest[ck]["Mês"]
+            r["Semana Atendimento"] = latest[ck]["Semana Atendimento"]
+            r["Status Cliente"] = latest[ck]["Status Cliente"]
+        else:
+            r.setdefault("Data Agenda Visita","")
+            r.setdefault("Mês","")
+            r.setdefault("Semana Atendimento","")
+            r.setdefault("Status Cliente","")
 
-    # garante colunas editáveis
-    for c in ["Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]:
-        if c not in df.columns:
-            df[c] = ""
-
-    df = df.apply(apply_edit, axis=1)
+        out_rows.append(r)
 
     # listas de filtro admin
-    sup_list = sorted(df[sup_col].dropna().astype(str).unique().tolist()) if (is_admin() and sup_col) else []
-    rep_list = sorted(df[rep_col].dropna().astype(str).unique().tolist()) if is_admin() else []
+    sup_list = []
+    rep_list = []
+    if is_admin():
+        if sup_col:
+            sup_list = unique_list([r.get(sup_col,"") for r in base_rows])
+        rep_list = unique_list([r.get(rep_col,"") for r in base_rows])
 
-    # paginação simples
+    # paginação
     page_size = 200
-    rows = df.head(page_size).to_dict(orient="records")
-
-    # monta tabela HTML
-    cols_show = [
-        key_col, rep_col
-    ]
-    if sup_col:
-        cols_show.append(sup_col)
-    for c in ["Grupo Cliente","Cidade"]:
-        cc = pick_col(df, [c])
-        if cc and cc not in cols_show:
-            cols_show.append(cc)
-
-    cols_show += ["Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]
-    if cor_col and cor_col not in cols_show:
-        cols_show.append(cor_col)
+    out_rows = out_rows[:page_size]
 
     def opt_html(options, selected):
         out = ["<option value=''></option>"]
@@ -356,7 +341,7 @@ def dashboard():
         return "\n".join(out)
 
     table_rows = []
-    for r in rows:
+    for r in out_rows:
         ck = norm(r.get(key_col,""))
         repc = norm(r.get(rep_col,""))
         corv = norm(r.get(cor_col,"")) if cor_col else ""
@@ -367,7 +352,6 @@ def dashboard():
         sem = norm(r.get("Semana Atendimento",""))
         stc = norm(r.get("Status Cliente",""))
 
-        # inputs editáveis
         row_html = f"""
         <tr class="{klass}">
           <td>{ck}</td>
@@ -376,12 +360,11 @@ def dashboard():
         if sup_col:
             row_html += f"<td>{norm(r.get(sup_col,''))}</td>"
 
-        gc = pick_col(df, ["Grupo Cliente"])
-        cd = pick_col(df, ["Cidade"])
-        if gc:
-            row_html += f"<td>{norm(r.get(gc,''))}</td>"
-        if cd:
-            row_html += f"<td>{norm(r.get(cd,''))}</td>"
+        # extras se existirem
+        if "Grupo Cliente" in r:
+            row_html += f"<td>{norm(r.get('Grupo Cliente',''))}</td>"
+        if "Cidade" in r:
+            row_html += f"<td>{norm(r.get('Cidade',''))}</td>"
 
         row_html += f"""
           <td>
@@ -417,24 +400,22 @@ def dashboard():
     <div class="card">
       <form method="get">
         <div class="grid">
-          {"".join([
-            f"""
-            <div>
-              <label>Filtro Supervisor</label>
-              <select name="sup">
-                <option value="">(Todos)</option>
-                {''.join([f"<option value='{s}' {'selected' if s==sup_sel else ''}>{s}</option>" for s in sup_list])}
-              </select>
-            </div>
-            <div>
-              <label>Filtro Representante</label>
-              <select name="rep">
-                <option value="">(Todos)</option>
-                {''.join([f"<option value='{r}' {'selected' if r==rep_sel else ''}>{r}</option>" for r in rep_list])}
-              </select>
-            </div>
-            """ if is_admin() else ""
-          ])}
+          {("" if not is_admin() else f"""
+          <div>
+            <label>Filtro Supervisor</label>
+            <select name="sup">
+              <option value="">(Todos)</option>
+              {''.join([f"<option value='{s}' {'selected' if s==sup_sel else ''}>{s}</option>" for s in sup_list])}
+            </select>
+          </div>
+          <div>
+            <label>Filtro Representante</label>
+            <select name="rep">
+              <option value="">(Todos)</option>
+              {''.join([f"<option value='{r}' {'selected' if r==rep_sel else ''}>{r}</option>" for r in rep_list])}
+            </select>
+          </div>
+          """)}
           <div>
             <label>Buscar</label>
             <input name="q" value="{q}" placeholder="cliente/grupo/cidade...">
@@ -442,7 +423,6 @@ def dashboard():
           <div style="display:flex;align-items:flex-end;gap:8px;">
             <button type="submit">Aplicar</button>
             <a href="{url_for('dashboard')}"><button type="button" class="secondary">Limpar</button></a>
-            {"<a href='"+url_for("auditoria")+"'><button type='button' class='secondary'>Auditoria</button></a>" if is_admin() else ""}
           </div>
         </div>
       </form>
@@ -450,7 +430,7 @@ def dashboard():
 
     <div class="card" style="overflow:auto; max-height:72vh;">
       <div style="margin-bottom:10px;">
-        <b>Total exibido:</b> {len(df)} <span class="small">(mostrando até {page_size})</span>
+        <b>Total exibido:</b> {len(out_rows)} <span class="small">(mostrando até {page_size})</span>
       </div>
       <table>
         <thead>
@@ -458,8 +438,8 @@ def dashboard():
             <th>{key_col}</th>
             <th>{rep_col}</th>
             {f"<th>{sup_col}</th>" if sup_col else ""}
-            {f"<th>Grupo Cliente</th>" if pick_col(df, ['Grupo Cliente']) else ""}
-            {f"<th>Cidade</th>" if pick_col(df, ['Cidade']) else ""}
+            {"<th>Grupo Cliente</th>" if "Grupo Cliente" in base_rows[0] else ""}
+            {"<th>Cidade</th>" if "Cidade" in base_rows[0] else ""}
             <th>Data Agenda Visita</th>
             <th>Mês</th>
             <th>Semana Atendimento</th>
@@ -495,18 +475,10 @@ def salvar():
     client_key = norm(request.form.get("client_key", ""))
     rep_code_form = norm(request.form.get("rep_code", ""))
 
-    # representante só pode gravar no que for dele
     if user_type == "rep":
         if rep_code_form != session.get("rep_code"):
             flash("Você não pode gravar alterações em clientes de outro representante.", "err")
             return redirect(url_for("dashboard"))
-
-    payload = {
-        "Data Agenda Visita": norm(request.form.get("Data Agenda Visita", "")),
-        "Mês": norm(request.form.get("Mês", "")),
-        "Semana Atendimento": norm(request.form.get("Semana Atendimento", "")),
-        "Status Cliente": norm(request.form.get("Status Cliente", "")),
-    }
 
     sh = connect_gs()
     ws_ed = sh.worksheet(WS_EDICOES)
@@ -521,64 +493,16 @@ def salvar():
         user_login,
         rep_code_form,
         client_key,
-        payload["Data Agenda Visita"],
-        payload["Mês"],
-        payload["Semana Atendimento"],
-        payload["Status Cliente"]
+        norm(request.form.get("Data Agenda Visita", "")),
+        norm(request.form.get("Mês", "")),
+        norm(request.form.get("Semana Atendimento", "")),
+        norm(request.form.get("Status Cliente", "")),
     ]
     ws_ed.append_row(row)
 
     flash("Alteração gravada com sucesso.", "ok")
     return redirect(url_for("dashboard"))
 
-@app.route("/auditoria", methods=["GET"])
-def auditoria():
-    if not require_login() or not is_admin():
-        return redirect(url_for("dashboard"))
-
-    sh = connect_gs()
-    ws_ed = sh.worksheet(WS_EDICOES)
-    df_ed = ws_get_df(ws_ed)
-
-    if df_ed.empty:
-        body = "<div class='card'>Sem alterações registradas ainda.</div>"
-        return render_template_string(BASE_HTML, title="Auditoria", subtitle="Admin", logged=True,
-                                      user_login=session.get("user_login"), user_type=session.get("user_type"),
-                                      body=body)
-
-    # mostra últimas 500
-    df_ed = df_ed.tail(500)
-
-    cols = ["timestamp","user_type","user_login","rep_code","client_key",
-            "Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]
-    for c in cols:
-        if c not in df_ed.columns:
-            df_ed[c] = ""
-
-    rows = df_ed[cols].to_dict(orient="records")
-    tr = []
-    for r in rows:
-        tr.append("<tr>" + "".join([f"<td>{norm(r.get(c,''))}</td>" for c in cols]) + "</tr>")
-
-    body = f"""
-    <div class="card">
-      <b>Auditoria (últimas 500 alterações)</b>
-      <div class="small">Tudo fica gravado na aba EDICOES.</div>
-    </div>
-    <div class="card" style="overflow:auto; max-height:72vh;">
-      <table>
-        <thead>
-          <tr>{"".join([f"<th>{c}</th>" for c in cols])}</tr>
-        </thead>
-        <tbody>
-          {"".join(tr)}
-        </tbody>
-      </table>
-    </div>
-    """
-    return render_template_string(BASE_HTML, title="Auditoria", subtitle="Admin", logged=True,
-                                  user_login=session.get("user_login"), user_type=session.get("user_type"),
-                                  body=body)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
