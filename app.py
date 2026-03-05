@@ -101,24 +101,64 @@ def pick_col(headers, candidates):
                 return h
     return None
 
+def parse_money_to_float(v):
+    """
+    Converte "1.234.567,89" / "1234,56" / "1234.56" em float.
+    Se vier vazio/None, retorna 0.
+    """
+    s = norm(v)
+    if s == "":
+        return 0.0
+    try:
+        # pt-BR comum: 1.234.567,89
+        s2 = s.replace(".", "").replace(",", ".")
+        return float(s2)
+    except Exception:
+        try:
+            return float(s)
+        except Exception:
+            return 0.0
 
 def fmt_money(v):
     """
     Formata para pt-BR simples sem depender de locale.
-    Aceita número ou string.
     """
     s = norm(v)
     if s == "":
         return ""
-    try:
-        x = float(str(s).replace(".", "").replace(",", "."))
-    except Exception:
-        return s  # se não der pra converter, mostra como veio
-    # 1.234.567,89
+    x = parse_money_to_float(s)
     inteiro, frac = f"{x:.2f}".split(".")
     inteiro = inteiro[::-1]
     inteiro = ".".join([inteiro[i:i+3] for i in range(0, len(inteiro), 3)])[::-1]
     return f"{inteiro},{frac}"
+
+def row_color_class_by_totals(t24, t25, t26):
+    """
+    4 cores:
+    - vermelho: 2026=0 e teve 2024/2025
+    - laranja: 2026<2025 (ambos >0)
+    - amarelo: 2026>0, 2025=0, 2024>0 (reativou)
+    - azul claro: 2026>0 e 2024=0 e 2025=0 (só 2026)
+    """
+    # arredonda para evitar ruído
+    t24 = float(t24 or 0.0)
+    t25 = float(t25 or 0.0)
+    t26 = float(t26 or 0.0)
+
+    eps = 1e-9
+    has24 = t24 > eps
+    has25 = t25 > eps
+    has26 = t26 > eps
+
+    if (not has26) and (has24 or has25):
+        return "row-red"
+    if has26 and has25 and (t26 + eps) < t25:
+        return "row-orange"
+    if has26 and (not has25) and has24:
+        return "row-yellow"
+    if has26 and (not has24) and (not has25):
+        return "row-blue"
+    return ""
 
 
 # =========================
@@ -227,6 +267,12 @@ BASE_HTML = """
     .hint{color:#9ca3af;font-size:12px;margin-top:6px;}
     .nowrap{white-space:nowrap;}
     .money{font-variant-numeric: tabular-nums;}
+
+    /* CORES SOLICITADAS */
+    .row-red{background:rgba(220,38,38,0.22);}        /* vermelho */
+    .row-orange{background:rgba(249,115,22,0.20);}    /* laranja */
+    .row-yellow{background:rgba(234,179,8,0.20);}     /* amarelo */
+    .row-blue{background:rgba(56,189,248,0.16);}      /* azul claro */
   </style>
 </head>
 <body>
@@ -312,7 +358,6 @@ def dashboard():
         return redirect(url_for("login"))
 
     sh = connect_gs()
-
     ws_base = sh.worksheet(WS_BASE)
 
     ed_headers = ["timestamp","user_type","user_login","rep_code","client_key",
@@ -333,7 +378,7 @@ def dashboard():
 
     headers = [norm(h) for h in ws_base.row_values(1)]
 
-    # Obrigatórias
+    # Colunas essenciais na ordem desejada
     key_col = pick_col(headers, ["Codigo Grupo Cliente","Código Grupo Cliente","Codigo Cliente","Código Cliente","COD_CLIENTE","Cliente"])
     grupo_col = pick_col(headers, ["Grupo Cliente","Nome Cliente","Cliente","Razao Social","Razão Social","Fantasia","Nome"])
     rep_col = pick_col(headers, ["Codigo Representante","Código Representante","CODIGO REPRESENTANTE","COD_REP"])
@@ -346,10 +391,10 @@ def dashboard():
     t2026_col = pick_col(headers, ["Total 2026","TOTAL 2026","Vlr 2026","Valor 2026","2026"])
 
     if not key_col or not rep_col:
-        flash("BASE precisa ter uma coluna chave (Codigo Grupo Cliente) e Codigo Representante.", "err")
+        flash("BASE precisa ter 'Codigo Grupo Cliente' e 'Codigo Representante'.", "err")
         return redirect(url_for("logout"))
 
-    # LISTAS (se vazia, usa fallback do código)
+    # LISTAS (se LISTAS vazia, usa fallback)
     lista_rows = safe_get_all_records(ws_listas)
     meses = unique_list([r.get("Mês","") for r in lista_rows]) or DEFAULT_MESES
     semanas = unique_list([r.get("Semana Atendimento","") for r in lista_rows]) or DEFAULT_SEMANAS
@@ -419,7 +464,6 @@ def dashboard():
             out.append(f"<option value='{o}' {sel}>{o}</option>")
         return "\n".join(out)
 
-    # TABELA (na ordem que você pediu)
     table_rows = []
     for r in out_rows:
         ck = norm(r.get(key_col,""))
@@ -427,6 +471,10 @@ def dashboard():
         repc = norm(r.get(rep_col,""))
         supv = norm(r.get(sup_col,"")) if sup_col else ""
         cidade = norm(r.get(cidade_col,"")) if cidade_col else ""
+
+        v24 = parse_money_to_float(r.get(t2024_col,"")) if t2024_col else 0.0
+        v25 = parse_money_to_float(r.get(t2025_col,"")) if t2025_col else 0.0
+        v26 = parse_money_to_float(r.get(t2026_col,"")) if t2026_col else 0.0
 
         t24 = fmt_money(r.get(t2024_col,"")) if t2024_col else ""
         t25 = fmt_money(r.get(t2025_col,"")) if t2025_col else ""
@@ -437,8 +485,11 @@ def dashboard():
         sem = norm(r.get("Semana Atendimento",""))
         stc = norm(r.get("Status Cliente",""))
 
+        # cor por totais
+        klass = row_color_class_by_totals(v24, v25, v26)
+
         row_html = f"""
-        <tr>
+        <tr class="{klass}">
           <td class="nowrap">{ck}</td>
           <td>{grupo}</td>
           <td class="nowrap">{repc}</td>
@@ -507,7 +558,7 @@ def dashboard():
             <a href="{url_for('dashboard')}"><button type="button" class="secondary">Limpar</button></a>
           </div>
         </div>
-        <div class="hint">Mostrando até {PAGE_SIZE} linhas.</div>
+        <div class="hint">Cores: Vermelho (parou 2026), Laranja (caiu 2026 vs 2025), Amarelo (reativou), Azul claro (só 2026).</div>
       </form>
     </div>
 
