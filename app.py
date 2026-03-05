@@ -1,4 +1,3 @@
-# app.py
 import os
 import re
 import json
@@ -18,10 +17,8 @@ from gspread.exceptions import WorksheetNotFound
 # =========================
 SHEET_ID = os.getenv("SHEET_ID", "").strip()
 
-# Aceita 2 jeitos:
-# 1) JSON direto (recomendado se você conseguir colar sem quebrar)
+# credencial Google: JSON direto ou Base64 do JSON
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-# 2) Base64 do JSON (mais blindado)
 GOOGLE_SA_JSON_B64 = os.getenv("GOOGLE_SA_JSON_B64", "").strip()
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin").strip()
@@ -33,6 +30,29 @@ WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "LISTAS").strip()
 
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
+
+
+# =========================
+# LISTAS FIXAS (fallback)
+# =========================
+DEFAULT_MESES = [
+    "Janeiro","Fevereiro","Março","Abril","Maio","Junho",
+    "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"
+]
+
+DEFAULT_SEMANAS = [
+    "Semana 01","Semana 02","Semana 03","Semana 04","sem Agenda"
+]
+
+DEFAULT_STATUS = [
+    "CLIENTE COM BAIXO GIRO",
+    "CLIENTE ESTOCADO KIDY",
+    "CLIENTE ESTOCADO OUTRAS MARCAS",
+    "CLIENTE JÁ COMPROU",
+    "CLIENTE NÃO ATENDEU",
+    "CLIENTE SEM VERBA",
+    "CLIENTE VAI MANDAR O PEDIDO",
+]
 
 
 # =========================
@@ -82,13 +102,11 @@ def row_color_class(status_cor):
     return ""
 
 def pick_col(headers, candidates):
-    # match case-insensitive exato
     hmap = {norm(h).lower(): h for h in headers}
     for cand in candidates:
         k = norm(cand).lower()
         if k in hmap:
             return hmap[k]
-    # contains fallback
     for h in headers:
         hl = norm(h).lower()
         for cand in candidates:
@@ -105,13 +123,11 @@ def _load_service_account_info():
         info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
     elif GOOGLE_SA_JSON_B64:
         b64 = GOOGLE_SA_JSON_B64.strip()
-        # padding base64 (evita erro "not a multiple of 4")
-        b64 += "=" * (-len(b64) % 4)
+        b64 += "=" * (-len(b64) % 4)  # padding
         info = json.loads(base64.b64decode(b64).decode("utf-8"))
     else:
         raise RuntimeError("Faltou GOOGLE_SERVICE_ACCOUNT_JSON (ou GOOGLE_SA_JSON_B64) nas variáveis de ambiente.")
 
-    # Corrige quebra de linha do private_key quando vem com \\n
     if "private_key" in info and isinstance(info["private_key"], str):
         info["private_key"] = info["private_key"].replace("\\n", "\n")
 
@@ -139,7 +155,6 @@ def get_or_create_worksheet(sh, title, rows=1000, cols=30, headers=None):
             ws.append_row(headers)
         return ws
 
-    # Se pediram headers, garante pelo menos a primeira linha
     if headers:
         row1 = [norm(x) for x in ws.row_values(1)]
         if row1 != headers:
@@ -148,7 +163,6 @@ def get_or_create_worksheet(sh, title, rows=1000, cols=30, headers=None):
     return ws
 
 def safe_get_all_records(ws):
-    # Se a planilha estiver vazia ou sem header, não quebra
     try:
         return ws.get_all_records()
     except Exception:
@@ -156,12 +170,11 @@ def safe_get_all_records(ws):
 
 
 # =========================
-# ERROR HANDLER (pra não ficar 500 mudo)
+# ERROR HANDLER
 # =========================
 @app.errorhandler(Exception)
 def handle_any_exception(e):
     app.logger.error("ERRO NÃO TRATADO:\n%s", traceback.format_exc())
-    # Mostra mensagem minimamente útil pro usuário (sem expor chave)
     msg = norm(str(e)) or "Erro interno."
     body = f"<div class='card'><b>Erro:</b><br><pre style='white-space:pre-wrap'>{msg}</pre></div>"
     return render_template_string(
@@ -243,7 +256,6 @@ LOGIN_BODY = """
       <div>
         <label>Usuário</label>
         <input name="user" placeholder="admin ou código do representante" required>
-        <div class="hint">Admin: use ADMIN_USER/ADMIN_PASS. Rep: use o próprio código como senha.</div>
       </div>
       <div>
         <label>Senha</label>
@@ -298,19 +310,10 @@ def dashboard():
 
     sh = connect_gs()
 
-    # BASE é obrigatória
-    try:
-        ws_base = sh.worksheet(WS_BASE)
-    except WorksheetNotFound:
-        flash(f"Não achei a aba BASE. Configure WS_BASE no Render (hoje: '{WS_BASE}').", "err")
-        body = "<div class='card'>Aba BASE não encontrada.</div>"
-        return render_template_string(
-            BASE_HTML, title="Dashboard", subtitle="Erro", logged=True,
-            user_login=session.get("user_login"), user_type=session.get("user_type"),
-            body=body
-        )
+    # BASE obrigatória
+    ws_base = sh.worksheet(WS_BASE)
 
-    # EDICOES e LISTAS: se não existirem, cria automaticamente
+    # EDICOES e LISTAS criadas automaticamente
     ed_headers = ["timestamp","user_type","user_login","rep_code","client_key",
                   "Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]
     ws_ed = get_or_create_worksheet(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
@@ -334,7 +337,13 @@ def dashboard():
         "Codigo Grupo Cliente","Código Grupo Cliente",
         "Codigo Cliente","Código Cliente","COD_CLIENTE","Cliente"
     ])
-    grupo_col = pick_col(headers, ["Grupo Cliente","Grupo","Nome Grupo","Razao Social","Nome Cliente"])
+
+    # >>> AQUI: nome do cliente (Grupo Cliente)
+    grupo_col = pick_col(headers, [
+        "Grupo Cliente", "Grupo", "Nome Grupo", "Nome Cliente",
+        "Cliente", "Razao Social", "Razão Social", "Fantasia", "Nome"
+    ])
+
     cidade_col = pick_col(headers, ["Cidade","Município","Municipio"])
     rep_col = pick_col(headers, ["Codigo Representante","Código Representante","CODIGO REPRESENTANTE","COD_REP"])
     sup_col = pick_col(headers, ["Supervisor","Código Supervisor","Codigo Supervisor","COD_SUP"])
@@ -344,13 +353,13 @@ def dashboard():
         flash("BASE precisa ter uma coluna chave (cliente/grupo) e Código Representante.", "err")
         return redirect(url_for("logout"))
 
-    # Listas dropdown (LISTAS)
+    # LISTAS (se vazia, usa fallback do código)
     lista_rows = safe_get_all_records(ws_listas)
-    meses = unique_list([r.get("Mês","") for r in lista_rows])
-    semanas = unique_list([r.get("Semana Atendimento","") for r in lista_rows])
-    status_list = unique_list([r.get("Status Cliente","") for r in lista_rows])
+    meses = unique_list([r.get("Mês","") for r in lista_rows]) or DEFAULT_MESES
+    semanas = unique_list([r.get("Semana Atendimento","") for r in lista_rows]) or DEFAULT_SEMANAS
+    status_list = unique_list([r.get("Status Cliente","") for r in lista_rows]) or DEFAULT_STATUS
 
-    # Carrega edições (EDICOES) e pega a última por client_key
+    # EDIÇÕES (última por client_key)
     ed_rows = safe_get_all_records(ws_ed)
     latest = {}
     for r in ed_rows:
@@ -368,11 +377,9 @@ def dashboard():
     rep_sel = norm(request.args.get("rep", ""))
     q = norm(request.args.get("q", ""))
 
-    # listas para filtro admin
     sup_list = unique_list([r.get(sup_col,"") for r in base_rows]) if (is_admin() and sup_col) else []
     rep_list = unique_list([r.get(rep_col,"") for r in base_rows]) if is_admin() else []
 
-    # aplica filtros + segurança rep
     out_rows = []
     for r in base_rows:
         ck = norm(r.get(key_col, ""))
@@ -394,7 +401,6 @@ def dashboard():
             if q.lower() not in hay.lower():
                 continue
 
-        # aplica última edição
         if ck in latest:
             r["Data Agenda Visita"] = latest[ck]["Data Agenda Visita"]
             r["Mês"] = latest[ck]["Mês"]
@@ -408,7 +414,6 @@ def dashboard():
 
         out_rows.append(r)
 
-    # paginação simples
     out_rows = out_rows[:PAGE_SIZE]
 
     def opt_html(options, selected):
@@ -418,7 +423,6 @@ def dashboard():
             out.append(f"<option value='{o}' {sel}>{o}</option>")
         return "\n".join(out)
 
-    # monta tabela
     table_rows = []
     for r in out_rows:
         ck = norm(r.get(key_col,""))
@@ -427,7 +431,9 @@ def dashboard():
         corv = norm(r.get(cor_col,"")) if cor_col else ""
         klass = row_color_class(corv)
 
+        # >>> nome do cliente (Grupo Cliente)
         grupo = norm(r.get(grupo_col,"")) if grupo_col else ""
+
         cidade = norm(r.get(cidade_col,"")) if cidade_col else ""
 
         dav = norm(r.get("Data Agenda Visita",""))
@@ -440,8 +446,8 @@ def dashboard():
           <td class="nowrap">{ck}</td>
           <td class="nowrap">{repc}</td>
           {f"<td class='nowrap'>{supv}</td>" if sup_col else ""}
-          {f"<td>{grupo}</td>" if grupo_col else ""}
-          {f"<td>{cidade}</td>" if cidade_col else ""}
+          <td>{grupo}</td>
+          {f"<td>{cidade}</td>" if cidade_col else "<td></td>"}
           <td>
             <form method="post" action="{url_for('salvar')}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <input type="hidden" name="client_key" value="{ck}">
@@ -449,7 +455,7 @@ def dashboard():
               <input type="date" name="Data Agenda Visita" value="{dav}" style="min-width:155px;">
           </td>
           <td>
-              <select name="Mês" style="min-width:120px;">
+              <select name="Mês" style="min-width:140px;">
                 {opt_html(meses, mes)}
               </select>
           </td>
@@ -459,7 +465,7 @@ def dashboard():
               </select>
           </td>
           <td>
-              <select name="Status Cliente" style="min-width:180px;">
+              <select name="Status Cliente" style="min-width:220px;">
                 {opt_html(status_list, stc)}
               </select>
               <button type="submit">Gravar</button>
@@ -470,7 +476,6 @@ def dashboard():
         """
         table_rows.append(row_html)
 
-    # filtros UI
     filtros_html = ""
     if is_admin():
         filtros_html = f"""
@@ -504,22 +509,19 @@ def dashboard():
             <a href="{url_for('dashboard')}"><button type="button" class="secondary">Limpar</button></a>
           </div>
         </div>
-        <div class="hint">Mostrando até {PAGE_SIZE} linhas. (Você pode aumentar PAGE_SIZE no Render.)</div>
+        <div class="hint">Mostrando até {PAGE_SIZE} linhas.</div>
       </form>
     </div>
 
     <div class="card" style="overflow:auto; max-height:72vh;">
-      <div style="margin-bottom:10px;">
-        <b>Total exibido:</b> {len(out_rows)}
-      </div>
       <table>
         <thead>
           <tr>
             <th>{key_col}</th>
             <th>{rep_col}</th>
             {f"<th>{sup_col}</th>" if sup_col else ""}
-            {f"<th>{grupo_col}</th>" if grupo_col else ""}
-            {f"<th>{cidade_col}</th>" if cidade_col else ""}
+            <th>Grupo Cliente</th>
+            <th>{cidade_col or "Cidade"}</th>
             <th>Data Agenda Visita</th>
             <th>Mês</th>
             <th>Semana Atendimento</th>
