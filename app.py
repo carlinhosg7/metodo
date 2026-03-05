@@ -17,7 +17,6 @@ from gspread.exceptions import WorksheetNotFound
 # =========================
 SHEET_ID = os.getenv("SHEET_ID", "").strip()
 
-# credencial Google: JSON direto ou Base64 do JSON
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GOOGLE_SA_JSON_B64 = os.getenv("GOOGLE_SA_JSON_B64", "").strip()
 
@@ -89,18 +88,6 @@ def is_admin():
 def require_login():
     return "user_type" in session
 
-def row_color_class(status_cor):
-    s = norm(status_cor).lower()
-    if "vermel" in s or "red" in s:
-        return "row-red"
-    if "verde" in s or "green" in s:
-        return "row-green"
-    if "amarel" in s or "yellow" in s:
-        return "row-yellow"
-    if "laranj" in s or "orange" in s:
-        return "row-orange"
-    return ""
-
 def pick_col(headers, candidates):
     hmap = {norm(h).lower(): h for h in headers}
     for cand in candidates:
@@ -115,6 +102,25 @@ def pick_col(headers, candidates):
     return None
 
 
+def fmt_money(v):
+    """
+    Formata para pt-BR simples sem depender de locale.
+    Aceita número ou string.
+    """
+    s = norm(v)
+    if s == "":
+        return ""
+    try:
+        x = float(str(s).replace(".", "").replace(",", "."))
+    except Exception:
+        return s  # se não der pra converter, mostra como veio
+    # 1.234.567,89
+    inteiro, frac = f"{x:.2f}".split(".")
+    inteiro = inteiro[::-1]
+    inteiro = ".".join([inteiro[i:i+3] for i in range(0, len(inteiro), 3)])[::-1]
+    return f"{inteiro},{frac}"
+
+
 # =========================
 # GOOGLE SHEETS
 # =========================
@@ -123,7 +129,7 @@ def _load_service_account_info():
         info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
     elif GOOGLE_SA_JSON_B64:
         b64 = GOOGLE_SA_JSON_B64.strip()
-        b64 += "=" * (-len(b64) % 4)  # padding
+        b64 += "=" * (-len(b64) % 4)
         info = json.loads(base64.b64decode(b64).decode("utf-8"))
     else:
         raise RuntimeError("Faltou GOOGLE_SERVICE_ACCOUNT_JSON (ou GOOGLE_SA_JSON_B64) nas variáveis de ambiente.")
@@ -218,12 +224,9 @@ BASE_HTML = """
     .err{background:#3f1d1d;border:1px solid #7f1d1d;}
     .pill{padding:3px 8px;border-radius:999px;font-size:12px;background:#0b1220;border:1px solid #1f2937;display:inline-block;}
     .small{color:#9ca3af;font-size:12px;}
-    .row-red{background:rgba(220,38,38,0.20);}
-    .row-green{background:rgba(34,197,94,0.18);}
-    .row-yellow{background:rgba(234,179,8,0.18);}
-    .row-orange{background:rgba(249,115,22,0.18);}
     .hint{color:#9ca3af;font-size:12px;margin-top:6px;}
     .nowrap{white-space:nowrap;}
+    .money{font-variant-numeric: tabular-nums;}
   </style>
 </head>
 <body>
@@ -310,10 +313,8 @@ def dashboard():
 
     sh = connect_gs()
 
-    # BASE obrigatória
     ws_base = sh.worksheet(WS_BASE)
 
-    # EDICOES e LISTAS criadas automaticamente
     ed_headers = ["timestamp","user_type","user_login","rep_code","client_key",
                   "Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]
     ws_ed = get_or_create_worksheet(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
@@ -332,25 +333,20 @@ def dashboard():
 
     headers = [norm(h) for h in ws_base.row_values(1)]
 
-    # Colunas (flexível)
-    key_col = pick_col(headers, [
-        "Codigo Grupo Cliente","Código Grupo Cliente",
-        "Codigo Cliente","Código Cliente","COD_CLIENTE","Cliente"
-    ])
-
-    # >>> AQUI: nome do cliente (Grupo Cliente)
-    grupo_col = pick_col(headers, [
-        "Grupo Cliente", "Grupo", "Nome Grupo", "Nome Cliente",
-        "Cliente", "Razao Social", "Razão Social", "Fantasia", "Nome"
-    ])
-
-    cidade_col = pick_col(headers, ["Cidade","Município","Municipio"])
+    # Obrigatórias
+    key_col = pick_col(headers, ["Codigo Grupo Cliente","Código Grupo Cliente","Codigo Cliente","Código Cliente","COD_CLIENTE","Cliente"])
+    grupo_col = pick_col(headers, ["Grupo Cliente","Nome Cliente","Cliente","Razao Social","Razão Social","Fantasia","Nome"])
     rep_col = pick_col(headers, ["Codigo Representante","Código Representante","CODIGO REPRESENTANTE","COD_REP"])
     sup_col = pick_col(headers, ["Supervisor","Código Supervisor","Codigo Supervisor","COD_SUP"])
-    cor_col = pick_col(headers, ["STATUS COR","Status Cor","COR","Status COR"])
+    cidade_col = pick_col(headers, ["Cidade","Município","Municipio"])
+
+    # Totais
+    t2024_col = pick_col(headers, ["Total 2024","TOTAL 2024","Vlr 2024","Valor 2024","2024"])
+    t2025_col = pick_col(headers, ["Total 2025","TOTAL 2025","Vlr 2025","Valor 2025","2025"])
+    t2026_col = pick_col(headers, ["Total 2026","TOTAL 2026","Vlr 2026","Valor 2026","2026"])
 
     if not key_col or not rep_col:
-        flash("BASE precisa ter uma coluna chave (cliente/grupo) e Código Representante.", "err")
+        flash("BASE precisa ter uma coluna chave (Codigo Grupo Cliente) e Codigo Representante.", "err")
         return redirect(url_for("logout"))
 
     # LISTAS (se vazia, usa fallback do código)
@@ -423,18 +419,18 @@ def dashboard():
             out.append(f"<option value='{o}' {sel}>{o}</option>")
         return "\n".join(out)
 
+    # TABELA (na ordem que você pediu)
     table_rows = []
     for r in out_rows:
         ck = norm(r.get(key_col,""))
+        grupo = norm(r.get(grupo_col,"")) if grupo_col else ""
         repc = norm(r.get(rep_col,""))
         supv = norm(r.get(sup_col,"")) if sup_col else ""
-        corv = norm(r.get(cor_col,"")) if cor_col else ""
-        klass = row_color_class(corv)
-
-        # >>> nome do cliente (Grupo Cliente)
-        grupo = norm(r.get(grupo_col,"")) if grupo_col else ""
-
         cidade = norm(r.get(cidade_col,"")) if cidade_col else ""
+
+        t24 = fmt_money(r.get(t2024_col,"")) if t2024_col else ""
+        t25 = fmt_money(r.get(t2025_col,"")) if t2025_col else ""
+        t26 = fmt_money(r.get(t2026_col,"")) if t2026_col else ""
 
         dav = norm(r.get("Data Agenda Visita",""))
         mes = norm(r.get("Mês",""))
@@ -442,12 +438,15 @@ def dashboard():
         stc = norm(r.get("Status Cliente",""))
 
         row_html = f"""
-        <tr class="{klass}">
+        <tr>
           <td class="nowrap">{ck}</td>
-          <td class="nowrap">{repc}</td>
-          {f"<td class='nowrap'>{supv}</td>" if sup_col else ""}
           <td>{grupo}</td>
-          {f"<td>{cidade}</td>" if cidade_col else "<td></td>"}
+          <td class="nowrap">{repc}</td>
+          <td class="nowrap">{supv}</td>
+          <td>{cidade}</td>
+          <td class="money nowrap">{t24}</td>
+          <td class="money nowrap">{t25}</td>
+          <td class="money nowrap">{t26}</td>
           <td>
             <form method="post" action="{url_for('salvar')}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <input type="hidden" name="client_key" value="{ck}">
@@ -465,13 +464,12 @@ def dashboard():
               </select>
           </td>
           <td>
-              <select name="Status Cliente" style="min-width:220px;">
+              <select name="Status Cliente" style="min-width:260px;">
                 {opt_html(status_list, stc)}
               </select>
               <button type="submit">Gravar</button>
             </form>
           </td>
-          {f"<td>{corv}</td>" if cor_col else ""}
         </tr>
         """
         table_rows.append(row_html)
@@ -517,16 +515,18 @@ def dashboard():
       <table>
         <thead>
           <tr>
-            <th>{key_col}</th>
-            <th>{rep_col}</th>
-            {f"<th>{sup_col}</th>" if sup_col else ""}
+            <th>Codigo Grupo Cliente</th>
             <th>Grupo Cliente</th>
-            <th>{cidade_col or "Cidade"}</th>
+            <th>Codigo Representante</th>
+            <th>Supervisor</th>
+            <th>Cidade</th>
+            <th>Total 2024</th>
+            <th>Total 2025</th>
+            <th>Total 2026</th>
             <th>Data Agenda Visita</th>
             <th>Mês</th>
             <th>Semana Atendimento</th>
             <th>Status Cliente</th>
-            {f"<th>{cor_col}</th>" if cor_col else ""}
           </tr>
         </thead>
         <tbody>
