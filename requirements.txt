@@ -4,3 +4,4 @@ pandas==2.2.2
 gspread==6.1.2
 google-auth==2.33.0
 openpyxl==3.1.5
+python-3.12.2
