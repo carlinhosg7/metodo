@@ -5,7 +5,6 @@ import base64
 import traceback
 from datetime import datetime, timezone
 
-from openpyxl import load_workbook
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
 import gspread
@@ -33,7 +32,6 @@ PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
-REP_FOTOS_FILE = os.getenv("REP_FOTOS_FILE", "REP FOTOS - LInk.xlsx").strip()
 
 
 # =========================
@@ -74,25 +72,6 @@ def norm(s):
         return ""
     s = str(s).strip()
     s = re.sub(r"\s+", " ", s)
-    return s
-
-
-def norm_key(s):
-    s = norm(s).upper()
-    s = (
-        s.replace("Á", "A")
-         .replace("À", "A")
-         .replace("Ã", "A")
-         .replace("Â", "A")
-         .replace("É", "E")
-         .replace("Ê", "E")
-         .replace("Í", "I")
-         .replace("Ó", "O")
-         .replace("Ô", "O")
-         .replace("Õ", "O")
-         .replace("Ú", "U")
-         .replace("Ç", "C")
-    )
     return s
 
 
@@ -235,121 +214,22 @@ def resolve_status_cor_from_base(row, status_cor_col=None, cliente_novo_col=None
     return "", "", 99
 
 
-def drive_to_direct_image(url):
-    url = norm(url)
-    if not url:
+def get_rep_photo_src(codigo_rep):
+    """
+    Procura a foto do representante na pasta static/representantes
+    usando o código do representante.
+    """
+    codigo = norm(codigo_rep)
+    if not codigo:
         return ""
 
-    m = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
-    if m:
-        file_id = m.group(1)
-        return f"https://drive.google.com/uc?export=view&id={file_id}"
+    exts = ["png", "jpg", "jpeg", "webp"]
+    for ext in exts:
+        rel_path = os.path.join("static", "representantes", f"{codigo}.{ext}")
+        if os.path.exists(rel_path):
+            return f"/static/representantes/{codigo}.{ext}"
 
-    m = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", url)
-    if m:
-        file_id = m.group(1)
-        return f"https://drive.google.com/uc?export=view&id={file_id}"
-
-    return url
-
-
-def extract_rep_code_from_text(text):
-    """
-    Extrai código numérico do começo do texto.
-    Ex.: '15 J. JIREH REP. - AM/RR' -> '15'
-    """
-    s = norm(text)
-    if not s:
-        return ""
-    m = re.match(r"^\s*(\d+)\b", s)
-    return m.group(1) if m else ""
-
-
-def carregar_fotos_representantes():
-    """
-    Lê o arquivo REP FOTOS - LInk.xlsx e monta:
-    - mapa por código do representante
-    - mapa por nome do representante
-
-    Colunas esperadas:
-    - Representante
-    - Supervisor
-    - Região
-    - URL REP
-    """
-    by_code = {}
-    by_name = {}
-
-    if not os.path.exists(REP_FOTOS_FILE):
-        return {"by_code": by_code, "by_name": by_name}
-
-    try:
-        wb = load_workbook(REP_FOTOS_FILE, data_only=True)
-        ws = wb.active
-
-        headers = [norm(c.value) for c in ws[1]]
-
-        col_rep = pick_col_flexible(headers, ["Representante"])
-        col_sup = pick_col_flexible(headers, ["Supervisor"])
-        col_reg = pick_col_flexible(headers, ["Região", "Regiao"])
-        col_url = pick_col_flexible(headers, ["URL REP", "URL", "Foto URL", "Link", "URL Foto"])
-
-        if not col_rep or not col_url:
-            return {"by_code": by_code, "by_name": by_name}
-
-        idx_rep = headers.index(col_rep)
-        idx_sup = headers.index(col_sup) if col_sup else None
-        idx_reg = headers.index(col_reg) if col_reg else None
-        idx_url = headers.index(col_url)
-
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            rep_nome_raw = norm(row[idx_rep] if idx_rep < len(row) else "")
-            if not rep_nome_raw:
-                continue
-
-            supervisor = norm(row[idx_sup] if idx_sup is not None and idx_sup < len(row) else "")
-            regiao = norm(row[idx_reg] if idx_reg is not None and idx_reg < len(row) else "")
-            foto_raw = row[idx_url] if idx_url < len(row) else ""
-            foto_url = drive_to_direct_image(foto_raw)
-            rep_code = extract_rep_code_from_text(rep_nome_raw)
-
-            info = {
-                "representante": rep_nome_raw,
-                "supervisor": supervisor,
-                "regiao": regiao,
-                "foto_url": foto_url,
-                "codigo": rep_code,
-            }
-
-            by_name[norm_key(rep_nome_raw)] = info
-            if rep_code:
-                by_code[rep_code] = info
-
-        return {"by_code": by_code, "by_name": by_name}
-
-    except Exception as e:
-        print("Erro lendo arquivo de fotos:", e)
-        return {"by_code": {}, "by_name": {}}
-
-
-FOTOS_REPRESENTANTES = carregar_fotos_representantes()
-
-
-def get_rep_foto_info(nome_rep="", codigo_rep=""):
-    """
-    Prioriza busca por código.
-    Se não achar, tenta por nome.
-    """
-    codigo_rep = norm(codigo_rep)
-    nome_rep = norm(nome_rep)
-
-    if codigo_rep and codigo_rep in FOTOS_REPRESENTANTES["by_code"]:
-        return FOTOS_REPRESENTANTES["by_code"][codigo_rep]
-
-    if nome_rep:
-        return FOTOS_REPRESENTANTES["by_name"].get(norm_key(nome_rep), {})
-
-    return {}
+    return ""
 
 
 # =========================
@@ -934,19 +814,20 @@ def dashboard():
     if is_admin() and rep_sel and nome_rep_col:
         rep_name_base = ""
         rep_sup_base = ""
+        rep_reg_base = ""
 
         for r in base_rows:
             if norm(r.get(rep_col, "")) == rep_sel:
                 rep_name_base = norm(r.get(nome_rep_col, ""))
                 rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
+                rep_reg_base = ""
                 if rep_name_base:
                     break
 
-        foto_info = get_rep_foto_info(nome_rep=rep_name_base, codigo_rep=rep_sel)
-        foto_url = norm(foto_info.get("foto_url", ""))
-        nome_card = foto_info.get("representante") or rep_name_base or rep_sel
-        sup_card = foto_info.get("supervisor") or rep_sup_base
-        regiao_card = foto_info.get("regiao", "")
+        foto_url = get_rep_photo_src(rep_sel)
+        nome_card = rep_name_base or rep_sel
+        sup_card = rep_sup_base
+        regiao_card = rep_reg_base
 
         foto_html = (
             f'<img src="{foto_url}" alt="Foto do representante" class="rep-photo">'
