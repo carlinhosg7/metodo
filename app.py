@@ -171,12 +171,15 @@ def get_row_class_from_base_value(status_cor_raw):
     """
     NÃO recalcula regra.
     Só converte o TEXTO da BASE em classe visual e prioridade.
+
     ORDEM:
     1 - VERMELHO
     2 - LARANJA
     3 - AMARELO
     4 - VERDE
     5 - AZUL
+
+    CLIENTE NOVO = AZUL
     """
     s = normalize_color_for_match(status_cor_raw)
 
@@ -189,6 +192,8 @@ def get_row_class_from_base_value(status_cor_raw):
     if "VERDE" in s:
         return "row-green", 4
     if "AZUL" in s:
+        return "row-blue", 5
+    if "NOVO" in s or "NOVA" in s:
         return "row-blue", 5
 
     return "", 99
