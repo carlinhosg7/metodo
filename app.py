@@ -3,10 +3,9 @@ import re
 import json
 import base64
 import traceback
-import pandas as pd
 from datetime import datetime, timezone
 
-import pandas as pd
+from openpyxl import load_workbook
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
 import gspread
@@ -279,32 +278,45 @@ def carregar_fotos_representantes():
         return info
 
     try:
-        df = pd.read_excel(REP_FOTOS_FILE)
-        df.columns = [norm(c) for c in df.columns]
+        wb = load_workbook(REP_FOTOS_FILE, data_only=True)
+        ws = wb.active
 
-        col_rep = pick_col_flexible(df.columns.tolist(), ["Representante"])
-        col_sup = pick_col_flexible(df.columns.tolist(), ["Supervisor"])
-        col_reg = pick_col_flexible(df.columns.tolist(), ["Região", "Regiao"])
-        col_url = pick_col_flexible(df.columns.tolist(), ["URL REP", "URL", "Foto URL", "Link", "URL Foto"])
+        headers = [norm(c.value) for c in ws[1]]
+
+        col_rep = pick_col_flexible(headers, ["Representante"])
+        col_sup = pick_col_flexible(headers, ["Supervisor"])
+        col_reg = pick_col_flexible(headers, ["Região", "Regiao"])
+        col_url = pick_col_flexible(headers, ["URL REP", "URL", "Foto URL", "Link", "URL Foto"])
 
         if not col_rep or not col_url:
             return info
 
-        for _, row in df.iterrows():
-            rep_nome = norm(row.get(col_rep, ""))
+        idx_rep = headers.index(col_rep)
+        idx_sup = headers.index(col_sup) if col_sup else None
+        idx_reg = headers.index(col_reg) if col_reg else None
+        idx_url = headers.index(col_url)
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            rep_nome = norm(row[idx_rep] if idx_rep < len(row) else "")
             if not rep_nome:
                 continue
 
+            supervisor = norm(row[idx_sup] if idx_sup is not None and idx_sup < len(row) else "")
+            regiao = norm(row[idx_reg] if idx_reg is not None and idx_reg < len(row) else "")
+            foto_raw = row[idx_url] if idx_url < len(row) else ""
+            foto_url = drive_to_direct_image(foto_raw)
+
             info[norm_key(rep_nome)] = {
                 "representante": rep_nome,
-                "supervisor": norm(row.get(col_sup, "")) if col_sup else "",
-                "regiao": norm(row.get(col_reg, "")) if col_reg else "",
-                "foto_url": drive_to_direct_image(row.get(col_url, "")),
+                "supervisor": supervisor,
+                "regiao": regiao,
+                "foto_url": foto_url,
             }
 
         return info
 
-    except Exception:
+    except Exception as e:
+        print("Erro lendo arquivo de fotos:", e)
         return {}
 
 
