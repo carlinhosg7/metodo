@@ -35,12 +35,12 @@ PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 # LISTAS FIXAS (fallback)
 # =========================
 DEFAULT_MESES = [
-    "Janeiro","Fevereiro","Março","Abril","Maio","Junho",
-    "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"
+    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
 ]
 
 DEFAULT_SEMANAS = [
-    "Semana 01","Semana 02","Semana 03","Semana 04","sem Agenda"
+    "Semana 01", "Semana 02", "Semana 03", "Semana 04", "sem Agenda"
 ]
 
 DEFAULT_STATUS = [
@@ -71,6 +71,7 @@ def norm(s):
     s = re.sub(r"\s+", " ", s)
     return s
 
+
 def unique_list(values):
     out, seen = [], set()
     for v in values:
@@ -82,11 +83,14 @@ def unique_list(values):
             out.append(v)
     return out
 
+
 def is_admin():
     return session.get("user_type") == "admin"
 
+
 def require_login():
     return "user_type" in session
+
 
 def pick_col(headers, candidates):
     hmap = {norm(h).lower(): h for h in headers}
@@ -101,6 +105,7 @@ def pick_col(headers, candidates):
                 return h
     return None
 
+
 def parse_money_to_float(v):
     """
     Converte "1.234.567,89" / "1234,56" / "1234.56" em float.
@@ -110,7 +115,6 @@ def parse_money_to_float(v):
     if s == "":
         return 0.0
     try:
-        # pt-BR comum: 1.234.567,89
         s2 = s.replace(".", "").replace(",", ".")
         return float(s2)
     except Exception:
@@ -118,6 +122,7 @@ def parse_money_to_float(v):
             return float(s)
         except Exception:
             return 0.0
+
 
 def fmt_money(v):
     """
@@ -132,15 +137,21 @@ def fmt_money(v):
     inteiro = ".".join([inteiro[i:i+3] for i in range(0, len(inteiro), 3)])[::-1]
     return f"{inteiro},{frac}"
 
-def row_color_class_by_totals(t24, t25, t26):
+
+def get_status_cor_and_class(t24, t25, t26):
     """
-    4 cores:
+    Retorna:
+    - status_cor (texto)
+    - classe_css
+    - prioridade_ordenacao
+
+    Regras:
     - vermelho: 2026=0 e teve 2024/2025
     - laranja: 2026<2025 (ambos >0)
     - amarelo: 2026>0, 2025=0, 2024>0 (reativou)
     - azul claro: 2026>0 e 2024=0 e 2025=0 (só 2026)
+    - sem cor: demais casos
     """
-    # arredonda para evitar ruído
     t24 = float(t24 or 0.0)
     t25 = float(t25 or 0.0)
     t26 = float(t26 or 0.0)
@@ -151,14 +162,18 @@ def row_color_class_by_totals(t24, t25, t26):
     has26 = t26 > eps
 
     if (not has26) and (has24 or has25):
-        return "row-red"
+        return "VERMELHO", "row-red", 1
+
     if has26 and has25 and (t26 + eps) < t25:
-        return "row-orange"
+        return "LARANJA", "row-orange", 2
+
     if has26 and (not has25) and has24:
-        return "row-yellow"
+        return "AMARELO", "row-yellow", 3
+
     if has26 and (not has24) and (not has25):
-        return "row-blue"
-    return ""
+        return "AZUL CLARO", "row-blue", 4
+
+    return "", "", 5
 
 
 # =========================
@@ -179,6 +194,7 @@ def _load_service_account_info():
 
     return info
 
+
 def connect_gs():
     if not SHEET_ID:
         raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
@@ -191,6 +207,7 @@ def connect_gs():
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID)
+
 
 def get_or_create_worksheet(sh, title, rows=1000, cols=30, headers=None):
     try:
@@ -207,6 +224,7 @@ def get_or_create_worksheet(sh, title, rows=1000, cols=30, headers=None):
             ws.clear()
             ws.append_row(headers)
     return ws
+
 
 def safe_get_all_records(ws):
     try:
@@ -269,10 +287,10 @@ BASE_HTML = """
     .money{font-variant-numeric: tabular-nums;}
 
     /* CORES SOLICITADAS */
-    .row-red{background:rgba(220,38,38,0.22);}        /* vermelho */
-    .row-orange{background:rgba(249,115,22,0.20);}    /* laranja */
-    .row-yellow{background:rgba(234,179,8,0.20);}     /* amarelo */
-    .row-blue{background:rgba(56,189,248,0.16);}      /* azul claro */
+    .row-red{background:rgba(220,38,38,0.22);}
+    .row-orange{background:rgba(249,115,22,0.20);}
+    .row-yellow{background:rgba(234,179,8,0.20);}
+    .row-blue{background:rgba(56,189,248,0.16);}
   </style>
 </head>
 <body>
@@ -346,6 +364,7 @@ def login():
     body = render_template_string(LOGIN_BODY)
     return render_template_string(BASE_HTML, title="Login", subtitle="Acesso", logged=False, body=body)
 
+
 @app.route("/logout")
 def logout():
     session.clear()
@@ -360,11 +379,11 @@ def dashboard():
     sh = connect_gs()
     ws_base = sh.worksheet(WS_BASE)
 
-    ed_headers = ["timestamp","user_type","user_login","rep_code","client_key",
-                  "Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]
+    ed_headers = ["timestamp", "user_type", "user_login", "rep_code", "client_key",
+                  "Data Agenda Visita", "Mês", "Semana Atendimento", "Status Cliente"]
     ws_ed = get_or_create_worksheet(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
 
-    listas_headers = ["Mês","Semana Atendimento","Status Cliente"]
+    listas_headers = ["Mês", "Semana Atendimento", "Status Cliente"]
     ws_listas = get_or_create_worksheet(sh, WS_LISTAS, rows=500, cols=10, headers=listas_headers)
 
     base_rows = safe_get_all_records(ws_base)
@@ -378,39 +397,38 @@ def dashboard():
 
     headers = [norm(h) for h in ws_base.row_values(1)]
 
-    # Colunas essenciais na ordem desejada
-    key_col = pick_col(headers, ["Codigo Grupo Cliente","Código Grupo Cliente","Codigo Cliente","Código Cliente","COD_CLIENTE","Cliente"])
-    grupo_col = pick_col(headers, ["Grupo Cliente","Nome Cliente","Cliente","Razao Social","Razão Social","Fantasia","Nome"])
-    rep_col = pick_col(headers, ["Codigo Representante","Código Representante","CODIGO REPRESENTANTE","COD_REP"])
-    sup_col = pick_col(headers, ["Supervisor","Código Supervisor","Codigo Supervisor","COD_SUP"])
-    cidade_col = pick_col(headers, ["Cidade","Município","Municipio"])
+    # Colunas essenciais
+    key_col = pick_col(headers, ["Codigo Grupo Cliente", "Código Grupo Cliente", "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"])
+    grupo_col = pick_col(headers, ["Grupo Cliente", "Nome Cliente", "Cliente", "Razao Social", "Razão Social", "Fantasia", "Nome"])
+    rep_col = pick_col(headers, ["Codigo Representante", "Código Representante", "CODIGO REPRESENTANTE", "COD_REP"])
+    sup_col = pick_col(headers, ["Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"])
+    cidade_col = pick_col(headers, ["Cidade", "Município", "Municipio"])
 
-    # Totais
-    t2024_col = pick_col(headers, ["Total 2024","TOTAL 2024","Vlr 2024","Valor 2024","2024"])
-    t2025_col = pick_col(headers, ["Total 2025","TOTAL 2025","Vlr 2025","Valor 2025","2025"])
-    t2026_col = pick_col(headers, ["Total 2026","TOTAL 2026","Vlr 2026","Valor 2026","2026"])
+    t2024_col = pick_col(headers, ["Total 2024", "TOTAL 2024", "Vlr 2024", "Valor 2024", "2024"])
+    t2025_col = pick_col(headers, ["Total 2025", "TOTAL 2025", "Vlr 2025", "Valor 2025", "2025"])
+    t2026_col = pick_col(headers, ["Total 2026", "TOTAL 2026", "Vlr 2026", "Valor 2026", "2026"])
 
     if not key_col or not rep_col:
         flash("BASE precisa ter 'Codigo Grupo Cliente' e 'Codigo Representante'.", "err")
         return redirect(url_for("logout"))
 
-    # LISTAS (se LISTAS vazia, usa fallback)
+    # LISTAS
     lista_rows = safe_get_all_records(ws_listas)
-    meses = unique_list([r.get("Mês","") for r in lista_rows]) or DEFAULT_MESES
-    semanas = unique_list([r.get("Semana Atendimento","") for r in lista_rows]) or DEFAULT_SEMANAS
-    status_list = unique_list([r.get("Status Cliente","") for r in lista_rows]) or DEFAULT_STATUS
+    meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
+    semanas = unique_list([r.get("Semana Atendimento", "") for r in lista_rows]) or DEFAULT_SEMANAS
+    status_list = unique_list([r.get("Status Cliente", "") for r in lista_rows]) or DEFAULT_STATUS
 
-    # EDIÇÕES (última por client_key)
+    # EDIÇÕES
     ed_rows = safe_get_all_records(ws_ed)
     latest = {}
     for r in ed_rows:
-        ck = norm(r.get("client_key",""))
+        ck = norm(r.get("client_key", ""))
         if ck:
             latest[ck] = {
-                "Data Agenda Visita": norm(r.get("Data Agenda Visita","")),
-                "Mês": norm(r.get("Mês","")),
-                "Semana Atendimento": norm(r.get("Semana Atendimento","")),
-                "Status Cliente": norm(r.get("Status Cliente","")),
+                "Data Agenda Visita": norm(r.get("Data Agenda Visita", "")),
+                "Mês": norm(r.get("Mês", "")),
+                "Semana Atendimento": norm(r.get("Semana Atendimento", "")),
+                "Status Cliente": norm(r.get("Status Cliente", "")),
             }
 
     # filtros
@@ -418,10 +436,10 @@ def dashboard():
     rep_sel = norm(request.args.get("rep", ""))
     q = norm(request.args.get("q", ""))
 
-    sup_list = unique_list([r.get(sup_col,"") for r in base_rows]) if (is_admin() and sup_col) else []
-    rep_list = unique_list([r.get(rep_col,"") for r in base_rows]) if is_admin() else []
+    sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if (is_admin() and sup_col) else []
+    rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if is_admin() else []
 
-    out_rows = []
+    prepared_rows = []
     for r in base_rows:
         ck = norm(r.get(key_col, ""))
         repc = norm(r.get(rep_col, ""))
@@ -433,6 +451,7 @@ def dashboard():
         if is_admin() and sup_col and sup_sel:
             if norm(r.get(sup_col, "")) != sup_sel:
                 continue
+
         if is_admin() and rep_sel:
             if repc != rep_sel:
                 continue
@@ -442,20 +461,41 @@ def dashboard():
             if q.lower() not in hay.lower():
                 continue
 
+        row_copy = dict(r)
+
         if ck in latest:
-            r["Data Agenda Visita"] = latest[ck]["Data Agenda Visita"]
-            r["Mês"] = latest[ck]["Mês"]
-            r["Semana Atendimento"] = latest[ck]["Semana Atendimento"]
-            r["Status Cliente"] = latest[ck]["Status Cliente"]
+            row_copy["Data Agenda Visita"] = latest[ck]["Data Agenda Visita"]
+            row_copy["Mês"] = latest[ck]["Mês"]
+            row_copy["Semana Atendimento"] = latest[ck]["Semana Atendimento"]
+            row_copy["Status Cliente"] = latest[ck]["Status Cliente"]
         else:
-            r.setdefault("Data Agenda Visita","")
-            r.setdefault("Mês","")
-            r.setdefault("Semana Atendimento","")
-            r.setdefault("Status Cliente","")
+            row_copy.setdefault("Data Agenda Visita", "")
+            row_copy.setdefault("Mês", "")
+            row_copy.setdefault("Semana Atendimento", "")
+            row_copy.setdefault("Status Cliente", "")
 
-        out_rows.append(r)
+        v24 = parse_money_to_float(row_copy.get(t2024_col, "")) if t2024_col else 0.0
+        v25 = parse_money_to_float(row_copy.get(t2025_col, "")) if t2025_col else 0.0
+        v26 = parse_money_to_float(row_copy.get(t2026_col, "")) if t2026_col else 0.0
 
-    out_rows = out_rows[:PAGE_SIZE]
+        status_cor, klass, priority = get_status_cor_and_class(v24, v25, v26)
+
+        row_copy["_status_cor"] = status_cor
+        row_copy["_row_class"] = klass
+        row_copy["_sort_priority"] = priority
+
+        prepared_rows.append(row_copy)
+
+    # ORDENAÇÃO: vermelho, laranja, amarelo, azul, restante
+    prepared_rows.sort(
+        key=lambda r: (
+            r.get("_sort_priority", 5),
+            norm(r.get(grupo_col, "")) if grupo_col else "",
+            norm(r.get(key_col, ""))
+        )
+    )
+
+    out_rows = prepared_rows[:PAGE_SIZE]
 
     def opt_html(options, selected):
         out = ["<option value=''></option>"]
@@ -466,27 +506,26 @@ def dashboard():
 
     table_rows = []
     for r in out_rows:
-        ck = norm(r.get(key_col,""))
-        grupo = norm(r.get(grupo_col,"")) if grupo_col else ""
-        repc = norm(r.get(rep_col,""))
-        supv = norm(r.get(sup_col,"")) if sup_col else ""
-        cidade = norm(r.get(cidade_col,"")) if cidade_col else ""
+        ck = norm(r.get(key_col, ""))
+        grupo = norm(r.get(grupo_col, "")) if grupo_col else ""
+        repc = norm(r.get(rep_col, ""))
+        supv = norm(r.get(sup_col, "")) if sup_col else ""
+        cidade = norm(r.get(cidade_col, "")) if cidade_col else ""
 
-        v24 = parse_money_to_float(r.get(t2024_col,"")) if t2024_col else 0.0
-        v25 = parse_money_to_float(r.get(t2025_col,"")) if t2025_col else 0.0
-        v26 = parse_money_to_float(r.get(t2026_col,"")) if t2026_col else 0.0
+        v24 = parse_money_to_float(r.get(t2024_col, "")) if t2024_col else 0.0
+        v25 = parse_money_to_float(r.get(t2025_col, "")) if t2025_col else 0.0
+        v26 = parse_money_to_float(r.get(t2026_col, "")) if t2026_col else 0.0
 
-        t24 = fmt_money(r.get(t2024_col,"")) if t2024_col else ""
-        t25 = fmt_money(r.get(t2025_col,"")) if t2025_col else ""
-        t26 = fmt_money(r.get(t2026_col,"")) if t2026_col else ""
+        t24 = fmt_money(r.get(t2024_col, "")) if t2024_col else ""
+        t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
+        t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
 
-        dav = norm(r.get("Data Agenda Visita",""))
-        mes = norm(r.get("Mês",""))
-        sem = norm(r.get("Semana Atendimento",""))
-        stc = norm(r.get("Status Cliente",""))
+        dav = norm(r.get("Data Agenda Visita", ""))
+        mes = norm(r.get("Mês", ""))
+        sem = norm(r.get("Semana Atendimento", ""))
+        stc = norm(r.get("Status Cliente", ""))
 
-        # cor por totais
-        klass = row_color_class_by_totals(v24, v25, v26)
+        status_cor, klass, _ = get_status_cor_and_class(v24, v25, v26)
 
         row_html = f"""
         <tr class="{klass}">
@@ -498,6 +537,7 @@ def dashboard():
           <td class="money nowrap">{t24}</td>
           <td class="money nowrap">{t25}</td>
           <td class="money nowrap">{t26}</td>
+          <td class="nowrap"><b>{status_cor}</b></td>
           <td>
             <form method="post" action="{url_for('salvar')}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <input type="hidden" name="client_key" value="{ck}">
@@ -532,14 +572,14 @@ def dashboard():
           <label>Filtro Supervisor</label>
           <select name="sup">
             <option value="">(Todos)</option>
-            {''.join([f"<option value='{s}' {'selected' if s==sup_sel else ''}>{s}</option>" for s in sup_list])}
+            {''.join([f"<option value='{s}' {'selected' if s == sup_sel else ''}>{s}</option>" for s in sup_list])}
           </select>
         </div>
         <div>
           <label>Filtro Representante</label>
           <select name="rep">
             <option value="">(Todos)</option>
-            {''.join([f"<option value='{r}' {'selected' if r==rep_sel else ''}>{r}</option>" for r in rep_list])}
+            {''.join([f"<option value='{r}' {'selected' if r == rep_sel else ''}>{r}</option>" for r in rep_list])}
           </select>
         </div>
         """
@@ -558,7 +598,11 @@ def dashboard():
             <a href="{url_for('dashboard')}"><button type="button" class="secondary">Limpar</button></a>
           </div>
         </div>
-        <div class="hint">Cores: Vermelho (parou 2026), Laranja (caiu 2026 vs 2025), Amarelo (reativou), Azul claro (só 2026).</div>
+        <div class="hint">
+          Ordem automática: Vermelho, Laranja, Amarelo, Azul claro.
+          <br>
+          Cores: Vermelho (parou 2026), Laranja (caiu 2026 vs 2025), Amarelo (reativou), Azul claro (só 2026).
+        </div>
       </form>
     </div>
 
@@ -574,6 +618,7 @@ def dashboard():
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
+            <th>Status Cor</th>
             <th>Data Agenda Visita</th>
             <th>Mês</th>
             <th>Semana Atendimento</th>
@@ -620,8 +665,8 @@ def salvar():
 
     sh = connect_gs()
 
-    ed_headers = ["timestamp","user_type","user_login","rep_code","client_key",
-                  "Data Agenda Visita","Mês","Semana Atendimento","Status Cliente"]
+    ed_headers = ["timestamp", "user_type", "user_login", "rep_code", "client_key",
+                  "Data Agenda Visita", "Mês", "Semana Atendimento", "Status Cliente"]
     ws_ed = get_or_create_worksheet(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
 
     row = [
