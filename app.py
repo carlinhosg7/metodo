@@ -143,17 +143,12 @@ def fmt_money(v):
 
 def get_status_cor_and_class(t24, t25, t26):
     """
-    Retorna:
-    - status_cor (texto)
-    - classe_css
-    - prioridade_ordenacao
-
     Regras:
     - vermelho: 2026=0 e teve 2024/2025
     - laranja: 2026<2025 (ambos >0)
     - amarelo: 2026>0, 2025=0, 2024>0 (reativou)
     - azul claro: 2026>0 e 2024=0 e 2025=0 (só 2026)
-    - sem cor: demais casos
+    - sem classificação: demais casos
     """
     t24 = float(t24 or 0.0)
     t25 = float(t25 or 0.0)
@@ -176,7 +171,7 @@ def get_status_cor_and_class(t24, t25, t26):
     if has26 and (not has24) and (not has25):
         return "AZUL CLARO", "row-blue", 4
 
-    return "", "", 5
+    return "SEM CLASSIFICAÇÃO", "", 5
 
 
 # =========================
@@ -250,6 +245,7 @@ def handle_any_exception(e):
         subtitle="Falha no servidor",
         logged=require_login(),
         user_login=session.get("user_login", ""),
+        user_name=session.get("rep_name", ""),
         user_type=session.get("user_type", ""),
         body=body
     ), 500
@@ -425,7 +421,6 @@ BASE_HTML = """
       font-size:14px;
     }
 
-    /* CORES SOLICITADAS */
     .row-red{background:rgba(220,38,38,0.16);}
     .row-orange{background:rgba(249,115,22,0.16);}
     .row-yellow{background:rgba(234,179,8,0.18);}
@@ -437,7 +432,7 @@ BASE_HTML = """
     <div><b>Acompanhamento de clientes</b> <span class="small">| {{ subtitle }}</span></div>
     <div>
       {% if logged %}
-        <span class="pill">{{ user_login }} ({{ user_type }})</span>
+        <span class="pill">{{ user_name if user_name else user_login }} ({{ user_type }})</span>
         <a href="{{ url_for('logout') }}"><button class="danger">Sair</button></a>
       {% endif %}
     </div>
@@ -493,14 +488,46 @@ def login():
         if u == ADMIN_USER and p == ADMIN_PASS:
             session["user_type"] = "admin"
             session["user_login"] = u
+            session["rep_name"] = ""
             flash("Logado como ADMIN.", "ok")
             return redirect(url_for("dashboard"))
 
         if u and p and u == p and u.isdigit():
+            rep_nome = ""
+
+            try:
+                sh = connect_gs()
+                ws_base = sh.worksheet(WS_BASE)
+                base_rows = safe_get_all_records(ws_base)
+                headers = [norm(h) for h in ws_base.row_values(1)]
+
+                rep_col = pick_col(headers, [
+                    "Codigo Representante", "Código Representante",
+                    "CODIGO REPRESENTANTE", "COD_REP"
+                ])
+                nome_rep_col = pick_col(headers, [
+                    "Representante", "Nome Representante", "REPRESENTANTE"
+                ])
+
+                if rep_col and nome_rep_col:
+                    for row in base_rows:
+                        if norm(row.get(rep_col, "")) == u:
+                            rep_nome = norm(row.get(nome_rep_col, ""))
+                            if rep_nome:
+                                break
+            except Exception:
+                rep_nome = ""
+
             session["user_type"] = "rep"
             session["user_login"] = u
             session["rep_code"] = u
-            flash(f"Logado como Representante {u}.", "ok")
+            session["rep_name"] = rep_nome
+
+            if rep_nome:
+                flash(f"Logado como Representante {rep_nome}.", "ok")
+            else:
+                flash(f"Logado como Representante {u}.", "ok")
+
             return redirect(url_for("dashboard"))
 
         flash("Login inválido.", "err")
@@ -511,6 +538,9 @@ def login():
         title=APP_TITLE,
         subtitle="Acesso",
         logged=False,
+        user_login="",
+        user_name="",
+        user_type="",
         body=body
     )
 
@@ -545,6 +575,7 @@ def dashboard():
             subtitle="Base vazia",
             logged=True,
             user_login=session.get("user_login"),
+            user_name=session.get("rep_name", ""),
             user_type=session.get("user_type"),
             body="<div class='card'>Sem dados na BASE.</div>"
         )
@@ -554,6 +585,7 @@ def dashboard():
     key_col = pick_col(headers, ["Codigo Grupo Cliente", "Código Grupo Cliente", "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"])
     grupo_col = pick_col(headers, ["Grupo Cliente", "Nome Cliente", "Cliente", "Razao Social", "Razão Social", "Fantasia", "Nome"])
     rep_col = pick_col(headers, ["Codigo Representante", "Código Representante", "CODIGO REPRESENTANTE", "COD_REP"])
+    nome_rep_col = pick_col(headers, ["Representante", "Nome Representante", "REPRESENTANTE"])
     sup_col = pick_col(headers, ["Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"])
     cidade_col = pick_col(headers, ["Cidade", "Município", "Municipio"])
 
@@ -658,6 +690,7 @@ def dashboard():
         ck = norm(r.get(key_col, ""))
         grupo = norm(r.get(grupo_col, "")) if grupo_col else ""
         repc = norm(r.get(rep_col, ""))
+        nome_rep = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
         supv = norm(r.get(sup_col, "")) if sup_col else ""
         cidade = norm(r.get(cidade_col, "")) if cidade_col else ""
 
@@ -681,6 +714,7 @@ def dashboard():
           <td class="nowrap">{ck}</td>
           <td>{grupo}</td>
           <td class="nowrap">{repc}</td>
+          <td>{nome_rep}</td>
           <td class="nowrap">{supv}</td>
           <td>{cidade}</td>
           <td class="money nowrap">{t24}</td>
@@ -748,7 +782,7 @@ def dashboard():
           </div>
         </div>
         <div class="hint">
-          Ordem automática: Vermelho, Laranja, Amarelo, Azul claro.
+          Ordem automática: Vermelho, Laranja, Amarelo, Azul claro e depois Sem classificação.
           <br>
           Cores: Vermelho (parou 2026), Laranja (caiu 2026 vs 2025), Amarelo (reativou), Azul claro (só 2026).
         </div>
@@ -762,6 +796,7 @@ def dashboard():
             <th>Codigo Grupo Cliente</th>
             <th>Grupo Cliente</th>
             <th>Codigo Representante</th>
+            <th>Representante</th>
             <th>Supervisor</th>
             <th>Cidade</th>
             <th>Total 2024</th>
@@ -787,6 +822,7 @@ def dashboard():
         subtitle=f"Planilha: {WS_BASE}",
         logged=True,
         user_login=session.get("user_login"),
+        user_name=session.get("rep_name", ""),
         user_type=session.get("user_type"),
         body=body
     )
