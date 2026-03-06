@@ -822,9 +822,9 @@ def dashboard():
         </div>
         """
 
-    origem_cor = "BASE" if status_cor_col else "REGRA INTERNA"
+        origem_cor = "BASE" if status_cor_col else "REGRA INTERNA"
 
-    b    body = f"""
+    body = f"""
     <div class="card">
       <form method="get">
         <div class="grid">
@@ -871,3 +871,14 @@ def dashboard():
       </table>
     </div>
     """
+
+    return render_template_string(
+        BASE_HTML,
+        title=APP_TITLE,
+        subtitle=f"Planilha: {WS_BASE}",
+        logged=True,
+        user_login=session.get("user_login"),
+        user_name=session.get("rep_name", ""),
+        user_type=session.get("user_type"),
+        body=body
+    )
