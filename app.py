@@ -5,6 +5,7 @@ import base64
 import traceback
 from datetime import datetime, timezone
 
+import pandas as pd
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
 import gspread
@@ -32,6 +33,9 @@ PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
+
+# Arquivo local no mesmo diretório do app
+REP_FOTOS_FILE = os.getenv("REP_FOTOS_FILE", "REP FOTOS - LInk.xlsx").strip()
 
 
 # =========================
@@ -72,6 +76,25 @@ def norm(s):
         return ""
     s = str(s).strip()
     s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def norm_key(s):
+    s = norm(s).upper()
+    s = (
+        s.replace("Á", "A")
+         .replace("À", "A")
+         .replace("Ã", "A")
+         .replace("Â", "A")
+         .replace("É", "E")
+         .replace("Ê", "E")
+         .replace("Í", "I")
+         .replace("Ó", "O")
+         .replace("Ô", "O")
+         .replace("Õ", "O")
+         .replace("Ú", "U")
+         .replace("Ç", "C")
+    )
     return s
 
 
@@ -148,7 +171,7 @@ def clean_color_text(v):
     return norm(v)
 
 
-def normalize_color_for_match(v):
+def normalize_text_for_match(v):
     s = norm(v).upper()
     s = (
         s.replace("Á", "A")
@@ -167,21 +190,21 @@ def normalize_color_for_match(v):
     return s
 
 
-def get_row_class_from_base_value(status_cor_raw):
-    """
-    NÃO recalcula regra.
-    Só converte o TEXTO da BASE em classe visual e prioridade.
+def is_truthy_novo(v):
+    s = normalize_text_for_match(v)
+    return s in {"SIM", "S", "YES", "Y", "1", "TRUE", "VERDADEIRO", "NOVO", "CLIENTE NOVO"}
 
+
+def get_row_class_from_color_text(status_cor_raw):
+    """
     ORDEM:
     1 - VERMELHO
     2 - LARANJA
     3 - AMARELO
     4 - VERDE
     5 - AZUL
-
-    CLIENTE NOVO = AZUL
     """
-    s = normalize_color_for_match(status_cor_raw)
+    s = normalize_text_for_match(status_cor_raw)
 
     if "VERMELH" in s:
         return "row-red", 1
@@ -197,6 +220,98 @@ def get_row_class_from_base_value(status_cor_raw):
         return "row-blue", 5
 
     return "", 99
+
+
+def resolve_status_cor_from_base(row, status_cor_col=None, cliente_novo_col=None):
+    """
+    Regra final:
+    1) Usa Status Cor da BASE, se preenchido
+    2) Se Status Cor vier vazio e Cliente Novo indicar SIM/NOVO, vira AZUL
+    """
+    status_cor_raw = clean_color_text(row.get(status_cor_col, "")) if status_cor_col else ""
+
+    if status_cor_raw:
+        row_class, priority = get_row_class_from_color_text(status_cor_raw)
+        return status_cor_raw, row_class, priority
+
+    if cliente_novo_col:
+        novo_val = row.get(cliente_novo_col, "")
+        if is_truthy_novo(novo_val):
+            return "AZUL", "row-blue", 5
+
+    return "", "", 99
+
+
+def drive_to_direct_image(url):
+    """
+    Converte links comuns do Google Drive para formato direto, quando possível.
+    """
+    url = norm(url)
+    if not url:
+        return ""
+
+    m = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
+    if m:
+        file_id = m.group(1)
+        return f"https://drive.google.com/uc?export=view&id={file_id}"
+
+    m = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", url)
+    if m:
+        file_id = m.group(1)
+        return f"https://drive.google.com/uc?export=view&id={file_id}"
+
+    return url
+
+
+def carregar_fotos_representantes():
+    """
+    Lê o arquivo REP FOTOS - LInk.xlsx e monta um dicionário por nome do representante.
+    Colunas esperadas:
+    - Representante
+    - Supervisor
+    - Região
+    - URL REP
+    """
+    info = {}
+
+    if not os.path.exists(REP_FOTOS_FILE):
+        return info
+
+    try:
+        df = pd.read_excel(REP_FOTOS_FILE)
+        df.columns = [norm(c) for c in df.columns]
+
+        col_rep = pick_col_flexible(df.columns.tolist(), ["Representante"])
+        col_sup = pick_col_flexible(df.columns.tolist(), ["Supervisor"])
+        col_reg = pick_col_flexible(df.columns.tolist(), ["Região", "Regiao"])
+        col_url = pick_col_flexible(df.columns.tolist(), ["URL REP", "URL", "Foto URL", "Link", "URL Foto"])
+
+        if not col_rep or not col_url:
+            return info
+
+        for _, row in df.iterrows():
+            rep_nome = norm(row.get(col_rep, ""))
+            if not rep_nome:
+                continue
+
+            info[norm_key(rep_nome)] = {
+                "representante": rep_nome,
+                "supervisor": norm(row.get(col_sup, "")) if col_sup else "",
+                "regiao": norm(row.get(col_reg, "")) if col_reg else "",
+                "foto_url": drive_to_direct_image(row.get(col_url, "")),
+            }
+
+        return info
+
+    except Exception:
+        return {}
+
+
+FOTOS_REPRESENTANTES = carregar_fotos_representantes()
+
+
+def get_rep_foto_info(nome_rep):
+    return FOTOS_REPRESENTANTES.get(norm_key(nome_rep), {})
 
 
 # =========================
@@ -313,6 +428,39 @@ BASE_HTML = """
       padding: 16px;
       margin-bottom: 14px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    .rep-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .rep-photo {
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid #d1d5db;
+      background: #f8fafc;
+      flex-shrink: 0;
+    }
+
+    .rep-photo-placeholder {
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      border: 2px solid #d1d5db;
+      background: #f8fafc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6b7280;
+      font-size: 12px;
+      text-align: center;
+      flex-shrink: 0;
+      padding: 6px;
+      box-sizing: border-box;
     }
 
     label {
@@ -648,12 +796,20 @@ def dashboard():
         "STATUSCOR"
     ])
 
+    cliente_novo_col = pick_col_flexible(headers, [
+        "Cliente Novo",
+        "CLIENTE NOVO",
+        "Novo",
+        "NOVO",
+        "Cliente_Novo"
+    ])
+
     if not key_col or not rep_col:
         flash("BASE precisa ter 'Codigo Grupo Cliente' e 'Codigo Representante'.", "err")
         return redirect(url_for("logout"))
 
-    if not status_cor_col:
-        flash("A coluna 'Status Cor' não foi encontrada exatamente na BASE.", "err")
+    if not status_cor_col and not cliente_novo_col:
+        flash("Não achei nem 'Status Cor' nem coluna de 'Cliente Novo' na BASE.", "err")
         return redirect(url_for("logout"))
 
     lista_rows = safe_get_all_records(ws_listas)
@@ -714,10 +870,13 @@ def dashboard():
             row_copy.setdefault("Semana Atendimento", "")
             row_copy.setdefault("Status Cliente", "")
 
-        status_cor_raw = clean_color_text(row_copy.get(status_cor_col, ""))
-        row_class, priority = get_row_class_from_base_value(status_cor_raw)
+        status_cor_final, row_class, priority = resolve_status_cor_from_base(
+            row_copy,
+            status_cor_col=status_cor_col,
+            cliente_novo_col=cliente_novo_col
+        )
 
-        row_copy["_status_cor"] = status_cor_raw
+        row_copy["_status_cor"] = status_cor_final
         row_copy["_row_class"] = row_class
         row_copy["_sort_priority"] = priority
 
@@ -732,6 +891,44 @@ def dashboard():
     )
 
     out_rows = prepared_rows[:PAGE_SIZE]
+
+    rep_card_html = ""
+    if is_admin() and rep_sel and nome_rep_col:
+        rep_name_base = ""
+        rep_sup_base = ""
+
+        for r in base_rows:
+            if norm(r.get(rep_col, "")) == rep_sel:
+                rep_name_base = norm(r.get(nome_rep_col, ""))
+                rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
+                if rep_name_base:
+                    break
+
+        foto_info = get_rep_foto_info(rep_name_base)
+        foto_url = norm(foto_info.get("foto_url", ""))
+        nome_card = foto_info.get("representante") or rep_name_base or rep_sel
+        sup_card = foto_info.get("supervisor") or rep_sup_base
+        regiao_card = foto_info.get("regiao", "")
+
+        foto_html = (
+            f'<img src="{foto_url}" alt="Foto do representante" class="rep-photo">'
+            if foto_url else
+            '<div class="rep-photo-placeholder">Sem foto</div>'
+        )
+
+        rep_card_html = f"""
+        <div class="card">
+          <div class="rep-card">
+            {foto_html}
+            <div>
+              <div style="font-size:20px;font-weight:700;">{nome_card}</div>
+              <div class="small">Código: {rep_sel}</div>
+              <div class="small">Supervisor: {sup_card}</div>
+              <div class="small">Região: {regiao_card}</div>
+            </div>
+          </div>
+        </div>
+        """
 
     def opt_html(options, selected):
         out = ["<option value=''></option>"]
@@ -820,6 +1017,8 @@ def dashboard():
         """
 
     body = f"""
+    {rep_card_html}
+
     <div class="card">
       <form method="get">
         <div class="grid">
@@ -834,7 +1033,7 @@ def dashboard():
           </div>
         </div>
         <div class="hint">
-          Status Cor vindo exatamente da BASE. Ordem: Vermelho, Laranja, Amarelo, Verde e Azul.
+          Status Cor vindo da BASE. Se Status Cor vier vazio e Cliente Novo estiver marcado, a linha fica azul.
         </div>
       </form>
     </div>
