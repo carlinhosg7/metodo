@@ -3,6 +3,7 @@ import re
 import json
 import base64
 import traceback
+import pandas as pd
 from datetime import datetime, timezone
 
 import pandas as pd
