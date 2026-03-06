@@ -244,7 +244,7 @@ def resolve_status_cor_from_base(row, status_cor_col=None, cliente_novo_col=None
 
 def drive_to_direct_image(url):
     """
-    Converte links comuns do Google Drive para formato direto, quando possível.
+    Converte links comuns do Google Drive para formato direto de imagem.
     """
     url = norm(url)
     if not url:
