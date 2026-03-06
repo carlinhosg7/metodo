@@ -824,7 +824,7 @@ def dashboard():
 
     origem_cor = "BASE" if status_cor_col else "REGRA INTERNA"
 
-    body = f"""
+    b    body = f"""
     <div class="card">
       <form method="get">
         <div class="grid">
@@ -849,4 +849,25 @@ def dashboard():
       <table>
         <thead>
           <tr>
-            <th>Codigo Grupo Cliente</
+            <th>Codigo Grupo Cliente</th>
+            <th>Grupo Cliente</th>
+            <th>Codigo Representante</th>
+            <th>Representante</th>
+            <th>Supervisor</th>
+            <th>Cidade</th>
+            <th>Total 2024</th>
+            <th>Total 2025</th>
+            <th>Total 2026</th>
+            <th>Status Cor</th>
+            <th>Data Agenda Visita</th>
+            <th>Mês</th>
+            <th>Semana Atendimento</th>
+            <th>Status Cliente</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(table_rows)}
+        </tbody>
+      </table>
+    </div>
+    """
