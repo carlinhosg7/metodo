@@ -95,12 +95,29 @@ def require_login():
     return "user_type" in session
 
 
-def pick_col(headers, candidates):
+def pick_col_exact(headers, candidates):
+    """
+    Procura SOMENTE correspondência exata, sem contains.
+    """
     hmap = {norm(h).lower(): h for h in headers}
     for cand in candidates:
-        k = norm(cand).lower()
-        if k in hmap:
-            return hmap[k]
+        key = norm(cand).lower()
+        if key in hmap:
+            return hmap[key]
+    return None
+
+
+def pick_col_flexible(headers, candidates):
+    """
+    Procura exata e depois contains.
+    Usar só para colunas normais.
+    """
+    hmap = {norm(h).lower(): h for h in headers}
+    for cand in candidates:
+        key = norm(cand).lower()
+        if key in hmap:
+            return hmap[key]
+
     for h in headers:
         hl = norm(h).lower()
         for cand in candidates:
@@ -134,12 +151,19 @@ def fmt_money(v):
     return f"{inteiro},{frac}"
 
 
-def normalize_status_cor_from_base(v):
-    s = norm(v).upper()
+def clean_color_text(v):
+    """
+    Mantém o texto da base praticamente como está, só limpando espaços.
+    """
+    return norm(v)
 
-    if not s:
-        return ""
 
+def get_row_class_from_base_value(status_cor_raw):
+    """
+    NÃO recalcula regra.
+    Só converte o TEXTO da BASE em classe visual.
+    """
+    s = norm(status_cor_raw).upper()
     s = (
         s.replace("Á", "A")
          .replace("À", "A")
@@ -156,55 +180,15 @@ def normalize_status_cor_from_base(v):
     )
 
     if "VERMELH" in s:
-        return "VERMELHO"
+        return "row-red", 1
     if "LARANJ" in s:
-        return "LARANJA"
+        return "row-orange", 2
     if "AMAREL" in s:
-        return "AMARELO"
+        return "row-yellow", 3
     if "AZUL" in s:
-        return "AZUL"
+        return "row-blue", 4
 
-    return norm(v).upper()
-
-
-def get_color_meta_from_base(status_cor):
-    s = normalize_status_cor_from_base(status_cor)
-
-    if s == "VERMELHO":
-        return "VERMELHO", "row-red", 1
-    if s == "LARANJA":
-        return "LARANJA", "row-orange", 2
-    if s == "AMARELO":
-        return "AMARELO", "row-yellow", 3
-    if s == "AZUL":
-        return "AZUL", "row-blue", 4
-
-    return norm(status_cor), "", 5
-
-
-def get_color_meta_fallback(t24, t25, t26):
-    t24 = float(t24 or 0.0)
-    t25 = float(t25 or 0.0)
-    t26 = float(t26 or 0.0)
-
-    eps = 1e-9
-    has24 = t24 > eps
-    has25 = t25 > eps
-    has26 = t26 > eps
-
-    if (not has26) and (has24 or has25):
-        return "VERMELHO", "row-red", 1
-
-    if has26 and has25 and (t26 + eps) < t25:
-        return "LARANJA", "row-orange", 2
-
-    if has26 and (not has25) and has24:
-        return "AMARELO", "row-yellow", 3
-
-    if has26 and (not has24) and (not has25):
-        return "AZUL", "row-blue", 4
-
-    return "", "", 5
+    return "", 5
 
 
 # =========================
@@ -534,11 +518,11 @@ def login():
                 base_rows = safe_get_all_records(ws_base)
                 headers = [norm(h) for h in ws_base.row_values(1)]
 
-                rep_col = pick_col(headers, [
+                rep_col = pick_col_flexible(headers, [
                     "Codigo Representante", "Código Representante",
                     "CODIGO REPRESENTANTE", "COD_REP"
                 ])
-                nome_rep_col = pick_col(headers, [
+                nome_rep_col = pick_col_flexible(headers, [
                     "Representante", "Nome Representante", "REPRESENTANTE"
                 ])
 
@@ -624,37 +608,45 @@ def dashboard():
 
     headers = [norm(h) for h in ws_base.row_values(1)]
 
-    key_col = pick_col(headers, [
+    key_col = pick_col_flexible(headers, [
         "Codigo Grupo Cliente", "Código Grupo Cliente",
         "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
     ])
-    grupo_col = pick_col(headers, [
+    grupo_col = pick_col_flexible(headers, [
         "Grupo Cliente", "Nome Cliente", "Cliente",
         "Razao Social", "Razão Social", "Fantasia", "Nome"
     ])
-    rep_col = pick_col(headers, [
+    rep_col = pick_col_flexible(headers, [
         "Codigo Representante", "Código Representante",
         "CODIGO REPRESENTANTE", "COD_REP"
     ])
-    nome_rep_col = pick_col(headers, [
+    nome_rep_col = pick_col_flexible(headers, [
         "Representante", "Nome Representante", "REPRESENTANTE"
     ])
-    sup_col = pick_col(headers, [
+    sup_col = pick_col_flexible(headers, [
         "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
     ])
-    cidade_col = pick_col(headers, ["Cidade", "Município", "Municipio"])
+    cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
 
-    t2024_col = pick_col(headers, ["Total 2024", "TOTAL 2024", "Vlr 2024", "Valor 2024", "2024"])
-    t2025_col = pick_col(headers, ["Total 2025", "TOTAL 2025", "Vlr 2025", "Valor 2025", "2025"])
-    t2026_col = pick_col(headers, ["Total 2026", "TOTAL 2026", "Vlr 2026", "Valor 2026", "2026"])
+    t2024_col = pick_col_flexible(headers, ["Total 2024", "TOTAL 2024", "Vlr 2024", "Valor 2024", "2024"])
+    t2025_col = pick_col_flexible(headers, ["Total 2025", "TOTAL 2025", "Vlr 2025", "Valor 2025", "2025"])
+    t2026_col = pick_col_flexible(headers, ["Total 2026", "TOTAL 2026", "Vlr 2026", "Valor 2026", "2026"])
 
-    status_cor_col = pick_col(headers, [
-        "Status Cor", "STATUS COR", "Status de Cor",
-        "Cor Status", "Classificacao Cor", "Classificação Cor", "Cor", "StatusCor"
+    # AQUI É O PONTO PRINCIPAL:
+    # SOMENTE CABEÇALHOS EXATOS DE STATUS COR
+    status_cor_col = pick_col_exact(headers, [
+        "Status Cor",
+        "STATUS COR",
+        "StatusCor",
+        "STATUSCOR"
     ])
 
     if not key_col or not rep_col:
         flash("BASE precisa ter 'Codigo Grupo Cliente' e 'Codigo Representante'.", "err")
+        return redirect(url_for("logout"))
+
+    if not status_cor_col:
+        flash("A coluna 'Status Cor' não foi encontrada exatamente na BASE.", "err")
         return redirect(url_for("logout"))
 
     lista_rows = safe_get_all_records(ws_listas)
@@ -715,22 +707,17 @@ def dashboard():
             row_copy.setdefault("Semana Atendimento", "")
             row_copy.setdefault("Status Cliente", "")
 
-        v24 = parse_money_to_float(row_copy.get(t2024_col, "")) if t2024_col else 0.0
-        v25 = parse_money_to_float(row_copy.get(t2025_col, "")) if t2025_col else 0.0
-        v26 = parse_money_to_float(row_copy.get(t2026_col, "")) if t2026_col else 0.0
+        # PEGA EXATAMENTE O TEXTO DA BASE
+        status_cor_raw = clean_color_text(row_copy.get(status_cor_col, ""))
+        row_class, priority = get_row_class_from_base_value(status_cor_raw)
 
-        if status_cor_col:
-            status_cor_base = row_copy.get(status_cor_col, "")
-            status_cor, klass, priority = get_color_meta_from_base(status_cor_base)
-        else:
-            status_cor, klass, priority = get_color_meta_fallback(v24, v25, v26)
-
-        row_copy["_status_cor"] = status_cor
-        row_copy["_row_class"] = klass
+        row_copy["_status_cor"] = status_cor_raw
+        row_copy["_row_class"] = row_class
         row_copy["_sort_priority"] = priority
 
         prepared_rows.append(row_copy)
 
+    # ORDENA PELA COR DA BASE
     prepared_rows.sort(
         key=lambda r: (
             r.get("_sort_priority", 5),
@@ -766,8 +753,8 @@ def dashboard():
         sem = norm(r.get("Semana Atendimento", ""))
         stc = norm(r.get("Status Cliente", ""))
 
-        status_cor = norm(r.get("_status_cor", ""))
-        klass = norm(r.get("_row_class", ""))
+        status_cor = r.get("_status_cor", "")
+        klass = r.get("_row_class", "")
 
         row_html = f"""
         <tr class="{klass}">
@@ -827,8 +814,6 @@ def dashboard():
         </div>
         """
 
-    origem_cor = "BASE" if status_cor_col else "REGRA INTERNA"
-
     body = f"""
     <div class="card">
       <form method="get">
@@ -844,7 +829,7 @@ def dashboard():
           </div>
         </div>
         <div class="hint">
-          Origem do Status Cor: <b>{origem_cor}</b>. Ordem automática: Vermelho, Laranja, Amarelo, Azul e depois demais.
+          Status Cor vindo exatamente da BASE.
         </div>
       </form>
     </div>
