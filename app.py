@@ -297,6 +297,11 @@ def handle_any_exception(e):
     app.logger.error("ERRO NÃO TRATADO:\n%s", traceback.format_exc())
     msg = norm(str(e)) or "Erro interno."
     body = f"<div class='card'><b>Erro:</b><br><pre style='white-space:pre-wrap'>{msg}</pre></div>"
+
+    current_user_photo = ""
+    if session.get("user_type") == "rep":
+        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
     return render_template_string(
         BASE_HTML,
         title=APP_TITLE,
@@ -305,6 +310,7 @@ def handle_any_exception(e):
         user_login=session.get("user_login", ""),
         user_name=session.get("rep_name", ""),
         user_type=session.get("user_type", ""),
+        user_photo_url=current_user_photo,
         body=body
     ), 500
 
@@ -335,6 +341,21 @@ BASE_HTML = """
       align-items: center;
       border-bottom: 1px solid #d1d5db;
       box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .topbar-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid #d1d5db;
+      background: #f8fafc;
     }
 
     .container { padding: 16px; }
@@ -522,8 +543,11 @@ BASE_HTML = """
 <body>
   <div class="topbar">
     <div><b>Acompanhamento de clientes</b> <span class="small">| {{ subtitle }}</span></div>
-    <div>
+    <div class="topbar-right">
       {% if logged %}
+        {% if user_photo_url %}
+          <img src="{{ user_photo_url }}" alt="Foto do usuário" class="topbar-avatar">
+        {% endif %}
         <span class="pill">{{ user_name if user_name else user_login }} ({{ user_type }})</span>
         <a href="{{ url_for('logout') }}"><button class="danger">Sair</button></a>
       {% endif %}
@@ -581,6 +605,7 @@ def login():
             session["user_type"] = "admin"
             session["user_login"] = u
             session["rep_name"] = ""
+            session["rep_code"] = ""
             flash("Logado como ADMIN.", "ok")
             return redirect(url_for("dashboard"))
 
@@ -633,6 +658,7 @@ def login():
         user_login="",
         user_name="",
         user_type="",
+        user_photo_url="",
         body=body
     )
 
@@ -669,6 +695,10 @@ def dashboard():
 
     base_rows = safe_get_all_records(ws_base)
     if not base_rows:
+        current_user_photo = ""
+        if session.get("user_type") == "rep":
+            current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
         flash(f"A aba {WS_BASE} está vazia.", "err")
         return render_template_string(
             BASE_HTML,
@@ -678,6 +708,7 @@ def dashboard():
             user_login=session.get("user_login"),
             user_name=session.get("rep_name", ""),
             user_type=session.get("user_type"),
+            user_photo_url=current_user_photo,
             body="<div class='card'>Sem dados na BASE.</div>"
         )
 
@@ -810,22 +841,41 @@ def dashboard():
 
     out_rows = prepared_rows[:PAGE_SIZE]
 
+    # =========================
+    # FOTO USUÁRIO LOGADO
+    # =========================
+    current_user_photo = ""
+    if session.get("user_type") == "rep":
+        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
+    # =========================
+    # CARD REPRESENTANTE
+    # admin -> aparece quando filtra representante
+    # rep   -> aparece automaticamente com seu próprio código
+    # =========================
     rep_card_html = ""
-    if is_admin() and rep_sel and nome_rep_col:
+
+    selected_rep_code = ""
+    if is_admin():
+        selected_rep_code = rep_sel
+    else:
+        selected_rep_code = norm(session.get("rep_code", ""))
+
+    if selected_rep_code and nome_rep_col:
         rep_name_base = ""
         rep_sup_base = ""
         rep_reg_base = ""
 
         for r in base_rows:
-            if norm(r.get(rep_col, "")) == rep_sel:
+            if norm(r.get(rep_col, "")) == selected_rep_code:
                 rep_name_base = norm(r.get(nome_rep_col, ""))
                 rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
                 rep_reg_base = ""
                 if rep_name_base:
                     break
 
-        foto_url = get_rep_photo_src(rep_sel)
-        nome_card = rep_name_base or rep_sel
+        foto_url = get_rep_photo_src(selected_rep_code)
+        nome_card = rep_name_base or selected_rep_code
         sup_card = rep_sup_base
         regiao_card = rep_reg_base
 
@@ -841,7 +891,7 @@ def dashboard():
             {foto_html}
             <div>
               <div style="font-size:20px;font-weight:700;">{nome_card}</div>
-              <div class="small">Código: {rep_sel}</div>
+              <div class="small">Código: {selected_rep_code}</div>
               <div class="small">Supervisor: {sup_card}</div>
               <div class="small">Região: {regiao_card}</div>
             </div>
@@ -992,6 +1042,7 @@ def dashboard():
         user_login=session.get("user_login"),
         user_name=session.get("rep_name", ""),
         user_type=session.get("user_type"),
+        user_photo_url=current_user_photo,
         body=body
     )
 
