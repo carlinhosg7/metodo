@@ -30,6 +30,9 @@ WS_LISTAS = os.getenv("WS_LISTAS", "LISTAS").strip()
 
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 
+APP_TITLE = "Acompanhamento de clientes"
+LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
+
 
 # =========================
 # LISTAS FIXAS (fallback)
@@ -243,7 +246,7 @@ def handle_any_exception(e):
     body = f"<div class='card'><b>Erro:</b><br><pre style='white-space:pre-wrap'>{msg}</pre></div>"
     return render_template_string(
         BASE_HTML,
-        title="Erro",
+        title=APP_TITLE,
         subtitle="Falha no servidor",
         logged=require_login(),
         user_login=session.get("user_login", ""),
@@ -263,39 +266,175 @@ BASE_HTML = """
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }}</title>
   <style>
-    body { font-family: Arial, sans-serif; margin:0; background:#0f172a; color:#e5e7eb; }
-    .topbar{background:#111827;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1f2937;}
+    body {
+      font-family: Arial, sans-serif;
+      margin:0;
+      background:#ffffff;
+      color:#111827;
+    }
+
+    .topbar{
+      background:#ffffff;
+      padding:12px 16px;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      border-bottom:1px solid #d1d5db;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+
     .container{padding:16px;}
-    .card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px;margin-bottom:14px;}
-    label{font-size:12px;color:#9ca3af;display:block;margin-bottom:4px;}
-    input,select{width:100%;padding:10px;border-radius:10px;border:1px solid #374151;background:#0b1220;color:#e5e7eb;}
-    button{padding:10px 14px;border-radius:10px;border:0;background:#2563eb;color:#fff;cursor:pointer;}
-    button.secondary{background:#374151;}
+
+    .card{
+      background:#ffffff;
+      border:1px solid #d1d5db;
+      border-radius:12px;
+      padding:16px;
+      margin-bottom:14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    label{
+      font-size:12px;
+      color:#4b5563;
+      display:block;
+      margin-bottom:4px;
+      font-weight:600;
+    }
+
+    input,select{
+      width:100%;
+      padding:10px;
+      border-radius:10px;
+      border:1px solid #cbd5e1;
+      background:#ffffff;
+      color:#111827;
+      box-sizing:border-box;
+    }
+
+    input:focus, select:focus{
+      outline:none;
+      border-color:#2563eb;
+      box-shadow:0 0 0 3px rgba(37,99,235,0.12);
+    }
+
+    button{
+      padding:10px 14px;
+      border-radius:10px;
+      border:0;
+      background:#2563eb;
+      color:#fff;
+      cursor:pointer;
+      font-weight:600;
+    }
+
+    button.secondary{background:#6b7280;}
     button.danger{background:#dc2626;}
-    table{width:100%;border-collapse:collapse;font-size:13px;}
-    th,td{border-bottom:1px solid #1f2937;padding:10px;vertical-align:top;}
-    th{position:sticky;top:0;background:#0b1220;color:#9ca3af;text-align:left;}
+
+    table{
+      width:100%;
+      border-collapse:collapse;
+      font-size:13px;
+      background:#ffffff;
+    }
+
+    th,td{
+      border-bottom:1px solid #e5e7eb;
+      padding:10px;
+      vertical-align:top;
+    }
+
+    th{
+      position:sticky;
+      top:0;
+      background:#f8fafc;
+      color:#374151;
+      text-align:left;
+      z-index:2;
+    }
+
     .grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;}
     .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-    .msg{padding:10px 12px;border-radius:10px;margin-bottom:10px;}
-    .ok{background:#052e16;border:1px solid #14532d;}
-    .err{background:#3f1d1d;border:1px solid #7f1d1d;}
-    .pill{padding:3px 8px;border-radius:999px;font-size:12px;background:#0b1220;border:1px solid #1f2937;display:inline-block;}
-    .small{color:#9ca3af;font-size:12px;}
-    .hint{color:#9ca3af;font-size:12px;margin-top:6px;}
+
+    .msg{
+      padding:10px 12px;
+      border-radius:10px;
+      margin-bottom:10px;
+      font-weight:600;
+    }
+
+    .ok{
+      background:#ecfdf5;
+      border:1px solid #86efac;
+      color:#166534;
+    }
+
+    .err{
+      background:#fef2f2;
+      border:1px solid #fca5a5;
+      color:#991b1b;
+    }
+
+    .pill{
+      padding:3px 8px;
+      border-radius:999px;
+      font-size:12px;
+      background:#f3f4f6;
+      border:1px solid #d1d5db;
+      display:inline-block;
+      color:#111827;
+    }
+
+    .small{color:#6b7280;font-size:12px;}
+    .hint{color:#6b7280;font-size:12px;margin-top:6px;}
     .nowrap{white-space:nowrap;}
     .money{font-variant-numeric: tabular-nums;}
 
+    .login-wrap{
+      min-height: calc(100vh - 90px);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+    }
+
+    .login-card{
+      width:100%;
+      max-width:520px;
+      text-align:center;
+    }
+
+    .login-logo{
+      max-width:220px;
+      width:100%;
+      height:auto;
+      margin:0 auto 18px auto;
+      display:block;
+    }
+
+    .login-title{
+      margin-top:0;
+      margin-bottom:6px;
+      color:#111827;
+    }
+
+    .login-subtitle{
+      margin-top:0;
+      margin-bottom:20px;
+      color:#6b7280;
+      font-size:14px;
+    }
+
     /* CORES SOLICITADAS */
-    .row-red{background:rgba(220,38,38,0.22);}
-    .row-orange{background:rgba(249,115,22,0.20);}
-    .row-yellow{background:rgba(234,179,8,0.20);}
-    .row-blue{background:rgba(56,189,248,0.16);}
+    .row-red{background:rgba(220,38,38,0.16);}
+    .row-orange{background:rgba(249,115,22,0.16);}
+    .row-yellow{background:rgba(234,179,8,0.18);}
+    .row-blue{background:rgba(56,189,248,0.14);}
   </style>
 </head>
 <body>
   <div class="topbar">
-    <div><b>Carteira Comercial</b> <span class="small">| {{ subtitle }}</span></div>
+    <div><b>Acompanhamento de clientes</b> <span class="small">| {{ subtitle }}</span></div>
     <div>
       {% if logged %}
         <span class="pill">{{ user_login }} ({{ user_type }})</span>
@@ -316,23 +455,28 @@ BASE_HTML = """
 """
 
 LOGIN_BODY = """
-<div class="card" style="max-width:520px;margin:auto;">
-  <h2 style="margin-top:0;">Login</h2>
-  <form method="post">
-    <div class="grid-2">
-      <div>
-        <label>Usuário</label>
-        <input name="user" placeholder="admin ou código do representante" required>
+<div class="login-wrap">
+  <div class="card login-card">
+    <img src="{{ logo_url }}" alt="Logo Kidy" class="login-logo">
+    <h2 class="login-title">Acompanhamento de clientes</h2>
+    <p class="login-subtitle">Faça login para acessar a carteira comercial</p>
+
+    <form method="post">
+      <div class="grid-2">
+        <div>
+          <label>Usuário</label>
+          <input name="user" placeholder="admin ou código do representante" required>
+        </div>
+        <div>
+          <label>Senha</label>
+          <input name="pass" type="password" placeholder="admin123 ou o mesmo código" required>
+        </div>
       </div>
-      <div>
-        <label>Senha</label>
-        <input name="pass" type="password" placeholder="admin123 ou o mesmo código" required>
+      <div style="margin-top:12px;">
+        <button type="submit">Entrar</button>
       </div>
-    </div>
-    <div style="margin-top:12px;">
-      <button type="submit">Entrar</button>
-    </div>
-  </form>
+    </form>
+  </div>
 </div>
 """
 
@@ -361,8 +505,14 @@ def login():
 
         flash("Login inválido.", "err")
 
-    body = render_template_string(LOGIN_BODY)
-    return render_template_string(BASE_HTML, title="Login", subtitle="Acesso", logged=False, body=body)
+    body = render_template_string(LOGIN_BODY, logo_url=LOGO_URL)
+    return render_template_string(
+        BASE_HTML,
+        title=APP_TITLE,
+        subtitle="Acesso",
+        logged=False,
+        body=body
+    )
 
 
 @app.route("/logout")
@@ -390,14 +540,17 @@ def dashboard():
     if not base_rows:
         flash(f"A aba {WS_BASE} está vazia.", "err")
         return render_template_string(
-            BASE_HTML, title="Dashboard", subtitle="Base vazia",
-            logged=True, user_login=session.get("user_login"), user_type=session.get("user_type"),
+            BASE_HTML,
+            title=APP_TITLE,
+            subtitle="Base vazia",
+            logged=True,
+            user_login=session.get("user_login"),
+            user_type=session.get("user_type"),
             body="<div class='card'>Sem dados na BASE.</div>"
         )
 
     headers = [norm(h) for h in ws_base.row_values(1)]
 
-    # Colunas essenciais
     key_col = pick_col(headers, ["Codigo Grupo Cliente", "Código Grupo Cliente", "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"])
     grupo_col = pick_col(headers, ["Grupo Cliente", "Nome Cliente", "Cliente", "Razao Social", "Razão Social", "Fantasia", "Nome"])
     rep_col = pick_col(headers, ["Codigo Representante", "Código Representante", "CODIGO REPRESENTANTE", "COD_REP"])
@@ -412,13 +565,11 @@ def dashboard():
         flash("BASE precisa ter 'Codigo Grupo Cliente' e 'Codigo Representante'.", "err")
         return redirect(url_for("logout"))
 
-    # LISTAS
     lista_rows = safe_get_all_records(ws_listas)
     meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
     semanas = unique_list([r.get("Semana Atendimento", "") for r in lista_rows]) or DEFAULT_SEMANAS
     status_list = unique_list([r.get("Status Cliente", "") for r in lista_rows]) or DEFAULT_STATUS
 
-    # EDIÇÕES
     ed_rows = safe_get_all_records(ws_ed)
     latest = {}
     for r in ed_rows:
@@ -431,7 +582,6 @@ def dashboard():
                 "Status Cliente": norm(r.get("Status Cliente", "")),
             }
 
-    # filtros
     sup_sel = norm(request.args.get("sup", ""))
     rep_sel = norm(request.args.get("rep", ""))
     q = norm(request.args.get("q", ""))
@@ -486,7 +636,6 @@ def dashboard():
 
         prepared_rows.append(row_copy)
 
-    # ORDENAÇÃO: vermelho, laranja, amarelo, azul, restante
     prepared_rows.sort(
         key=lambda r: (
             r.get("_sort_priority", 5),
@@ -634,7 +783,7 @@ def dashboard():
 
     return render_template_string(
         BASE_HTML,
-        title="Dashboard",
+        title=APP_TITLE,
         subtitle=f"Planilha: {WS_BASE}",
         logged=True,
         user_login=session.get("user_login"),
