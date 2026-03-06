@@ -135,14 +135,6 @@ def fmt_money(v):
 
 
 def normalize_status_cor_from_base(v):
-    """
-    Normaliza o texto vindo da BASE para:
-    - VERMELHO
-    - LARANJA
-    - AMARELO
-    - AZUL
-    - vazio
-    """
     s = norm(v).upper()
 
     if not s:
@@ -176,9 +168,6 @@ def normalize_status_cor_from_base(v):
 
 
 def get_color_meta_from_base(status_cor):
-    """
-    Usa exatamente a cor vinda da BASE.
-    """
     s = normalize_status_cor_from_base(status_cor)
 
     if s == "VERMELHO":
@@ -194,9 +183,6 @@ def get_color_meta_from_base(status_cor):
 
 
 def get_color_meta_fallback(t24, t25, t26):
-    """
-    Só entra se a BASE não tiver Status Cor.
-    """
     t24 = float(t24 or 0.0)
     t25 = float(t25 or 0.0)
     t26 = float(t26 or 0.0)
@@ -311,167 +297,167 @@ BASE_HTML = """
   <style>
     body {
       font-family: Arial, sans-serif;
-      margin:0;
-      background:#ffffff;
-      color:#111827;
+      margin: 0;
+      background: #ffffff;
+      color: #111827;
     }
 
-    .topbar{
-      background:#ffffff;
-      padding:12px 16px;
-      display:flex;
-      justify-content:space-between;
-      align-items:center;
-      border-bottom:1px solid #d1d5db;
+    .topbar {
+      background: #ffffff;
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #d1d5db;
       box-shadow: 0 1px 2px rgba(0,0,0,0.04);
     }
 
-    .container{padding:16px;}
+    .container { padding: 16px; }
 
-    .card{
-      background:#ffffff;
-      border:1px solid #d1d5db;
-      border-radius:12px;
-      padding:16px;
-      margin-bottom:14px;
+    .card {
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 14px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.04);
     }
 
-    label{
-      font-size:12px;
-      color:#4b5563;
-      display:block;
-      margin-bottom:4px;
-      font-weight:600;
+    label {
+      font-size: 12px;
+      color: #4b5563;
+      display: block;
+      margin-bottom: 4px;
+      font-weight: 600;
     }
 
-    input,select{
-      width:100%;
-      padding:10px;
-      border-radius:10px;
-      border:1px solid #cbd5e1;
-      background:#ffffff;
-      color:#111827;
-      box-sizing:border-box;
+    input, select {
+      width: 100%;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: #111827;
+      box-sizing: border-box;
     }
 
-    input:focus, select:focus{
-      outline:none;
-      border-color:#2563eb;
-      box-shadow:0 0 0 3px rgba(37,99,235,0.12);
+    input:focus, select:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
     }
 
-    button{
-      padding:10px 14px;
-      border-radius:10px;
-      border:0;
-      background:#2563eb;
-      color:#fff;
-      cursor:pointer;
-      font-weight:600;
+    button {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 0;
+      background: #2563eb;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
     }
 
-    button.secondary{background:#6b7280;}
-    button.danger{background:#dc2626;}
+    button.secondary { background: #6b7280; }
+    button.danger { background: #dc2626; }
 
-    table{
-      width:100%;
-      border-collapse:collapse;
-      font-size:13px;
-      background:#ffffff;
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: #ffffff;
     }
 
-    th,td{
-      border-bottom:1px solid #e5e7eb;
-      padding:10px;
-      vertical-align:top;
+    th, td {
+      border-bottom: 1px solid #e5e7eb;
+      padding: 10px;
+      vertical-align: top;
     }
 
-    th{
-      position:sticky;
-      top:0;
-      background:#f8fafc;
-      color:#374151;
-      text-align:left;
-      z-index:2;
+    th {
+      position: sticky;
+      top: 0;
+      background: #f8fafc;
+      color: #374151;
+      text-align: left;
+      z-index: 2;
     }
 
-    .grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;}
-    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-    .msg{
-      padding:10px 12px;
-      border-radius:10px;
-      margin-bottom:10px;
-      font-weight:600;
+    .msg {
+      padding: 10px 12px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+      font-weight: 600;
     }
 
-    .ok{
-      background:#ecfdf5;
-      border:1px solid #86efac;
-      color:#166534;
+    .ok {
+      background: #ecfdf5;
+      border: 1px solid #86efac;
+      color: #166534;
     }
 
-    .err{
-      background:#fef2f2;
-      border:1px solid #fca5a5;
-      color:#991b1b;
+    .err {
+      background: #fef2f2;
+      border: 1px solid #fca5a5;
+      color: #991b1b;
     }
 
-    .pill{
-      padding:3px 8px;
-      border-radius:999px;
-      font-size:12px;
-      background:#f3f4f6;
-      border:1px solid #d1d5db;
-      display:inline-block;
-      color:#111827;
+    .pill {
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #f3f4f6;
+      border: 1px solid #d1d5db;
+      display: inline-block;
+      color: #111827;
     }
 
-    .small{color:#6b7280;font-size:12px;}
-    .hint{color:#6b7280;font-size:12px;margin-top:6px;}
-    .nowrap{white-space:nowrap;}
-    .money{font-variant-numeric: tabular-nums;}
+    .small { color: #6b7280; font-size: 12px; }
+    .hint { color: #6b7280; font-size: 12px; margin-top: 6px; }
+    .nowrap { white-space: nowrap; }
+    .money { font-variant-numeric: tabular-nums; }
 
-    .login-wrap{
+    .login-wrap {
       min-height: calc(100vh - 90px);
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      padding:24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
     }
 
-    .login-card{
-      width:100%;
-      max-width:520px;
-      text-align:center;
+    .login-card {
+      width: 100%;
+      max-width: 520px;
+      text-align: center;
     }
 
-    .login-logo{
-      max-width:220px;
-      width:100%;
-      height:auto;
-      margin:0 auto 18px auto;
-      display:block;
+    .login-logo {
+      max-width: 220px;
+      width: 100%;
+      height: auto;
+      margin: 0 auto 18px auto;
+      display: block;
     }
 
-    .login-title{
-      margin-top:0;
-      margin-bottom:6px;
-      color:#111827;
+    .login-title {
+      margin-top: 0;
+      margin-bottom: 6px;
+      color: #111827;
     }
 
-    .login-subtitle{
-      margin-top:0;
-      margin-bottom:20px;
-      color:#6b7280;
-      font-size:14px;
+    .login-subtitle {
+      margin-top: 0;
+      margin-bottom: 20px;
+      color: #6b7280;
+      font-size: 14px;
     }
 
-    .row-red{background:rgba(220,38,38,0.16);}
-    .row-orange{background:rgba(249,115,22,0.16);}
-    .row-yellow{background:rgba(234,179,8,0.18);}
-    .row-blue{background:rgba(56,189,248,0.14);}
+    .row-red { background: rgba(220,38,38,0.16); }
+    .row-orange { background: rgba(249,115,22,0.16); }
+    .row-yellow { background: rgba(234,179,8,0.18); }
+    .row-blue { background: rgba(56,189,248,0.14); }
   </style>
 </head>
 <body>
@@ -606,8 +592,17 @@ def dashboard():
     sh = connect_gs()
     ws_base = sh.worksheet(WS_BASE)
 
-    ed_headers = ["timestamp", "user_type", "user_login", "rep_code", "client_key",
-                  "Data Agenda Visita", "Mês", "Semana Atendimento", "Status Cliente"]
+    ed_headers = [
+        "timestamp",
+        "user_type",
+        "user_login",
+        "rep_code",
+        "client_key",
+        "Data Agenda Visita",
+        "Mês",
+        "Semana Atendimento",
+        "Status Cliente"
+    ]
     ws_ed = get_or_create_worksheet(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
 
     listas_headers = ["Mês", "Semana Atendimento", "Status Cliente"]
@@ -629,21 +624,33 @@ def dashboard():
 
     headers = [norm(h) for h in ws_base.row_values(1)]
 
-    key_col = pick_col(headers, ["Codigo Grupo Cliente", "Código Grupo Cliente", "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"])
-    grupo_col = pick_col(headers, ["Grupo Cliente", "Nome Cliente", "Cliente", "Razao Social", "Razão Social", "Fantasia", "Nome"])
-    rep_col = pick_col(headers, ["Codigo Representante", "Código Representante", "CODIGO REPRESENTANTE", "COD_REP"])
-    nome_rep_col = pick_col(headers, ["Representante", "Nome Representante", "REPRESENTANTE"])
-    sup_col = pick_col(headers, ["Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"])
+    key_col = pick_col(headers, [
+        "Codigo Grupo Cliente", "Código Grupo Cliente",
+        "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
+    ])
+    grupo_col = pick_col(headers, [
+        "Grupo Cliente", "Nome Cliente", "Cliente",
+        "Razao Social", "Razão Social", "Fantasia", "Nome"
+    ])
+    rep_col = pick_col(headers, [
+        "Codigo Representante", "Código Representante",
+        "CODIGO REPRESENTANTE", "COD_REP"
+    ])
+    nome_rep_col = pick_col(headers, [
+        "Representante", "Nome Representante", "REPRESENTANTE"
+    ])
+    sup_col = pick_col(headers, [
+        "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
+    ])
     cidade_col = pick_col(headers, ["Cidade", "Município", "Municipio"])
 
     t2024_col = pick_col(headers, ["Total 2024", "TOTAL 2024", "Vlr 2024", "Valor 2024", "2024"])
     t2025_col = pick_col(headers, ["Total 2025", "TOTAL 2025", "Vlr 2025", "Valor 2025", "2025"])
     t2026_col = pick_col(headers, ["Total 2026", "TOTAL 2026", "Vlr 2026", "Valor 2026", "2026"])
 
-    # AQUI ELE PEGA A COLUNA CERTA DA BASE
     status_cor_col = pick_col(headers, [
-        "Status Cor", "STATUS COR", "Status de Cor", "Cor Status", "Classificacao Cor",
-        "Classificação Cor", "Cor", "StatusCor"
+        "Status Cor", "STATUS COR", "Status de Cor",
+        "Cor Status", "Classificacao Cor", "Classificação Cor", "Cor", "StatusCor"
     ])
 
     if not key_col or not rep_col:
@@ -679,9 +686,8 @@ def dashboard():
         ck = norm(r.get(key_col, ""))
         repc = norm(r.get(rep_col, ""))
 
-        if not is_admin():
-            if repc != session.get("rep_code"):
-                continue
+        if not is_admin() and repc != session.get("rep_code"):
+            continue
 
         if is_admin() and sup_col and sup_sel:
             if norm(r.get(sup_col, "")) != sup_sel:
@@ -713,7 +719,6 @@ def dashboard():
         v25 = parse_money_to_float(row_copy.get(t2025_col, "")) if t2025_col else 0.0
         v26 = parse_money_to_float(row_copy.get(t2026_col, "")) if t2026_col else 0.0
 
-        # PRIORIDADE: pega da base
         if status_cor_col:
             status_cor_base = row_copy.get(status_cor_col, "")
             status_cor, klass, priority = get_color_meta_from_base(status_cor_base)
@@ -822,7 +827,7 @@ def dashboard():
         </div>
         """
 
-        origem_cor = "BASE" if status_cor_col else "REGRA INTERNA"
+    origem_cor = "BASE" if status_cor_col else "REGRA INTERNA"
 
     body = f"""
     <div class="card">
@@ -839,8 +844,7 @@ def dashboard():
           </div>
         </div>
         <div class="hint">
-          Origem do Status Cor: <b>{origem_cor}</b>.
-          Ordem automática: Vermelho, Laranja, Amarelo, Azul e depois demais.
+          Origem do Status Cor: <b>{origem_cor}</b>. Ordem automática: Vermelho, Laranja, Amarelo, Azul e depois demais.
         </div>
       </form>
     </div>
@@ -882,3 +886,67 @@ def dashboard():
         user_type=session.get("user_type"),
         body=body
     )
+
+
+@app.route("/salvar", methods=["POST"])
+def salvar():
+    if not require_login():
+        return redirect(url_for("login"))
+
+    user_type = session.get("user_type")
+    user_login = session.get("user_login")
+
+    client_key = norm(request.form.get("client_key", ""))
+    rep_code_form = norm(request.form.get("rep_code", ""))
+
+    if not client_key:
+        flash("Client_key vazio.", "err")
+        return redirect(url_for("dashboard"))
+
+    if user_type == "rep":
+        if rep_code_form != session.get("rep_code"):
+            flash("Você não pode gravar alterações em clientes de outro representante.", "err")
+            return redirect(url_for("dashboard"))
+
+    sh = connect_gs()
+
+    ed_headers = [
+        "timestamp",
+        "user_type",
+        "user_login",
+        "rep_code",
+        "client_key",
+        "Data Agenda Visita",
+        "Mês",
+        "Semana Atendimento",
+        "Status Cliente"
+    ]
+
+    ws_ed = get_or_create_worksheet(
+        sh,
+        WS_EDICOES,
+        rows=2000,
+        cols=20,
+        headers=ed_headers
+    )
+
+    row = [
+        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        user_type,
+        user_login,
+        rep_code_form,
+        client_key,
+        norm(request.form.get("Data Agenda Visita", "")),
+        norm(request.form.get("Mês", "")),
+        norm(request.form.get("Semana Atendimento", "")),
+        norm(request.form.get("Status Cliente", "")),
+    ]
+
+    ws_ed.append_row(row)
+
+    flash("Alteração gravada com sucesso.", "ok")
+    return redirect(url_for("dashboard"))
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
