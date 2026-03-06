@@ -110,10 +110,6 @@ def pick_col(headers, candidates):
 
 
 def parse_money_to_float(v):
-    """
-    Converte "1.234.567,89" / "1234,56" / "1234.56" em float.
-    Se vier vazio/None, retorna 0.
-    """
     s = norm(v)
     if s == "":
         return 0.0
@@ -128,9 +124,6 @@ def parse_money_to_float(v):
 
 
 def fmt_money(v):
-    """
-    Formata para pt-BR simples sem depender de locale.
-    """
     s = norm(v)
     if s == "":
         return ""
@@ -141,14 +134,68 @@ def fmt_money(v):
     return f"{inteiro},{frac}"
 
 
-def get_status_cor_and_class(t24, t25, t26):
+def normalize_status_cor_from_base(v):
     """
-    Regras:
-    - vermelho: 2026=0 e teve 2024/2025
-    - laranja: 2026<2025 (ambos >0)
-    - amarelo: 2026>0, 2025=0, 2024>0 (reativou)
-    - azul claro: 2026>0 e 2024=0 e 2025=0 (só 2026)
-    - sem classificação: demais casos
+    Normaliza o texto vindo da BASE para:
+    - VERMELHO
+    - LARANJA
+    - AMARELO
+    - AZUL
+    - vazio
+    """
+    s = norm(v).upper()
+
+    if not s:
+        return ""
+
+    s = (
+        s.replace("Á", "A")
+         .replace("À", "A")
+         .replace("Ã", "A")
+         .replace("Â", "A")
+         .replace("É", "E")
+         .replace("Ê", "E")
+         .replace("Í", "I")
+         .replace("Ó", "O")
+         .replace("Ô", "O")
+         .replace("Õ", "O")
+         .replace("Ú", "U")
+         .replace("Ç", "C")
+    )
+
+    if "VERMELH" in s:
+        return "VERMELHO"
+    if "LARANJ" in s:
+        return "LARANJA"
+    if "AMAREL" in s:
+        return "AMARELO"
+    if "AZUL" in s:
+        return "AZUL"
+
+    return norm(v).upper()
+
+
+def get_color_meta_from_base(status_cor):
+    """
+    Usa exatamente a cor vinda da BASE.
+    """
+    s = normalize_status_cor_from_base(status_cor)
+
+    if s == "VERMELHO":
+        return "VERMELHO", "row-red", 1
+    if s == "LARANJA":
+        return "LARANJA", "row-orange", 2
+    if s == "AMARELO":
+        return "AMARELO", "row-yellow", 3
+    if s == "AZUL":
+        return "AZUL", "row-blue", 4
+
+    return norm(status_cor), "", 5
+
+
+def get_color_meta_fallback(t24, t25, t26):
+    """
+    Só entra se a BASE não tiver Status Cor.
     """
     t24 = float(t24 or 0.0)
     t25 = float(t25 or 0.0)
@@ -169,9 +216,9 @@ def get_status_cor_and_class(t24, t25, t26):
         return "AMARELO", "row-yellow", 3
 
     if has26 and (not has24) and (not has25):
-        return "AZUL CLARO", "row-blue", 4
+        return "AZUL", "row-blue", 4
 
-    return "SEM CLASSIFICAÇÃO", "", 5
+    return "", "", 5
 
 
 # =========================
@@ -593,6 +640,12 @@ def dashboard():
     t2025_col = pick_col(headers, ["Total 2025", "TOTAL 2025", "Vlr 2025", "Valor 2025", "2025"])
     t2026_col = pick_col(headers, ["Total 2026", "TOTAL 2026", "Vlr 2026", "Valor 2026", "2026"])
 
+    # AQUI ELE PEGA A COLUNA CERTA DA BASE
+    status_cor_col = pick_col(headers, [
+        "Status Cor", "STATUS COR", "Status de Cor", "Cor Status", "Classificacao Cor",
+        "Classificação Cor", "Cor", "StatusCor"
+    ])
+
     if not key_col or not rep_col:
         flash("BASE precisa ter 'Codigo Grupo Cliente' e 'Codigo Representante'.", "err")
         return redirect(url_for("logout"))
@@ -660,7 +713,12 @@ def dashboard():
         v25 = parse_money_to_float(row_copy.get(t2025_col, "")) if t2025_col else 0.0
         v26 = parse_money_to_float(row_copy.get(t2026_col, "")) if t2026_col else 0.0
 
-        status_cor, klass, priority = get_status_cor_and_class(v24, v25, v26)
+        # PRIORIDADE: pega da base
+        if status_cor_col:
+            status_cor_base = row_copy.get(status_cor_col, "")
+            status_cor, klass, priority = get_color_meta_from_base(status_cor_base)
+        else:
+            status_cor, klass, priority = get_color_meta_fallback(v24, v25, v26)
 
         row_copy["_status_cor"] = status_cor
         row_copy["_row_class"] = klass
@@ -694,10 +752,6 @@ def dashboard():
         supv = norm(r.get(sup_col, "")) if sup_col else ""
         cidade = norm(r.get(cidade_col, "")) if cidade_col else ""
 
-        v24 = parse_money_to_float(r.get(t2024_col, "")) if t2024_col else 0.0
-        v25 = parse_money_to_float(r.get(t2025_col, "")) if t2025_col else 0.0
-        v26 = parse_money_to_float(r.get(t2026_col, "")) if t2026_col else 0.0
-
         t24 = fmt_money(r.get(t2024_col, "")) if t2024_col else ""
         t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
         t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
@@ -707,7 +761,8 @@ def dashboard():
         sem = norm(r.get("Semana Atendimento", ""))
         stc = norm(r.get("Status Cliente", ""))
 
-        status_cor, klass, _ = get_status_cor_and_class(v24, v25, v26)
+        status_cor = norm(r.get("_status_cor", ""))
+        klass = norm(r.get("_row_class", ""))
 
         row_html = f"""
         <tr class="{klass}">
@@ -767,6 +822,8 @@ def dashboard():
         </div>
         """
 
+    origem_cor = "BASE" if status_cor_col else "REGRA INTERNA"
+
     body = f"""
     <div class="card">
       <form method="get">
@@ -782,9 +839,8 @@ def dashboard():
           </div>
         </div>
         <div class="hint">
-          Ordem automática: Vermelho, Laranja, Amarelo, Azul claro e depois Sem classificação.
-          <br>
-          Cores: Vermelho (parou 2026), Laranja (caiu 2026 vs 2025), Amarelo (reativou), Azul claro (só 2026).
+          Origem do Status Cor: <b>{origem_cor}</b>.
+          Ordem automática: Vermelho, Laranja, Amarelo, Azul e depois demais.
         </div>
       </form>
     </div>
@@ -793,83 +849,4 @@ def dashboard():
       <table>
         <thead>
           <tr>
-            <th>Codigo Grupo Cliente</th>
-            <th>Grupo Cliente</th>
-            <th>Codigo Representante</th>
-            <th>Representante</th>
-            <th>Supervisor</th>
-            <th>Cidade</th>
-            <th>Total 2024</th>
-            <th>Total 2025</th>
-            <th>Total 2026</th>
-            <th>Status Cor</th>
-            <th>Data Agenda Visita</th>
-            <th>Mês</th>
-            <th>Semana Atendimento</th>
-            <th>Status Cliente</th>
-          </tr>
-        </thead>
-        <tbody>
-          {''.join(table_rows)}
-        </tbody>
-      </table>
-    </div>
-    """
-
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle=f"Planilha: {WS_BASE}",
-        logged=True,
-        user_login=session.get("user_login"),
-        user_name=session.get("rep_name", ""),
-        user_type=session.get("user_type"),
-        body=body
-    )
-
-
-@app.route("/salvar", methods=["POST"])
-def salvar():
-    if not require_login():
-        return redirect(url_for("login"))
-
-    user_type = session.get("user_type")
-    user_login = session.get("user_login")
-
-    client_key = norm(request.form.get("client_key", ""))
-    rep_code_form = norm(request.form.get("rep_code", ""))
-
-    if not client_key:
-        flash("Client_key vazio.", "err")
-        return redirect(url_for("dashboard"))
-
-    if user_type == "rep":
-        if rep_code_form != session.get("rep_code"):
-            flash("Você não pode gravar alterações em clientes de outro representante.", "err")
-            return redirect(url_for("dashboard"))
-
-    sh = connect_gs()
-
-    ed_headers = ["timestamp", "user_type", "user_login", "rep_code", "client_key",
-                  "Data Agenda Visita", "Mês", "Semana Atendimento", "Status Cliente"]
-    ws_ed = get_or_create_worksheet(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
-
-    row = [
-        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-        user_type,
-        user_login,
-        rep_code_form,
-        client_key,
-        norm(request.form.get("Data Agenda Visita", "")),
-        norm(request.form.get("Mês", "")),
-        norm(request.form.get("Semana Atendimento", "")),
-        norm(request.form.get("Status Cliente", "")),
-    ]
-    ws_ed.append_row(row)
-
-    flash("Alteração gravada com sucesso.", "ok")
-    return redirect(url_for("dashboard"))
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+            <th>Codigo Grupo Cliente</
