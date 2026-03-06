@@ -96,9 +96,6 @@ def require_login():
 
 
 def pick_col_exact(headers, candidates):
-    """
-    Procura SOMENTE correspondência exata, sem contains.
-    """
     hmap = {norm(h).lower(): h for h in headers}
     for cand in candidates:
         key = norm(cand).lower()
@@ -108,10 +105,6 @@ def pick_col_exact(headers, candidates):
 
 
 def pick_col_flexible(headers, candidates):
-    """
-    Procura exata e depois contains.
-    Usar só para colunas normais.
-    """
     hmap = {norm(h).lower(): h for h in headers}
     for cand in candidates:
         key = norm(cand).lower()
@@ -152,18 +145,11 @@ def fmt_money(v):
 
 
 def clean_color_text(v):
-    """
-    Mantém o texto da base praticamente como está, só limpando espaços.
-    """
     return norm(v)
 
 
-def get_row_class_from_base_value(status_cor_raw):
-    """
-    NÃO recalcula regra.
-    Só converte o TEXTO da BASE em classe visual.
-    """
-    s = norm(status_cor_raw).upper()
+def normalize_color_for_match(v):
+    s = norm(v).upper()
     s = (
         s.replace("Á", "A")
          .replace("À", "A")
@@ -178,6 +164,21 @@ def get_row_class_from_base_value(status_cor_raw):
          .replace("Ú", "U")
          .replace("Ç", "C")
     )
+    return s
+
+
+def get_row_class_from_base_value(status_cor_raw):
+    """
+    NÃO recalcula regra.
+    Só converte o TEXTO da BASE em classe visual e prioridade.
+    ORDEM:
+    1 - VERMELHO
+    2 - LARANJA
+    3 - AMARELO
+    4 - VERDE
+    5 - AZUL
+    """
+    s = normalize_color_for_match(status_cor_raw)
 
     if "VERMELH" in s:
         return "row-red", 1
@@ -185,10 +186,12 @@ def get_row_class_from_base_value(status_cor_raw):
         return "row-orange", 2
     if "AMAREL" in s:
         return "row-yellow", 3
+    if "VERDE" in s:
+        return "row-green", 4
     if "AZUL" in s:
-        return "row-blue", 4
+        return "row-blue", 5
 
-    return "", 5
+    return "", 99
 
 
 # =========================
@@ -441,6 +444,7 @@ BASE_HTML = """
     .row-red { background: rgba(220,38,38,0.16); }
     .row-orange { background: rgba(249,115,22,0.16); }
     .row-yellow { background: rgba(234,179,8,0.18); }
+    .row-green { background: rgba(34,197,94,0.16); }
     .row-blue { background: rgba(56,189,248,0.14); }
   </style>
 </head>
@@ -632,8 +636,6 @@ def dashboard():
     t2025_col = pick_col_flexible(headers, ["Total 2025", "TOTAL 2025", "Vlr 2025", "Valor 2025", "2025"])
     t2026_col = pick_col_flexible(headers, ["Total 2026", "TOTAL 2026", "Vlr 2026", "Valor 2026", "2026"])
 
-    # AQUI É O PONTO PRINCIPAL:
-    # SOMENTE CABEÇALHOS EXATOS DE STATUS COR
     status_cor_col = pick_col_exact(headers, [
         "Status Cor",
         "STATUS COR",
@@ -707,7 +709,6 @@ def dashboard():
             row_copy.setdefault("Semana Atendimento", "")
             row_copy.setdefault("Status Cliente", "")
 
-        # PEGA EXATAMENTE O TEXTO DA BASE
         status_cor_raw = clean_color_text(row_copy.get(status_cor_col, ""))
         row_class, priority = get_row_class_from_base_value(status_cor_raw)
 
@@ -717,10 +718,9 @@ def dashboard():
 
         prepared_rows.append(row_copy)
 
-    # ORDENA PELA COR DA BASE
     prepared_rows.sort(
         key=lambda r: (
-            r.get("_sort_priority", 5),
+            r.get("_sort_priority", 99),
             norm(r.get(grupo_col, "")) if grupo_col else "",
             norm(r.get(key_col, ""))
         )
@@ -829,7 +829,7 @@ def dashboard():
           </div>
         </div>
         <div class="hint">
-          Status Cor vindo exatamente da BASE.
+          Status Cor vindo exatamente da BASE. Ordem: Vermelho, Laranja, Amarelo, Verde e Azul.
         </div>
       </form>
     </div>
