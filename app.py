@@ -63,8 +63,6 @@ DEFAULT_STATUS = [
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=7)
-
-# importante para ambiente hospedado
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
@@ -222,6 +220,7 @@ def get_rep_photo_src(codigo_rep):
 
 
 def fmt_money(v):
+    # não soma, não recalcula, não converte
     return norm(v)
 
 
@@ -307,10 +306,6 @@ def safe_get_raw_rows(ws):
 
 
 def try_get_rep_name(rep_code):
-    """
-    Busca nome do representante na BASE.
-    Se falhar, não bloqueia login.
-    """
     rep_code = norm(rep_code)
     if not rep_code:
         return ""
@@ -674,9 +669,6 @@ def login():
                 body=body
             )
 
-        # =========================
-        # LOGIN ADMIN
-        # =========================
         if u == ADMIN_USER and p == ADMIN_PASS:
             session.clear()
             session.permanent = True
@@ -688,11 +680,6 @@ def login():
             flash("Logado como ADMIN.", "ok")
             return redirect(url_for("dashboard"))
 
-        # =========================
-        # LOGIN REPRESENTANTE
-        # regra: usuario = senha e ambos numéricos
-        # NÃO depende da BASE para autenticar
-        # =========================
         if u.isdigit() and p.isdigit() and u == p:
             rep_nome = try_get_rep_name(u)
 
@@ -793,15 +780,18 @@ def dashboard():
     ])
     cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
 
-    t2024_col = pick_col_exact(headers, ["Total 2024"])
-    t2025_col = pick_col_exact(headers, ["Total 2025"])
-    t2026_col = pick_col_exact(headers, ["Total 2026"])
+    # =========================
+    # COLUNAS REAIS DA SUA BASE
+    # =========================
+    t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
+    t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
+    t2026_col = pick_col_exact(headers, ["Total 2026 (PERIODO)"])
 
     status_cor_col = pick_col_exact(headers, [
-        "Status Cor",
         "STATUS COR",
-        "StatusCor",
-        "STATUSCOR"
+        "Status Cor",
+        "STATUSCOR",
+        "StatusCor"
     ])
 
     cliente_novo_col = pick_col_flexible(headers, [
@@ -844,11 +834,11 @@ def dashboard():
 
         body = f"""
         <div class='card'>
-          <b>Não encontrei exatamente as colunas de totais na BASE.</b><br><br>
-          Preciso destas colunas:<br>
-          - Total 2024<br>
-          - Total 2025<br>
-          - Total 2026<br><br>
+          <b>Não encontrei as colunas reais de totais na BASE.</b><br><br>
+          Preciso exatamente destas:<br>
+          - Total 2024 (PERIODO)<br>
+          - Total 2025 (PERIODO)<br>
+          - Total 2026 (PERIODO)<br><br>
           <span class='small'>Cabeçalhos encontrados: {', '.join(headers)}</span>
         </div>
         """
@@ -871,7 +861,7 @@ def dashboard():
 
         body = """
         <div class='card'>
-          <b>Não achei nem 'Status Cor' nem coluna de 'Cliente Novo' na BASE.</b>
+          <b>Não achei nem 'STATUS COR' nem coluna de 'Cliente Novo' na BASE.</b>
         </div>
         """
         return render_template_string(
@@ -1115,7 +1105,10 @@ def dashboard():
           </div>
         </div>
         <div class="hint">
-          Os campos Total 2024, Total 2025 e Total 2026 são exibidos exatamente como estão na BASE.
+          Total 2024/2025/2026 são exibidos exatamente da BASE, usando:
+          <b>Total 2024 (PERIODO)</b>,
+          <b>Total 2025 (PERIODO)</b>,
+          <b>Total 2026 (PERIODO)</b>.
         </div>
       </form>
     </div>
