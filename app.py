@@ -140,49 +140,6 @@ def pick_col_flexible(headers, candidates):
     return None
 
 
-def parse_money_to_float(v):
-    s = norm(v)
-    if s == "":
-        return 0.0
-
-    s = s.replace("R$", "").replace(" ", "")
-
-    try:
-        # padrão BR: 1.234,56
-        if "," in s:
-            s2 = s.replace(".", "").replace(",", ".")
-            return float(s2)
-
-        # padrão simples: 1234.56
-        return float(s)
-    except Exception:
-        return 0.0
-
-
-def fmt_money(v):
-    """
-    Exibe exatamente o valor da base quando já vier em formato texto.
-    Se vier numérico, formata em BR.
-    """
-    s = norm(v)
-    if s == "":
-        return ""
-
-    # se já parece moeda brasileira, só devolve do jeito que veio
-    if "," in s or "." in s:
-        # tenta validar; se for válido, devolve o mesmo texto da base
-        x = parse_money_to_float(s)
-        if x != 0.0 or s in {"0", "0,0", "0,00", "0.00", "0,000", "0.000"}:
-            return s
-
-    # se vier número puro
-    x = parse_money_to_float(s)
-    inteiro, frac = f"{x:.2f}".split(".")
-    inteiro = inteiro[::-1]
-    inteiro = ".".join([inteiro[i:i+3] for i in range(0, len(inteiro), 3)])[::-1]
-    return f"{inteiro},{frac}"
-
-
 def clean_color_text(v):
     return norm(v)
 
@@ -254,6 +211,10 @@ def resolve_status_cor_from_base(row, status_cor_col=None, cliente_novo_col=None
 
 
 def get_rep_photo_src(codigo_rep):
+    """
+    Procura foto na pasta:
+    static/representantes/{codigo}.png|jpg|jpeg|webp
+    """
     codigo = norm(codigo_rep)
     if not codigo:
         return ""
@@ -265,6 +226,14 @@ def get_rep_photo_src(codigo_rep):
             return f"/static/representantes/{codigo}.{ext}"
 
     return ""
+
+
+def fmt_money(v):
+    """
+    NÃO SOMA, NÃO CONVERTE, NÃO RECALCULA.
+    Só devolve exatamente o texto que veio da BASE.
+    """
+    return norm(v)
 
 
 # =========================
@@ -326,8 +295,8 @@ def safe_get_all_records(ws):
 
 def safe_get_raw_rows(ws):
     """
-    Lê a aba exatamente como está visível na planilha.
-    Não soma, não agrega, não recalcula.
+    Lê a aba exatamente como está na planilha.
+    Não soma, não agrega, não transforma.
     """
     try:
         values = ws.get_all_values()
@@ -346,9 +315,7 @@ def safe_get_raw_rows(ws):
         elif len(raw) > len(headers):
             raw = raw[:len(headers)]
 
-        row = {}
-        for i, h in enumerate(headers):
-            row[h] = raw[i]
+        row = {headers[i]: raw[i] for i in range(len(headers))}
         rows.append(row)
 
     return headers, rows
@@ -797,11 +764,13 @@ def dashboard():
     ])
     cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
 
-    # AQUI ESTÁ O AJUSTE PRINCIPAL:
-    # PEGA DIRETO AS COLUNAS DE TOTAL, SEM FICAR "ADIVINHANDO" 2024/2025/2026 SOLTOS
-    t2024_col = pick_col_exact(headers, ["Total 2024", "TOTAL 2024", "Total2024", "TOTAL2024"])
-    t2025_col = pick_col_exact(headers, ["Total 2025", "TOTAL 2025", "Total2025", "TOTAL2025"])
-    t2026_col = pick_col_exact(headers, ["Total 2026", "TOTAL 2026", "Total2026", "TOTAL2026"])
+    # =========================
+    # TOTAIS: PEGA DIRETO DA BASE
+    # SEM SOMAR, SEM REPROCESSAR
+    # =========================
+    t2024_col = pick_col_exact(headers, ["Total 2024"])
+    t2025_col = pick_col_exact(headers, ["Total 2025"])
+    t2026_col = pick_col_exact(headers, ["Total 2026"])
 
     status_cor_col = pick_col_exact(headers, [
         "Status Cor",
@@ -820,6 +789,13 @@ def dashboard():
 
     if not key_col or not rep_col:
         flash("BASE precisa ter 'Codigo Grupo Cliente' e 'Codigo Representante'.", "err")
+        return redirect(url_for("logout"))
+
+    if not t2024_col or not t2025_col or not t2026_col:
+        flash(
+            "Não encontrei exatamente as colunas 'Total 2024', 'Total 2025' e 'Total 2026' na BASE.",
+            "err"
+        )
         return redirect(url_for("logout"))
 
     if not status_cor_col and not cliente_novo_col:
@@ -906,10 +882,16 @@ def dashboard():
 
     out_rows = prepared_rows[:PAGE_SIZE]
 
+    # =========================
+    # FOTO USUÁRIO LOGADO
+    # =========================
     current_user_photo = ""
     if session.get("user_type") == "rep":
         current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
 
+    # =========================
+    # CARD REPRESENTANTE
+    # =========================
     rep_card_html = ""
 
     selected_rep_code = ""
@@ -972,14 +954,12 @@ def dashboard():
         supv = norm(r.get(sup_col, "")) if sup_col else ""
         cidade = norm(r.get(cidade_col, "")) if cidade_col else ""
 
-        # PEGA DIRETO DA BASE
-        t24_raw = r.get(t2024_col, "") if t2024_col else ""
-        t25_raw = r.get(t2025_col, "") if t2025_col else ""
-        t26_raw = r.get(t2026_col, "") if t2026_col else ""
-
-        t24 = fmt_money(t24_raw)
-        t25 = fmt_money(t25_raw)
-        t26 = fmt_money(t26_raw)
+        # =========================
+        # TOTAIS VINDO DIRETO DA BASE
+        # =========================
+        t24 = fmt_money(r.get(t2024_col, "")) if t2024_col else ""
+        t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
+        t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
 
         dav = norm(r.get("Data Agenda Visita", ""))
         mes = norm(r.get("Mês", ""))
@@ -1047,15 +1027,6 @@ def dashboard():
         </div>
         """
 
-    debug_totais = f"""
-    <div class="hint">
-      Colunas localizadas na BASE:
-      Total 2024 = <b>{t2024_col or 'NÃO ENCONTRADA'}</b> |
-      Total 2025 = <b>{t2025_col or 'NÃO ENCONTRADA'}</b> |
-      Total 2026 = <b>{t2026_col or 'NÃO ENCONTRADA'}</b>
-    </div>
-    """
-
     body = f"""
     {rep_card_html}
 
@@ -1073,9 +1044,8 @@ def dashboard():
           </div>
         </div>
         <div class="hint">
-          Status Cor vindo da BASE. Se Status Cor vier vazio e Cliente Novo estiver marcado, a linha fica azul.
+          Os campos Total 2024, Total 2025 e Total 2026 são exibidos exatamente como estão na BASE.
         </div>
-        {debug_totais}
       </form>
     </div>
 
