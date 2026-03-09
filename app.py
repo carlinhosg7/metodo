@@ -3,7 +3,7 @@ import re
 import json
 import base64
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
@@ -62,6 +62,11 @@ DEFAULT_STATUS = [
 # =========================
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+app.permanent_session_lifetime = timedelta(days=7)
+
+# importante para ambiente hospedado
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 
 # =========================
@@ -92,7 +97,7 @@ def is_admin():
 
 
 def require_login():
-    return "user_type" in session
+    return "user_type" in session and "user_login" in session
 
 
 def normalize_header(s):
@@ -169,14 +174,6 @@ def is_truthy_novo(v):
 
 
 def get_row_class_from_color_text(status_cor_raw):
-    """
-    ORDEM:
-    1 - VERMELHO
-    2 - LARANJA
-    3 - AMARELO
-    4 - VERDE
-    5 - AZUL
-    """
     s = normalize_text_for_match(status_cor_raw)
 
     if "VERMELH" in s:
@@ -211,10 +208,6 @@ def resolve_status_cor_from_base(row, status_cor_col=None, cliente_novo_col=None
 
 
 def get_rep_photo_src(codigo_rep):
-    """
-    Procura foto na pasta:
-    static/representantes/{codigo}.png|jpg|jpeg|webp
-    """
     codigo = norm(codigo_rep)
     if not codigo:
         return ""
@@ -229,10 +222,6 @@ def get_rep_photo_src(codigo_rep):
 
 
 def fmt_money(v):
-    """
-    NÃO SOMA, NÃO CONVERTE, NÃO RECALCULA.
-    Só devolve exatamente o texto que veio da BASE.
-    """
     return norm(v)
 
 
@@ -294,10 +283,6 @@ def safe_get_all_records(ws):
 
 
 def safe_get_raw_rows(ws):
-    """
-    Lê a aba exatamente como está na planilha.
-    Não soma, não agrega, não transforma.
-    """
     try:
         values = ws.get_all_values()
     except Exception:
@@ -319,6 +304,40 @@ def safe_get_raw_rows(ws):
         rows.append(row)
 
     return headers, rows
+
+
+def try_get_rep_name(rep_code):
+    """
+    Busca nome do representante na BASE.
+    Se falhar, não bloqueia login.
+    """
+    rep_code = norm(rep_code)
+    if not rep_code:
+        return ""
+
+    try:
+        sh = connect_gs()
+        ws_base = sh.worksheet(WS_BASE)
+        headers, base_rows = safe_get_raw_rows(ws_base)
+
+        rep_col = pick_col_flexible(headers, [
+            "Codigo Representante", "Código Representante",
+            "CODIGO REPRESENTANTE", "COD_REP"
+        ])
+        nome_rep_col = pick_col_flexible(headers, [
+            "Representante", "Nome Representante", "REPRESENTANTE"
+        ])
+
+        if not rep_col or not nome_rep_col:
+            return ""
+
+        for row in base_rows:
+            if norm(row.get(rep_col, "")) == rep_code:
+                return norm(row.get(nome_rep_col, ""))
+
+        return ""
+    except Exception:
+        return ""
 
 
 # =========================
@@ -618,6 +637,10 @@ LOGIN_BODY = """
       <div style="margin-top:12px;">
         <button type="submit">Entrar</button>
       </div>
+      <div class="hint">
+        Admin: usuário e senha definidos nas variáveis de ambiente.<br>
+        Representante: usuário = senha = código numérico.
+      </div>
     </form>
   </div>
 </div>
@@ -629,53 +652,58 @@ LOGIN_BODY = """
 # =========================
 @app.route("/", methods=["GET", "POST"])
 def login():
+    if require_login():
+        return redirect(url_for("dashboard"))
+
     if request.method == "POST":
         u = norm(request.form.get("user"))
         p = norm(request.form.get("pass"))
 
+        if not u or not p:
+            flash("Informe usuário e senha.", "err")
+            body = render_template_string(LOGIN_BODY, logo_url=LOGO_URL)
+            return render_template_string(
+                BASE_HTML,
+                title=APP_TITLE,
+                subtitle="Acesso",
+                logged=False,
+                user_login="",
+                user_name="",
+                user_type="",
+                user_photo_url="",
+                body=body
+            )
+
+        # =========================
+        # LOGIN ADMIN
+        # =========================
         if u == ADMIN_USER and p == ADMIN_PASS:
+            session.clear()
+            session.permanent = True
             session["user_type"] = "admin"
             session["user_login"] = u
             session["rep_name"] = ""
             session["rep_code"] = ""
+
             flash("Logado como ADMIN.", "ok")
             return redirect(url_for("dashboard"))
 
-        if u and p and u == p and u.isdigit():
-            rep_nome = ""
+        # =========================
+        # LOGIN REPRESENTANTE
+        # regra: usuario = senha e ambos numéricos
+        # NÃO depende da BASE para autenticar
+        # =========================
+        if u.isdigit() and p.isdigit() and u == p:
+            rep_nome = try_get_rep_name(u)
 
-            try:
-                sh = connect_gs()
-                ws_base = sh.worksheet(WS_BASE)
-                headers, base_rows = safe_get_raw_rows(ws_base)
-
-                rep_col = pick_col_flexible(headers, [
-                    "Codigo Representante", "Código Representante",
-                    "CODIGO REPRESENTANTE", "COD_REP"
-                ])
-                nome_rep_col = pick_col_flexible(headers, [
-                    "Representante", "Nome Representante", "REPRESENTANTE"
-                ])
-
-                if rep_col and nome_rep_col:
-                    for row in base_rows:
-                        if norm(row.get(rep_col, "")) == u:
-                            rep_nome = norm(row.get(nome_rep_col, ""))
-                            if rep_nome:
-                                break
-            except Exception:
-                rep_nome = ""
-
+            session.clear()
+            session.permanent = True
             session["user_type"] = "rep"
             session["user_login"] = u
             session["rep_code"] = u
-            session["rep_name"] = rep_nome
+            session["rep_name"] = rep_nome or f"Representante {u}"
 
-            if rep_nome:
-                flash(f"Logado como Representante {rep_nome}.", "ok")
-            else:
-                flash(f"Logado como Representante {u}.", "ok")
-
+            flash(f"Logado como {session['rep_name']}.", "ok")
             return redirect(url_for("dashboard"))
 
         flash("Login inválido.", "err")
@@ -697,12 +725,14 @@ def login():
 @app.route("/logout")
 def logout():
     session.clear()
+    flash("Sessão encerrada.", "ok")
     return redirect(url_for("login"))
 
 
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     if not require_login():
+        flash("Faça login para continuar.", "err")
         return redirect(url_for("login"))
 
     sh = connect_gs()
@@ -731,7 +761,6 @@ def dashboard():
         if session.get("user_type") == "rep":
             current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
 
-        flash(f"A aba {WS_BASE} está vazia.", "err")
         return render_template_string(
             BASE_HTML,
             title=APP_TITLE,
@@ -741,7 +770,7 @@ def dashboard():
             user_name=session.get("rep_name", ""),
             user_type=session.get("user_type"),
             user_photo_url=current_user_photo,
-            body="<div class='card'>Sem dados na BASE.</div>"
+            body=f"<div class='card'>A aba <b>{WS_BASE}</b> está vazia.</div>"
         )
 
     key_col = pick_col_flexible(headers, [
@@ -764,10 +793,6 @@ def dashboard():
     ])
     cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
 
-    # =========================
-    # TOTAIS: PEGA DIRETO DA BASE
-    # SEM SOMAR, SEM REPROCESSAR
-    # =========================
     t2024_col = pick_col_exact(headers, ["Total 2024"])
     t2025_col = pick_col_exact(headers, ["Total 2025"])
     t2026_col = pick_col_exact(headers, ["Total 2026"])
@@ -788,19 +813,78 @@ def dashboard():
     ])
 
     if not key_col or not rep_col:
-        flash("BASE precisa ter 'Codigo Grupo Cliente' e 'Codigo Representante'.", "err")
-        return redirect(url_for("logout"))
+        current_user_photo = ""
+        if session.get("user_type") == "rep":
+            current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
+        body = """
+        <div class='card'>
+          <b>Erro de estrutura da BASE</b><br><br>
+          A planilha precisa ter pelo menos as colunas:<br>
+          - Codigo Grupo Cliente (ou equivalente)<br>
+          - Codigo Representante (ou equivalente)
+        </div>
+        """
+        return render_template_string(
+            BASE_HTML,
+            title=APP_TITLE,
+            subtitle="Erro de estrutura",
+            logged=True,
+            user_login=session.get("user_login"),
+            user_name=session.get("rep_name", ""),
+            user_type=session.get("user_type"),
+            user_photo_url=current_user_photo,
+            body=body
+        )
 
     if not t2024_col or not t2025_col or not t2026_col:
-        flash(
-            "Não encontrei exatamente as colunas 'Total 2024', 'Total 2025' e 'Total 2026' na BASE.",
-            "err"
+        current_user_photo = ""
+        if session.get("user_type") == "rep":
+            current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
+        body = f"""
+        <div class='card'>
+          <b>Não encontrei exatamente as colunas de totais na BASE.</b><br><br>
+          Preciso destas colunas:<br>
+          - Total 2024<br>
+          - Total 2025<br>
+          - Total 2026<br><br>
+          <span class='small'>Cabeçalhos encontrados: {', '.join(headers)}</span>
+        </div>
+        """
+        return render_template_string(
+            BASE_HTML,
+            title=APP_TITLE,
+            subtitle="Erro de colunas",
+            logged=True,
+            user_login=session.get("user_login"),
+            user_name=session.get("rep_name", ""),
+            user_type=session.get("user_type"),
+            user_photo_url=current_user_photo,
+            body=body
         )
-        return redirect(url_for("logout"))
 
     if not status_cor_col and not cliente_novo_col:
-        flash("Não achei nem 'Status Cor' nem coluna de 'Cliente Novo' na BASE.", "err")
-        return redirect(url_for("logout"))
+        current_user_photo = ""
+        if session.get("user_type") == "rep":
+            current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
+        body = """
+        <div class='card'>
+          <b>Não achei nem 'Status Cor' nem coluna de 'Cliente Novo' na BASE.</b>
+        </div>
+        """
+        return render_template_string(
+            BASE_HTML,
+            title=APP_TITLE,
+            subtitle="Erro de colunas",
+            logged=True,
+            user_login=session.get("user_login"),
+            user_name=session.get("rep_name", ""),
+            user_type=session.get("user_type"),
+            user_photo_url=current_user_photo,
+            body=body
+        )
 
     lista_rows = safe_get_all_records(ws_listas)
     meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
@@ -882,23 +966,13 @@ def dashboard():
 
     out_rows = prepared_rows[:PAGE_SIZE]
 
-    # =========================
-    # FOTO USUÁRIO LOGADO
-    # =========================
     current_user_photo = ""
     if session.get("user_type") == "rep":
         current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
 
-    # =========================
-    # CARD REPRESENTANTE
-    # =========================
     rep_card_html = ""
 
-    selected_rep_code = ""
-    if is_admin():
-        selected_rep_code = rep_sel
-    else:
-        selected_rep_code = norm(session.get("rep_code", ""))
+    selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
 
     if selected_rep_code and nome_rep_col:
         rep_name_base = ""
@@ -954,9 +1028,6 @@ def dashboard():
         supv = norm(r.get(sup_col, "")) if sup_col else ""
         cidade = norm(r.get(cidade_col, "")) if cidade_col else ""
 
-        # =========================
-        # TOTAIS VINDO DIRETO DA BASE
-        # =========================
         t24 = fmt_money(r.get(t2024_col, "")) if t2024_col else ""
         t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
         t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
@@ -1092,6 +1163,7 @@ def dashboard():
 @app.route("/salvar", methods=["POST"])
 def salvar():
     if not require_login():
+        flash("Sessão expirada. Faça login novamente.", "err")
         return redirect(url_for("login"))
 
     user_type = session.get("user_type")
