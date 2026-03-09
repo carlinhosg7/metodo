@@ -95,27 +95,48 @@ def require_login():
     return "user_type" in session
 
 
+def normalize_header(s):
+    s = norm(s).lower()
+    s = (
+        s.replace("á", "a")
+         .replace("à", "a")
+         .replace("ã", "a")
+         .replace("â", "a")
+         .replace("é", "e")
+         .replace("ê", "e")
+         .replace("í", "i")
+         .replace("ó", "o")
+         .replace("ô", "o")
+         .replace("õ", "o")
+         .replace("ú", "u")
+         .replace("ç", "c")
+    )
+    return s
+
+
 def pick_col_exact(headers, candidates):
-    hmap = {norm(h).lower(): h for h in headers}
+    hmap = {normalize_header(h): h for h in headers}
     for cand in candidates:
-        key = norm(cand).lower()
+        key = normalize_header(cand)
         if key in hmap:
             return hmap[key]
     return None
 
 
 def pick_col_flexible(headers, candidates):
-    hmap = {norm(h).lower(): h for h in headers}
+    hmap = {normalize_header(h): h for h in headers}
+
     for cand in candidates:
-        key = norm(cand).lower()
+        key = normalize_header(cand)
         if key in hmap:
             return hmap[key]
 
     for h in headers:
-        hl = norm(h).lower()
+        hl = normalize_header(h)
         for cand in candidates:
-            if norm(cand).lower() in hl:
+            if normalize_header(cand) in hl:
                 return h
+
     return None
 
 
@@ -123,20 +144,38 @@ def parse_money_to_float(v):
     s = norm(v)
     if s == "":
         return 0.0
+
+    s = s.replace("R$", "").replace(" ", "")
+
     try:
-        s2 = s.replace(".", "").replace(",", ".")
-        return float(s2)
+        # padrão BR: 1.234,56
+        if "," in s:
+            s2 = s.replace(".", "").replace(",", ".")
+            return float(s2)
+
+        # padrão simples: 1234.56
+        return float(s)
     except Exception:
-        try:
-            return float(s)
-        except Exception:
-            return 0.0
+        return 0.0
 
 
 def fmt_money(v):
+    """
+    Exibe exatamente o valor da base quando já vier em formato texto.
+    Se vier numérico, formata em BR.
+    """
     s = norm(v)
     if s == "":
         return ""
+
+    # se já parece moeda brasileira, só devolve do jeito que veio
+    if "," in s or "." in s:
+        # tenta validar; se for válido, devolve o mesmo texto da base
+        x = parse_money_to_float(s)
+        if x != 0.0 or s in {"0", "0,0", "0,00", "0.00", "0,000", "0.000"}:
+            return s
+
+    # se vier número puro
     x = parse_money_to_float(s)
     inteiro, frac = f"{x:.2f}".split(".")
     inteiro = inteiro[::-1]
@@ -215,10 +254,6 @@ def resolve_status_cor_from_base(row, status_cor_col=None, cliente_novo_col=None
 
 
 def get_rep_photo_src(codigo_rep):
-    """
-    Procura a foto do representante na pasta static/representantes
-    usando o código do representante.
-    """
     codigo = norm(codigo_rep)
     if not codigo:
         return ""
@@ -287,6 +322,36 @@ def safe_get_all_records(ws):
         return ws.get_all_records()
     except Exception:
         return []
+
+
+def safe_get_raw_rows(ws):
+    """
+    Lê a aba exatamente como está visível na planilha.
+    Não soma, não agrega, não recalcula.
+    """
+    try:
+        values = ws.get_all_values()
+    except Exception:
+        return [], []
+
+    if not values:
+        return [], []
+
+    headers = [norm(x) for x in values[0]]
+    rows = []
+
+    for raw in values[1:]:
+        if len(raw) < len(headers):
+            raw = raw + [""] * (len(headers) - len(raw))
+        elif len(raw) > len(headers):
+            raw = raw[:len(headers)]
+
+        row = {}
+        for i, h in enumerate(headers):
+            row[h] = raw[i]
+        rows.append(row)
+
+    return headers, rows
 
 
 # =========================
@@ -615,8 +680,7 @@ def login():
             try:
                 sh = connect_gs()
                 ws_base = sh.worksheet(WS_BASE)
-                base_rows = safe_get_all_records(ws_base)
-                headers = [norm(h) for h in ws_base.row_values(1)]
+                headers, base_rows = safe_get_raw_rows(ws_base)
 
                 rep_col = pick_col_flexible(headers, [
                     "Codigo Representante", "Código Representante",
@@ -693,7 +757,8 @@ def dashboard():
     listas_headers = ["Mês", "Semana Atendimento", "Status Cliente"]
     ws_listas = get_or_create_worksheet(sh, WS_LISTAS, rows=500, cols=10, headers=listas_headers)
 
-    base_rows = safe_get_all_records(ws_base)
+    headers, base_rows = safe_get_raw_rows(ws_base)
+
     if not base_rows:
         current_user_photo = ""
         if session.get("user_type") == "rep":
@@ -711,8 +776,6 @@ def dashboard():
             user_photo_url=current_user_photo,
             body="<div class='card'>Sem dados na BASE.</div>"
         )
-
-    headers = [norm(h) for h in ws_base.row_values(1)]
 
     key_col = pick_col_flexible(headers, [
         "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -734,9 +797,11 @@ def dashboard():
     ])
     cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
 
-    t2024_col = pick_col_flexible(headers, ["Total 2024", "TOTAL 2024", "Vlr 2024", "Valor 2024", "2024"])
-    t2025_col = pick_col_flexible(headers, ["Total 2025", "TOTAL 2025", "Vlr 2025", "Valor 2025", "2025"])
-    t2026_col = pick_col_flexible(headers, ["Total 2026", "TOTAL 2026", "Vlr 2026", "Valor 2026", "2026"])
+    # AQUI ESTÁ O AJUSTE PRINCIPAL:
+    # PEGA DIRETO AS COLUNAS DE TOTAL, SEM FICAR "ADIVINHANDO" 2024/2025/2026 SOLTOS
+    t2024_col = pick_col_exact(headers, ["Total 2024", "TOTAL 2024", "Total2024", "TOTAL2024"])
+    t2025_col = pick_col_exact(headers, ["Total 2025", "TOTAL 2025", "Total2025", "TOTAL2025"])
+    t2026_col = pick_col_exact(headers, ["Total 2026", "TOTAL 2026", "Total2026", "TOTAL2026"])
 
     status_cor_col = pick_col_exact(headers, [
         "Status Cor",
@@ -841,18 +906,10 @@ def dashboard():
 
     out_rows = prepared_rows[:PAGE_SIZE]
 
-    # =========================
-    # FOTO USUÁRIO LOGADO
-    # =========================
     current_user_photo = ""
     if session.get("user_type") == "rep":
         current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
 
-    # =========================
-    # CARD REPRESENTANTE
-    # admin -> aparece quando filtra representante
-    # rep   -> aparece automaticamente com seu próprio código
-    # =========================
     rep_card_html = ""
 
     selected_rep_code = ""
@@ -915,9 +972,14 @@ def dashboard():
         supv = norm(r.get(sup_col, "")) if sup_col else ""
         cidade = norm(r.get(cidade_col, "")) if cidade_col else ""
 
-        t24 = fmt_money(r.get(t2024_col, "")) if t2024_col else ""
-        t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
-        t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
+        # PEGA DIRETO DA BASE
+        t24_raw = r.get(t2024_col, "") if t2024_col else ""
+        t25_raw = r.get(t2025_col, "") if t2025_col else ""
+        t26_raw = r.get(t2026_col, "") if t2026_col else ""
+
+        t24 = fmt_money(t24_raw)
+        t25 = fmt_money(t25_raw)
+        t26 = fmt_money(t26_raw)
 
         dav = norm(r.get("Data Agenda Visita", ""))
         mes = norm(r.get("Mês", ""))
@@ -985,6 +1047,15 @@ def dashboard():
         </div>
         """
 
+    debug_totais = f"""
+    <div class="hint">
+      Colunas localizadas na BASE:
+      Total 2024 = <b>{t2024_col or 'NÃO ENCONTRADA'}</b> |
+      Total 2025 = <b>{t2025_col or 'NÃO ENCONTRADA'}</b> |
+      Total 2026 = <b>{t2026_col or 'NÃO ENCONTRADA'}</b>
+    </div>
+    """
+
     body = f"""
     {rep_card_html}
 
@@ -1004,6 +1075,7 @@ def dashboard():
         <div class="hint">
           Status Cor vindo da BASE. Se Status Cor vier vazio e Cliente Novo estiver marcado, a linha fica azul.
         </div>
+        {debug_totais}
       </form>
     </div>
 
