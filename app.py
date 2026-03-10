@@ -711,8 +711,8 @@ def dashboard():
     sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if (is_admin() and sup_col) else []
     rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if is_admin() else []
 
-    prepared_rows = []
-    for r in base_rows:
+        prepared_rows = []
+    for idx_base, r in enumerate(base_rows, start=2):  # linha real da BASE
         ck = norm(r.get(key_col, ""))
         repc = norm(r.get(rep_col, ""))
 
@@ -728,6 +728,7 @@ def dashboard():
                 continue
 
         row_copy = dict(r)
+        row_copy["_base_row_number"] = idx_base
 
         status_cor_final, row_class, priority = resolve_status_cor_from_base(
             row_copy,
@@ -779,7 +780,7 @@ def dashboard():
         status_cor = r.get("_status_cor", "")
         klass = r.get("_row_class", "")
 
-        form_id = f"form_row_{idx}"
+        base_row_number = r.get("_base_row_number", "")
 
         hidden_filters = ""
         if sup_sel:
@@ -803,9 +804,10 @@ def dashboard():
           <td class="nowrap"><b>{h(status_cor)}</b></td>
 
           <td>
-            <form id="{form_id}" method="post" action="{url_for('salvar')}">
+             <form id="{form_id}" method="post" action="{url_for('salvar')}">
               <input type="hidden" name="client_key" value="{h(ck)}">
               <input type="hidden" name="rep_code" value="{h(repc)}">
+              <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
               {hidden_filters}
             </form>
             <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
@@ -922,6 +924,7 @@ def salvar():
 
     client_key = norm(request.form.get("client_key", ""))
     rep_code_form = norm(request.form.get("rep_code", ""))
+    base_row_number = norm(request.form.get("base_row_number", ""))
 
     sup = norm(request.form.get("sup", ""))
     rep = norm(request.form.get("rep", ""))
@@ -933,6 +936,10 @@ def salvar():
         flash("client_key vazio.", "err")
         return redirect(url_for("dashboard", **redirect_args))
 
+    if not base_row_number.isdigit():
+        flash("Linha da BASE inválida para gravação.", "err")
+        return redirect(url_for("dashboard", **redirect_args))
+
     if user_type == "rep" and rep_code_form != session.get("rep_code"):
         flash("Você não pode gravar alterações em clientes de outro representante.", "err")
         return redirect(url_for("dashboard", **redirect_args))
@@ -942,62 +949,24 @@ def salvar():
         ws_base = sh.worksheet(WS_BASE)
         ws_ed = ensure_edicoes_worksheet(sh)
 
-        headers, base_rows = get_base_structure(ws_base)
-
-        key_col = pick_col_flexible(headers, [
-            "Codigo Grupo Cliente", "Código Grupo Cliente",
-            "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
-        ])
-        rep_col = pick_col_flexible(headers, [
-            "Codigo Representante", "Código Representante",
-            "CODIGO REPRESENTANTE", "COD_REP"
-        ])
-
-        if not key_col or not rep_col:
-            raise RuntimeError("Não encontrei na BASE as colunas de chave do cliente e representante.")
-
-        base_row_number = find_base_row_number(
-            base_rows=base_rows,
-            headers=headers,
-            key_col=key_col,
-            rep_col=rep_col,
-            client_key=client_key,
-            rep_code=rep_code_form
-        )
-
-        if not base_row_number:
-            raise RuntimeError(f"Não localizei a linha do cliente {client_key} na BASE para gravar.")
+        headers = ensure_base_tracking_columns(ws_base)
 
         data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
         mes = norm(request.form.get("Mês", ""))
         semana = norm(request.form.get("Semana Atendimento", ""))
         status_cliente = norm(request.form.get("Status Cliente", ""))
 
+        row_num = int(base_row_number)
+
         col_data = headers.index("Data Agenda Visita") + 1
         col_mes = headers.index("Mês") + 1
         col_semana = headers.index("Semana Atendimento") + 1
         col_status = headers.index("Status Cliente") + 1
 
-        updates = [
-            {
-                "range": rowcol_to_a1(base_row_number, col_data),
-                "values": [[data_agenda]]
-            },
-            {
-                "range": rowcol_to_a1(base_row_number, col_mes),
-                "values": [[mes]]
-            },
-            {
-                "range": rowcol_to_a1(base_row_number, col_semana),
-                "values": [[semana]]
-            },
-            {
-                "range": rowcol_to_a1(base_row_number, col_status),
-                "values": [[status_cliente]]
-            },
-        ]
-
-        ws_base.batch_update(updates, value_input_option="USER_ENTERED")
+        ws_base.update_acell(rowcol_to_a1(row_num, col_data), data_agenda)
+        ws_base.update_acell(rowcol_to_a1(row_num, col_mes), mes)
+        ws_base.update_acell(rowcol_to_a1(row_num, col_semana), semana)
+        ws_base.update_acell(rowcol_to_a1(row_num, col_status), status_cliente)
 
         row_log = [
             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
