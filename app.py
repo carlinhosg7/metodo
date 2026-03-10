@@ -11,6 +11,7 @@ from flask import Flask, request, redirect, url_for, session, render_template_st
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import WorksheetNotFound
+from gspread.utils import rowcol_to_a1
 
 
 # =========================
@@ -330,11 +331,10 @@ def get_or_create_worksheet(sh, title, rows=1000, cols=20):
 
 def ensure_headers(ws, headers):
     current = [norm(x) for x in ws.row_values(1)]
-    if current != headers:
-        if not current:
-            ws.append_row(headers, value_input_option="USER_ENTERED")
-        else:
-            ws.update("A1", [headers], value_input_option="USER_ENTERED")
+    if not current:
+        ws.append_row(headers, value_input_option="USER_ENTERED")
+    elif current != headers:
+        ws.update("A1", [headers], value_input_option="USER_ENTERED")
 
 
 def ensure_edicoes_worksheet(sh):
@@ -354,9 +354,59 @@ def ensure_edicoes_worksheet(sh):
     return ws
 
 
-def ensure_listas_worksheet(sh):
-    ws = sh.worksheet(WS_LISTAS)
-    return ws
+def ensure_base_tracking_columns(ws_base):
+    headers = [norm(x) for x in ws_base.row_values(1)]
+    if not headers:
+        return []
+
+    required = [
+        "Data Agenda Visita",
+        "Mês",
+        "Semana Atendimento",
+        "Status Cliente"
+    ]
+
+    changed = False
+    for col in required:
+        if col not in headers:
+            headers.append(col)
+            changed = True
+
+    if changed:
+        ws_base.update("A1", [headers], value_input_option="USER_ENTERED")
+
+    return headers
+
+
+def get_base_structure(ws_base):
+    headers = ensure_base_tracking_columns(ws_base)
+    rows = ws_base.get_all_values()
+
+    if not rows:
+        return headers, []
+
+    final_headers = [norm(x) for x in rows[0]]
+    data_rows = []
+    for raw in rows[1:]:
+        if len(raw) < len(final_headers):
+            raw = raw + [""] * (len(final_headers) - len(raw))
+        elif len(raw) > len(final_headers):
+            raw = raw[:len(final_headers)]
+        data_rows.append({final_headers[i]: raw[i] for i in range(len(final_headers))})
+
+    return final_headers, data_rows
+
+
+def find_base_row_number(base_rows, headers, key_col, rep_col, client_key, rep_code):
+    for idx, row in enumerate(base_rows, start=2):  # linha 2 em diante
+        if norm(row.get(key_col, "")) == client_key and norm(row.get(rep_col, "")) == rep_code:
+            return idx
+
+    for idx, row in enumerate(base_rows, start=2):
+        if norm(row.get(key_col, "")) == client_key:
+            return idx
+
+    return None
 
 
 def try_get_rep_name(rep_code):
@@ -464,7 +514,6 @@ BASE_HTML = """
     .row-yellow { background: rgba(234,179,8,0.18); }
     .row-green { background: rgba(34,197,94,0.16); }
     .row-blue { background: rgba(56,189,248,0.14); }
-    .diag { background:#f8fafc; border:1px solid #d1d5db; border-radius:10px; padding:10px; font-size:12px; white-space:pre-wrap; }
   </style>
 </head>
 <body>
@@ -576,38 +625,6 @@ def logout():
     return redirect(url_for("login"))
 
 
-@app.route("/diag", methods=["GET"])
-def diag():
-    if not require_login():
-        return redirect(url_for("login"))
-
-    try:
-        sh = connect_gs()
-        tabs = [ws.title for ws in sh.worksheets()]
-        msg = (
-            f"SHEET_ID: {SHEET_ID}\n"
-            f"Abas encontradas: {tabs}\n"
-            f"WS_BASE: {WS_BASE}\n"
-            f"WS_LISTAS: {WS_LISTAS}\n"
-            f"WS_EDICOES: {WS_EDICOES}\n"
-        )
-        body = f"<div class='card'><b>Diagnóstico</b><div class='diag'>{h(msg)}</div></div>"
-    except Exception as e:
-        body = f"<div class='card'><b>Diagnóstico falhou</b><div class='diag'>{h(str(e))}</div></div>"
-
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle="Diagnóstico",
-        logged=True,
-        user_login=session.get("user_login"),
-        user_name=session.get("rep_name", ""),
-        user_type=session.get("user_type"),
-        user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-        body=body
-    )
-
-
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     if not require_login():
@@ -632,7 +649,7 @@ def dashboard():
         )
 
     try:
-        ws_listas = ensure_listas_worksheet(sh)
+        ws_listas = sh.worksheet(WS_LISTAS)
     except WorksheetNotFound:
         return render_template_string(
             BASE_HTML,
@@ -646,24 +663,10 @@ def dashboard():
             body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_LISTAS)}</div>"
         )
 
-    try:
-        ws_ed = ensure_edicoes_worksheet(sh)
-    except Exception as e:
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Falha ao criar/abrir a aba EDICOES:</b><br><pre style='white-space:pre-wrap'>{h(str(e))}</pre></div>"
-        )
+    ensure_edicoes_worksheet(sh)
 
-    headers, base_rows = safe_get_raw_rows(ws_base)
+    headers, base_rows = get_base_structure(ws_base)
     lista_rows = safe_get_all_records(ws_listas)
-    ed_rows = safe_get_all_records(ws_ed)
 
     key_col = pick_col_flexible(headers, [
         "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -692,20 +695,14 @@ def dashboard():
     status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor", "STATUSCOR", "StatusCor"])
     cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
 
+    data_agenda_col = pick_col_exact(headers, ["Data Agenda Visita"])
+    mes_col = pick_col_exact(headers, ["Mês"])
+    semana_col = pick_col_exact(headers, ["Semana Atendimento"])
+    status_cliente_col = pick_col_exact(headers, ["Status Cliente"])
+
     meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
     semanas = unique_list([r.get("Semana Atendimento", "") for r in lista_rows]) or DEFAULT_SEMANAS
     status_list = unique_list([r.get("Status Cliente", "") for r in lista_rows]) or DEFAULT_STATUS
-
-    latest = {}
-    for r in ed_rows:
-        ck = norm(r.get("client_key", ""))
-        if ck:
-            latest[ck] = {
-                "Data Agenda Visita": norm(r.get("Data Agenda Visita", "")),
-                "Mês": norm(r.get("Mês", "")),
-                "Semana Atendimento": norm(r.get("Semana Atendimento", "")),
-                "Status Cliente": norm(r.get("Status Cliente", "")),
-            }
 
     sup_sel = norm(request.args.get("sup", ""))
     rep_sel = norm(request.args.get("rep", ""))
@@ -731,17 +728,6 @@ def dashboard():
                 continue
 
         row_copy = dict(r)
-
-        if ck in latest:
-            row_copy["Data Agenda Visita"] = latest[ck]["Data Agenda Visita"]
-            row_copy["Mês"] = latest[ck]["Mês"]
-            row_copy["Semana Atendimento"] = latest[ck]["Semana Atendimento"]
-            row_copy["Status Cliente"] = latest[ck]["Status Cliente"]
-        else:
-            row_copy["Data Agenda Visita"] = ""
-            row_copy["Mês"] = ""
-            row_copy["Semana Atendimento"] = ""
-            row_copy["Status Cliente"] = ""
 
         status_cor_final, row_class, priority = resolve_status_cor_from_base(
             row_copy,
@@ -785,10 +771,10 @@ def dashboard():
         t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
         t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
 
-        dav = norm(r.get("Data Agenda Visita", ""))
-        mes = norm(r.get("Mês", ""))
-        sem = norm(r.get("Semana Atendimento", ""))
-        stc = norm(r.get("Status Cliente", ""))
+        dav = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
+        mes = norm(r.get(mes_col, "")) if mes_col else ""
+        sem = norm(r.get(semana_col, "")) if semana_col else ""
+        stc = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
 
         status_cor = r.get("_status_cor", "")
         klass = r.get("_row_class", "")
@@ -869,10 +855,6 @@ def dashboard():
         """
 
     body = f"""
-    <div class="card">
-      <div class="small">Diagnóstico rápido: <a href="{url_for('diag')}">abrir /diag</a></div>
-    </div>
-
     <div class="card">
       <form method="get">
         <div class="grid">
@@ -957,14 +939,67 @@ def salvar():
 
     try:
         sh = connect_gs()
+        ws_base = sh.worksheet(WS_BASE)
         ws_ed = ensure_edicoes_worksheet(sh)
+
+        headers, base_rows = get_base_structure(ws_base)
+
+        key_col = pick_col_flexible(headers, [
+            "Codigo Grupo Cliente", "Código Grupo Cliente",
+            "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
+        ])
+        rep_col = pick_col_flexible(headers, [
+            "Codigo Representante", "Código Representante",
+            "CODIGO REPRESENTANTE", "COD_REP"
+        ])
+
+        if not key_col or not rep_col:
+            raise RuntimeError("Não encontrei na BASE as colunas de chave do cliente e representante.")
+
+        base_row_number = find_base_row_number(
+            base_rows=base_rows,
+            headers=headers,
+            key_col=key_col,
+            rep_col=rep_col,
+            client_key=client_key,
+            rep_code=rep_code_form
+        )
+
+        if not base_row_number:
+            raise RuntimeError(f"Não localizei a linha do cliente {client_key} na BASE para gravar.")
 
         data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
         mes = norm(request.form.get("Mês", ""))
         semana = norm(request.form.get("Semana Atendimento", ""))
         status_cliente = norm(request.form.get("Status Cliente", ""))
 
-        row = [
+        col_data = headers.index("Data Agenda Visita") + 1
+        col_mes = headers.index("Mês") + 1
+        col_semana = headers.index("Semana Atendimento") + 1
+        col_status = headers.index("Status Cliente") + 1
+
+        updates = [
+            {
+                "range": rowcol_to_a1(base_row_number, col_data),
+                "values": [[data_agenda]]
+            },
+            {
+                "range": rowcol_to_a1(base_row_number, col_mes),
+                "values": [[mes]]
+            },
+            {
+                "range": rowcol_to_a1(base_row_number, col_semana),
+                "values": [[semana]]
+            },
+            {
+                "range": rowcol_to_a1(base_row_number, col_status),
+                "values": [[status_cliente]]
+            },
+        ]
+
+        ws_base.batch_update(updates, value_input_option="USER_ENTERED")
+
+        row_log = [
             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             user_type,
             user_login,
@@ -975,9 +1010,9 @@ def salvar():
             semana,
             status_cliente,
         ]
+        ws_ed.append_row(row_log, value_input_option="USER_ENTERED")
 
-        ws_ed.append_row(row, value_input_option="USER_ENTERED")
-        flash("Alteração gravada com sucesso.", "ok")
+        flash("Alteração gravada na BASE com sucesso.", "ok")
 
     except Exception as e:
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
