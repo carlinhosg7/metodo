@@ -5,7 +5,6 @@ import base64
 import traceback
 import html
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlencode
 
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
@@ -26,9 +25,10 @@ ADMIN_USER = os.getenv("ADMIN_USER", "admin").strip()
 ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123").strip()
 SECRET_KEY = os.getenv("SECRET_KEY", "troque-esta-chave").strip()
 
+# AJUSTADO PARA SUA ESTRUTURA REAL
 WS_BASE = os.getenv("WS_BASE", "BASE").strip()
 WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
-WS_LISTAS = os.getenv("WS_LISTAS", "LISTAS").strip()
+WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 
@@ -229,32 +229,14 @@ def fmt_money(v):
     return norm(v)
 
 
-def build_dashboard_query():
-    params = {}
-    sup = norm(request.args.get("sup", "")) or norm(request.form.get("sup", ""))
-    rep = norm(request.args.get("rep", "")) or norm(request.form.get("rep", ""))
-    q = norm(request.args.get("q", "")) or norm(request.form.get("q", ""))
-
-    if sup:
-        params["sup"] = sup
-    if rep:
-        params["rep"] = rep
-    if q:
-        params["q"] = q
-
-    return params
-
-
 def to_input_date(v):
     v = norm(v)
     if not v:
         return ""
 
-    # aceita yyyy-mm-dd
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
         return v
 
-    # aceita dd/mm/aaaa
     m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", v)
     if m:
         dd, mm, yyyy = m.groups()
@@ -268,7 +250,6 @@ def from_input_date(v):
     if not v:
         return ""
 
-    # grava em dd/mm/aaaa
     m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v)
     if m:
         yyyy, mm, dd = m.groups()
@@ -313,18 +294,23 @@ def connect_gs():
 def get_or_create_worksheet(sh, title, rows=1000, cols=30, headers=None):
     try:
         ws = sh.worksheet(title)
+        return ws
     except WorksheetNotFound:
         ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
         if headers:
-            ws.append_row(headers)
+            ws.append_row(headers, value_input_option="USER_ENTERED")
         return ws
 
-    if headers:
+
+def ensure_headers_if_empty(ws, headers):
+    try:
         row1 = [norm(x) for x in ws.row_values(1)]
-        if row1 != headers:
+        if not row1 and headers:
+            ws.append_row(headers, value_input_option="USER_ENTERED")
+    except Exception:
+        if headers:
             ws.clear()
-            ws.append_row(headers)
-    return ws
+            ws.append_row(headers, value_input_option="USER_ENTERED")
 
 
 def safe_get_all_records(ws):
@@ -356,6 +342,19 @@ def safe_get_raw_rows(ws):
         rows.append(row)
 
     return headers, rows
+
+
+def open_existing_or_create(sh, title, rows=1000, cols=30, headers=None):
+    try:
+        ws = sh.worksheet(title)
+        if headers:
+            ensure_headers_if_empty(ws, headers)
+        return ws
+    except WorksheetNotFound:
+        ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
+        if headers:
+            ws.append_row(headers, value_input_option="USER_ENTERED")
+        return ws
 
 
 def try_get_rep_name(rep_code):
@@ -560,8 +559,17 @@ BASE_HTML = """
       z-index: 2;
     }
 
-    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1fr;
+      gap: 10px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
 
     .msg {
       padding: 10px 12px;
@@ -696,7 +704,7 @@ LOGIN_BODY = """
 
 
 # =========================
-# ROUTES
+# ROTAS
 # =========================
 @app.route("/", methods=["GET", "POST"])
 def login():
@@ -776,8 +784,25 @@ def dashboard():
         return redirect(url_for("login"))
 
     sh = connect_gs()
-    ws_base = sh.worksheet(WS_BASE)
 
+    # BASE
+    try:
+        ws_base = sh.worksheet(WS_BASE)
+    except WorksheetNotFound:
+        flash(f"A aba '{WS_BASE}' não foi encontrada.", "err")
+        return render_template_string(
+            BASE_HTML,
+            title=APP_TITLE,
+            subtitle="Erro de planilha",
+            logged=True,
+            user_login=session.get("user_login"),
+            user_name=session.get("rep_name", ""),
+            user_type=session.get("user_type"),
+            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
+            body=f"<div class='card'><b>Erro:</b> aba <b>{h(WS_BASE)}</b> não encontrada.</div>"
+        )
+
+    # EDICOES - cria se não existir
     ed_headers = [
         "timestamp",
         "user_type",
@@ -789,10 +814,11 @@ def dashboard():
         "Semana Atendimento",
         "Status Cliente"
     ]
-    ws_ed = get_or_create_worksheet(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
+    ws_ed = open_existing_or_create(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
 
+    # LISTAS - abre a aba real __LISTAS_VALIDACAO__; se não existir, cria
     listas_headers = ["Mês", "Semana Atendimento", "Status Cliente"]
-    ws_listas = get_or_create_worksheet(sh, WS_LISTAS, rows=500, cols=10, headers=listas_headers)
+    ws_listas = open_existing_or_create(sh, WS_LISTAS, rows=500, cols=10, headers=listas_headers)
 
     headers, base_rows = safe_get_raw_rows(ws_base)
 
@@ -852,11 +878,11 @@ def dashboard():
         "Cliente_Novo"
     ])
 
-    if not key_col or not rep_col:
-        current_user_photo = ""
-        if session.get("user_type") == "rep":
-            current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+    current_user_photo = ""
+    if session.get("user_type") == "rep":
+        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
 
+    if not key_col or not rep_col:
         body = """
         <div class='card'>
           <b>Erro de estrutura da BASE</b><br><br>
@@ -878,10 +904,6 @@ def dashboard():
         )
 
     if not t2024_col or not t2025_col or not t2026_col:
-        current_user_photo = ""
-        if session.get("user_type") == "rep":
-            current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
-
         body = f"""
         <div class='card'>
           <b>Não encontrei as colunas reais de totais na BASE.</b><br><br>
@@ -905,10 +927,6 @@ def dashboard():
         )
 
     if not status_cor_col and not cliente_novo_col:
-        current_user_photo = ""
-        if session.get("user_type") == "rep":
-            current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
-
         body = """
         <div class='card'>
           <b>Não achei nem 'STATUS COR' nem coluna de 'Cliente Novo' na BASE.</b>
@@ -1005,10 +1023,6 @@ def dashboard():
     )
 
     out_rows = prepared_rows[:PAGE_SIZE]
-
-    current_user_photo = ""
-    if session.get("user_type") == "rep":
-        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
 
     rep_card_html = ""
 
@@ -1236,13 +1250,15 @@ def salvar():
     rep = norm(request.form.get("rep", ""))
     q = norm(request.form.get("q", ""))
 
+    redirect_args = {k: v for k, v in {"sup": sup, "rep": rep, "q": q}.items() if v}
+
     if not client_key:
         flash("client_key vazio.", "err")
-        return redirect(url_for("dashboard", **{k: v for k, v in {'sup': sup, 'rep': rep, 'q': q}.items() if v}))
+        return redirect(url_for("dashboard", **redirect_args))
 
     if user_type == "rep" and rep_code_form != session.get("rep_code"):
         flash("Você não pode gravar alterações em clientes de outro representante.", "err")
-        return redirect(url_for("dashboard", **{k: v for k, v in {'sup': sup, 'rep': rep, 'q': q}.items() if v}))
+        return redirect(url_for("dashboard", **redirect_args))
 
     try:
         sh = connect_gs()
@@ -1259,7 +1275,7 @@ def salvar():
             "Status Cliente"
         ]
 
-        ws_ed = get_or_create_worksheet(
+        ws_ed = open_existing_or_create(
             sh,
             WS_EDICOES,
             rows=2000,
@@ -1291,7 +1307,7 @@ def salvar():
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
         flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
 
-    return redirect(url_for("dashboard", **{k: v for k, v in {'sup': sup, 'rep': rep, 'q': q}.items() if v}))
+    return redirect(url_for("dashboard", **redirect_args))
 
 
 if __name__ == "__main__":
