@@ -25,7 +25,6 @@ ADMIN_USER = os.getenv("ADMIN_USER", "admin").strip()
 ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123").strip()
 SECRET_KEY = os.getenv("SECRET_KEY", "troque-esta-chave").strip()
 
-# AJUSTADO PARA SUA ESTRUTURA REAL
 WS_BASE = os.getenv("WS_BASE", "BASE").strip()
 WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
@@ -291,28 +290,6 @@ def connect_gs():
     return gc.open_by_key(SHEET_ID)
 
 
-def get_or_create_worksheet(sh, title, rows=1000, cols=30, headers=None):
-    try:
-        ws = sh.worksheet(title)
-        return ws
-    except WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
-        if headers:
-            ws.append_row(headers, value_input_option="USER_ENTERED")
-        return ws
-
-
-def ensure_headers_if_empty(ws, headers):
-    try:
-        row1 = [norm(x) for x in ws.row_values(1)]
-        if not row1 and headers:
-            ws.append_row(headers, value_input_option="USER_ENTERED")
-    except Exception:
-        if headers:
-            ws.clear()
-            ws.append_row(headers, value_input_option="USER_ENTERED")
-
-
 def safe_get_all_records(ws):
     try:
         return ws.get_all_records()
@@ -344,17 +321,8 @@ def safe_get_raw_rows(ws):
     return headers, rows
 
 
-def open_existing_or_create(sh, title, rows=1000, cols=30, headers=None):
-    try:
-        ws = sh.worksheet(title)
-        if headers:
-            ensure_headers_if_empty(ws, headers)
-        return ws
-    except WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
-        if headers:
-            ws.append_row(headers, value_input_option="USER_ENTERED")
-        return ws
+def open_existing_worksheet(sh, title):
+    return sh.worksheet(title)
 
 
 def try_get_rep_name(rep_code):
@@ -424,222 +392,39 @@ BASE_HTML = """
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }}</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      background: #ffffff;
-      color: #111827;
-    }
-
-    .topbar {
-      background: #ffffff;
-      padding: 12px 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid #d1d5db;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-    }
-
-    .topbar-right {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .topbar-avatar {
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      object-fit: cover;
-      border: 1px solid #d1d5db;
-      background: #f8fafc;
-    }
-
+    body { font-family: Arial, sans-serif; margin: 0; background: #ffffff; color: #111827; }
+    .topbar { background: #ffffff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d1d5db; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
     .container { padding: 16px; }
-
-    .card {
-      background: #ffffff;
-      border: 1px solid #d1d5db;
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 14px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-    }
-
-    .rep-card {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-
-    .rep-photo {
-      width: 88px;
-      height: 88px;
-      border-radius: 50%;
-      object-fit: cover;
-      border: 2px solid #d1d5db;
-      background: #f8fafc;
-      flex-shrink: 0;
-    }
-
-    .rep-photo-placeholder {
-      width: 88px;
-      height: 88px;
-      border-radius: 50%;
-      border: 2px solid #d1d5db;
-      background: #f8fafc;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #6b7280;
-      font-size: 12px;
-      text-align: center;
-      flex-shrink: 0;
-      padding: 6px;
-      box-sizing: border-box;
-    }
-
-    label {
-      font-size: 12px;
-      color: #4b5563;
-      display: block;
-      margin-bottom: 4px;
-      font-weight: 600;
-    }
-
-    input, select {
-      width: 100%;
-      padding: 10px;
-      border-radius: 10px;
-      border: 1px solid #cbd5e1;
-      background: #ffffff;
-      color: #111827;
-      box-sizing: border-box;
-    }
-
-    input:focus, select:focus {
-      outline: none;
-      border-color: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
-    }
-
-    button {
-      padding: 10px 14px;
-      border-radius: 10px;
-      border: 0;
-      background: #2563eb;
-      color: #fff;
-      cursor: pointer;
-      font-weight: 600;
-    }
-
+    .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .rep-card { display: flex; align-items: center; gap: 16px; }
+    .rep-photo { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 2px solid #d1d5db; background: #f8fafc; flex-shrink: 0; }
+    .rep-photo-placeholder { width: 88px; height: 88px; border-radius: 50%; border: 2px solid #d1d5db; background: #f8fafc; display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 12px; text-align: center; flex-shrink: 0; padding: 6px; box-sizing: border-box; }
+    label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
+    input, select { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; color: #111827; box-sizing: border-box; }
+    input:focus, select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+    button { padding: 10px 14px; border-radius: 10px; border: 0; background: #2563eb; color: #fff; cursor: pointer; font-weight: 600; }
     button.secondary { background: #6b7280; }
     button.danger { background: #dc2626; }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      background: #ffffff;
-    }
-
-    th, td {
-      border-bottom: 1px solid #e5e7eb;
-      padding: 10px;
-      vertical-align: top;
-    }
-
-    th {
-      position: sticky;
-      top: 0;
-      background: #f8fafc;
-      color: #374151;
-      text-align: left;
-      z-index: 2;
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr 1fr;
-      gap: 10px;
-    }
-
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-
-    .msg {
-      padding: 10px 12px;
-      border-radius: 10px;
-      margin-bottom: 10px;
-      font-weight: 600;
-    }
-
-    .ok {
-      background: #ecfdf5;
-      border: 1px solid #86efac;
-      color: #166534;
-    }
-
-    .err {
-      background: #fef2f2;
-      border: 1px solid #fca5a5;
-      color: #991b1b;
-    }
-
-    .pill {
-      padding: 3px 8px;
-      border-radius: 999px;
-      font-size: 12px;
-      background: #f3f4f6;
-      border: 1px solid #d1d5db;
-      display: inline-block;
-      color: #111827;
-    }
-
+    table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
+    th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; vertical-align: top; }
+    th { position: sticky; top: 0; background: #f8fafc; color: #374151; text-align: left; z-index: 2; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
+    .ok { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
+    .err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+    .pill { padding: 3px 8px; border-radius: 999px; font-size: 12px; background: #f3f4f6; border: 1px solid #d1d5db; display: inline-block; color: #111827; }
     .small { color: #6b7280; font-size: 12px; }
     .hint { color: #6b7280; font-size: 12px; margin-top: 6px; }
     .nowrap { white-space: nowrap; }
     .money { font-variant-numeric: tabular-nums; }
-
-    .login-wrap {
-      min-height: calc(100vh - 90px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-
-    .login-card {
-      width: 100%;
-      max-width: 520px;
-      text-align: center;
-    }
-
-    .login-logo {
-      max-width: 220px;
-      width: 100%;
-      height: auto;
-      margin: 0 auto 18px auto;
-      display: block;
-    }
-
-    .login-title {
-      margin-top: 0;
-      margin-bottom: 6px;
-      color: #111827;
-    }
-
-    .login-subtitle {
-      margin-top: 0;
-      margin-bottom: 20px;
-      color: #6b7280;
-      font-size: 14px;
-    }
-
+    .login-wrap { min-height: calc(100vh - 90px); display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .login-card { width: 100%; max-width: 520px; text-align: center; }
+    .login-logo { max-width: 220px; width: 100%; height: auto; margin: 0 auto 18px auto; display: block; }
+    .login-title { margin-top: 0; margin-bottom: 6px; color: #111827; }
+    .login-subtitle { margin-top: 0; margin-bottom: 20px; color: #6b7280; font-size: 14px; }
     .row-red { background: rgba(220,38,38,0.16); }
     .row-orange { background: rgba(249,115,22,0.16); }
     .row-yellow { background: rgba(234,179,8,0.18); }
@@ -693,19 +478,12 @@ LOGIN_BODY = """
       <div style="margin-top:12px;">
         <button type="submit">Entrar</button>
       </div>
-      <div class="hint">
-        Admin: usuário e senha definidos nas variáveis de ambiente.<br>
-        Representante: usuário = senha = código numérico.
-      </div>
     </form>
   </div>
 </div>
 """
 
 
-# =========================
-# ROTAS
-# =========================
 @app.route("/", methods=["GET", "POST"])
 def login():
     if require_login():
@@ -717,44 +495,27 @@ def login():
 
         if not u or not p:
             flash("Informe usuário e senha.", "err")
-            body = render_template_string(LOGIN_BODY, logo_url=LOGO_URL)
-            return render_template_string(
-                BASE_HTML,
-                title=APP_TITLE,
-                subtitle="Acesso",
-                logged=False,
-                user_login="",
-                user_name="",
-                user_type="",
-                user_photo_url="",
-                body=body
-            )
-
-        if u == ADMIN_USER and p == ADMIN_PASS:
+        elif u == ADMIN_USER and p == ADMIN_PASS:
             session.clear()
             session.permanent = True
             session["user_type"] = "admin"
             session["user_login"] = u
             session["rep_name"] = ""
             session["rep_code"] = ""
-
             flash("Logado como ADMIN.", "ok")
             return redirect(url_for("dashboard"))
-
-        if u.isdigit() and p.isdigit() and u == p:
+        elif u.isdigit() and p.isdigit() and u == p:
             rep_nome = try_get_rep_name(u)
-
             session.clear()
             session.permanent = True
             session["user_type"] = "rep"
             session["user_login"] = u
             session["rep_code"] = u
             session["rep_name"] = rep_nome or f"Representante {u}"
-
             flash(f"Logado como {session['rep_name']}.", "ok")
             return redirect(url_for("dashboard"))
-
-        flash("Login inválido.", "err")
+        else:
+            flash("Login inválido.", "err")
 
     body = render_template_string(LOGIN_BODY, logo_url=LOGO_URL)
     return render_template_string(
@@ -785,59 +546,54 @@ def dashboard():
 
     sh = connect_gs()
 
-    # BASE
     try:
-        ws_base = sh.worksheet(WS_BASE)
+        ws_base = open_existing_worksheet(sh, WS_BASE)
     except WorksheetNotFound:
-        flash(f"A aba '{WS_BASE}' não foi encontrada.", "err")
         return render_template_string(
             BASE_HTML,
             title=APP_TITLE,
-            subtitle="Erro de planilha",
+            subtitle="Erro",
             logged=True,
             user_login=session.get("user_login"),
             user_name=session.get("rep_name", ""),
             user_type=session.get("user_type"),
             user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Erro:</b> aba <b>{h(WS_BASE)}</b> não encontrada.</div>"
+            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_BASE)}</div>"
         )
 
-    # EDICOES - cria se não existir
-    ed_headers = [
-        "timestamp",
-        "user_type",
-        "user_login",
-        "rep_code",
-        "client_key",
-        "Data Agenda Visita",
-        "Mês",
-        "Semana Atendimento",
-        "Status Cliente"
-    ]
-    ws_ed = open_existing_or_create(sh, WS_EDICOES, rows=2000, cols=20, headers=ed_headers)
-
-    # LISTAS - abre a aba real __LISTAS_VALIDACAO__; se não existir, cria
-    listas_headers = ["Mês", "Semana Atendimento", "Status Cliente"]
-    ws_listas = open_existing_or_create(sh, WS_LISTAS, rows=500, cols=10, headers=listas_headers)
-
-    headers, base_rows = safe_get_raw_rows(ws_base)
-
-    if not base_rows:
-        current_user_photo = ""
-        if session.get("user_type") == "rep":
-            current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
-
+    try:
+        ws_listas = open_existing_worksheet(sh, WS_LISTAS)
+    except WorksheetNotFound:
         return render_template_string(
             BASE_HTML,
             title=APP_TITLE,
-            subtitle="Base vazia",
+            subtitle="Erro",
             logged=True,
             user_login=session.get("user_login"),
             user_name=session.get("rep_name", ""),
             user_type=session.get("user_type"),
-            user_photo_url=current_user_photo,
-            body=f"<div class='card'>A aba <b>{h(WS_BASE)}</b> está vazia.</div>"
+            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
+            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_LISTAS)}</div>"
         )
+
+    try:
+        ws_ed = open_existing_worksheet(sh, WS_EDICOES)
+    except WorksheetNotFound:
+        return render_template_string(
+            BASE_HTML,
+            title=APP_TITLE,
+            subtitle="Erro",
+            logged=True,
+            user_login=session.get("user_login"),
+            user_name=session.get("rep_name", ""),
+            user_type=session.get("user_type"),
+            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
+            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_EDICOES)}<br><br>Crie manualmente a aba <b>EDICOES</b> na planilha convertida para Google Sheets.</div>"
+        )
+
+    headers, base_rows = safe_get_raw_rows(ws_base)
+    lista_rows = safe_get_all_records(ws_listas)
+    ed_rows = safe_get_all_records(ws_ed)
 
     key_col = pick_col_flexible(headers, [
         "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -863,93 +619,13 @@ def dashboard():
     t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
     t2026_col = pick_col_exact(headers, ["Total 2026 (PERIODO)"])
 
-    status_cor_col = pick_col_exact(headers, [
-        "STATUS COR",
-        "Status Cor",
-        "STATUSCOR",
-        "StatusCor"
-    ])
+    status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor"])
+    cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
 
-    cliente_novo_col = pick_col_flexible(headers, [
-        "Cliente Novo",
-        "CLIENTE NOVO",
-        "Novo",
-        "NOVO",
-        "Cliente_Novo"
-    ])
-
-    current_user_photo = ""
-    if session.get("user_type") == "rep":
-        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
-
-    if not key_col or not rep_col:
-        body = """
-        <div class='card'>
-          <b>Erro de estrutura da BASE</b><br><br>
-          A planilha precisa ter pelo menos as colunas:<br>
-          - Codigo Grupo Cliente (ou equivalente)<br>
-          - Codigo Representante (ou equivalente)
-        </div>
-        """
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro de estrutura",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=current_user_photo,
-            body=body
-        )
-
-    if not t2024_col or not t2025_col or not t2026_col:
-        body = f"""
-        <div class='card'>
-          <b>Não encontrei as colunas reais de totais na BASE.</b><br><br>
-          Preciso exatamente destas:<br>
-          - Total 2024 (PERIODO)<br>
-          - Total 2025 (PERIODO)<br>
-          - Total 2026 (PERIODO)<br><br>
-          <span class='small'>Cabeçalhos encontrados: {h(', '.join(headers))}</span>
-        </div>
-        """
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro de colunas",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=current_user_photo,
-            body=body
-        )
-
-    if not status_cor_col and not cliente_novo_col:
-        body = """
-        <div class='card'>
-          <b>Não achei nem 'STATUS COR' nem coluna de 'Cliente Novo' na BASE.</b>
-        </div>
-        """
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro de colunas",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=current_user_photo,
-            body=body
-        )
-
-    lista_rows = safe_get_all_records(ws_listas)
     meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
     semanas = unique_list([r.get("Semana Atendimento", "") for r in lista_rows]) or DEFAULT_SEMANAS
     status_list = unique_list([r.get("Status Cliente", "") for r in lista_rows]) or DEFAULT_STATUS
 
-    ed_rows = safe_get_all_records(ws_ed)
     latest = {}
     for r in ed_rows:
         ck = norm(r.get("client_key", ""))
@@ -975,15 +651,10 @@ def dashboard():
 
         if not is_admin() and repc != session.get("rep_code"):
             continue
-
-        if is_admin() and sup_col and sup_sel:
-            if norm(r.get(sup_col, "")) != sup_sel:
-                continue
-
-        if is_admin() and rep_sel:
-            if repc != rep_sel:
-                continue
-
+        if is_admin() and sup_col and sup_sel and norm(r.get(sup_col, "")) != sup_sel:
+            continue
+        if is_admin() and rep_sel and repc != rep_sel:
+            continue
         if q:
             hay = " ".join([norm(v) for v in r.values()])
             if q.lower() not in hay.lower():
@@ -997,10 +668,10 @@ def dashboard():
             row_copy["Semana Atendimento"] = latest[ck]["Semana Atendimento"]
             row_copy["Status Cliente"] = latest[ck]["Status Cliente"]
         else:
-            row_copy.setdefault("Data Agenda Visita", "")
-            row_copy.setdefault("Mês", "")
-            row_copy.setdefault("Semana Atendimento", "")
-            row_copy.setdefault("Status Cliente", "")
+            row_copy["Data Agenda Visita"] = ""
+            row_copy["Mês"] = ""
+            row_copy["Semana Atendimento"] = ""
+            row_copy["Status Cliente"] = ""
 
         status_cor_final, row_class, priority = resolve_status_cor_from_base(
             row_copy,
@@ -1011,7 +682,6 @@ def dashboard():
         row_copy["_status_cor"] = status_cor_final
         row_copy["_row_class"] = row_class
         row_copy["_sort_priority"] = priority
-
         prepared_rows.append(row_copy)
 
     prepared_rows.sort(
@@ -1024,47 +694,7 @@ def dashboard():
 
     out_rows = prepared_rows[:PAGE_SIZE]
 
-    rep_card_html = ""
-
-    selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
-
-    if selected_rep_code and nome_rep_col:
-        rep_name_base = ""
-        rep_sup_base = ""
-        rep_reg_base = ""
-
-        for r in base_rows:
-            if norm(r.get(rep_col, "")) == selected_rep_code:
-                rep_name_base = norm(r.get(nome_rep_col, ""))
-                rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
-                rep_reg_base = ""
-                if rep_name_base:
-                    break
-
-        foto_url = get_rep_photo_src(selected_rep_code)
-        nome_card = rep_name_base or selected_rep_code
-        sup_card = rep_sup_base
-        regiao_card = rep_reg_base
-
-        foto_html = (
-            f'<img src="{h(foto_url)}" alt="Foto do representante" class="rep-photo">'
-            if foto_url else
-            '<div class="rep-photo-placeholder">Sem foto</div>'
-        )
-
-        rep_card_html = f"""
-        <div class="card">
-          <div class="rep-card">
-            {foto_html}
-            <div>
-              <div style="font-size:20px;font-weight:700;">{h(nome_card)}</div>
-              <div class="small">Código: {h(selected_rep_code)}</div>
-              <div class="small">Supervisor: {h(sup_card)}</div>
-              <div class="small">Região: {h(regiao_card)}</div>
-            </div>
-          </div>
-        </div>
-        """
+    current_user_photo = get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else ""
 
     def opt_html(options, selected):
         out = ["<option value=''></option>"]
@@ -1170,8 +800,6 @@ def dashboard():
         """
 
     body = f"""
-    {rep_card_html}
-
     <div class="card">
       <form method="get">
         <div class="grid">
@@ -1184,12 +812,6 @@ def dashboard():
             <button type="submit">Aplicar</button>
             <a href="{url_for('dashboard')}"><button type="button" class="secondary">Limpar</button></a>
           </div>
-        </div>
-        <div class="hint">
-          Total 2024/2025/2026 são exibidos exatamente da BASE, usando:
-          <b>Total 2024 (PERIODO)</b>,
-          <b>Total 2025 (PERIODO)</b>,
-          <b>Total 2026 (PERIODO)</b>.
         </div>
       </form>
     </div>
@@ -1262,26 +884,7 @@ def salvar():
 
     try:
         sh = connect_gs()
-
-        ed_headers = [
-            "timestamp",
-            "user_type",
-            "user_login",
-            "rep_code",
-            "client_key",
-            "Data Agenda Visita",
-            "Mês",
-            "Semana Atendimento",
-            "Status Cliente"
-        ]
-
-        ws_ed = open_existing_or_create(
-            sh,
-            WS_EDICOES,
-            rows=2000,
-            cols=20,
-            headers=ed_headers
-        )
+        ws_ed = sh.worksheet(WS_EDICOES)
 
         data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
         mes = norm(request.form.get("Mês", ""))
@@ -1303,6 +906,8 @@ def salvar():
         ws_ed.append_row(row, value_input_option="USER_ENTERED")
         flash("Alteração gravada com sucesso.", "ok")
 
+    except WorksheetNotFound:
+        flash("A aba EDICOES não existe. Crie a aba EDICOES na planilha Google convertida.", "err")
     except Exception as e:
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
         flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
