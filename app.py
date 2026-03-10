@@ -321,8 +321,42 @@ def safe_get_raw_rows(ws):
     return headers, rows
 
 
-def open_existing_worksheet(sh, title):
-    return sh.worksheet(title)
+def get_or_create_worksheet(sh, title, rows=1000, cols=20):
+    try:
+        return sh.worksheet(title)
+    except WorksheetNotFound:
+        return sh.add_worksheet(title=title, rows=str(rows), cols=str(cols))
+
+
+def ensure_headers(ws, headers):
+    current = [norm(x) for x in ws.row_values(1)]
+    if current != headers:
+        if not current:
+            ws.append_row(headers, value_input_option="USER_ENTERED")
+        else:
+            ws.update("A1", [headers], value_input_option="USER_ENTERED")
+
+
+def ensure_edicoes_worksheet(sh):
+    headers = [
+        "timestamp",
+        "user_type",
+        "user_login",
+        "rep_code",
+        "client_key",
+        "Data Agenda Visita",
+        "Mês",
+        "Semana Atendimento",
+        "Status Cliente"
+    ]
+    ws = get_or_create_worksheet(sh, WS_EDICOES, rows=5000, cols=20)
+    ensure_headers(ws, headers)
+    return ws
+
+
+def ensure_listas_worksheet(sh):
+    ws = sh.worksheet(WS_LISTAS)
+    return ws
 
 
 def try_get_rep_name(rep_code):
@@ -430,6 +464,7 @@ BASE_HTML = """
     .row-yellow { background: rgba(234,179,8,0.18); }
     .row-green { background: rgba(34,197,94,0.16); }
     .row-blue { background: rgba(56,189,248,0.14); }
+    .diag { background:#f8fafc; border:1px solid #d1d5db; border-radius:10px; padding:10px; font-size:12px; white-space:pre-wrap; }
   </style>
 </head>
 <body>
@@ -484,6 +519,9 @@ LOGIN_BODY = """
 """
 
 
+# =========================
+# ROTAS
+# =========================
 @app.route("/", methods=["GET", "POST"])
 def login():
     if require_login():
@@ -538,6 +576,38 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/diag", methods=["GET"])
+def diag():
+    if not require_login():
+        return redirect(url_for("login"))
+
+    try:
+        sh = connect_gs()
+        tabs = [ws.title for ws in sh.worksheets()]
+        msg = (
+            f"SHEET_ID: {SHEET_ID}\n"
+            f"Abas encontradas: {tabs}\n"
+            f"WS_BASE: {WS_BASE}\n"
+            f"WS_LISTAS: {WS_LISTAS}\n"
+            f"WS_EDICOES: {WS_EDICOES}\n"
+        )
+        body = f"<div class='card'><b>Diagnóstico</b><div class='diag'>{h(msg)}</div></div>"
+    except Exception as e:
+        body = f"<div class='card'><b>Diagnóstico falhou</b><div class='diag'>{h(str(e))}</div></div>"
+
+    return render_template_string(
+        BASE_HTML,
+        title=APP_TITLE,
+        subtitle="Diagnóstico",
+        logged=True,
+        user_login=session.get("user_login"),
+        user_name=session.get("rep_name", ""),
+        user_type=session.get("user_type"),
+        user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
+        body=body
+    )
+
+
 @app.route("/dashboard", methods=["GET"])
 def dashboard():
     if not require_login():
@@ -547,7 +617,7 @@ def dashboard():
     sh = connect_gs()
 
     try:
-        ws_base = open_existing_worksheet(sh, WS_BASE)
+        ws_base = sh.worksheet(WS_BASE)
     except WorksheetNotFound:
         return render_template_string(
             BASE_HTML,
@@ -562,7 +632,7 @@ def dashboard():
         )
 
     try:
-        ws_listas = open_existing_worksheet(sh, WS_LISTAS)
+        ws_listas = ensure_listas_worksheet(sh)
     except WorksheetNotFound:
         return render_template_string(
             BASE_HTML,
@@ -577,8 +647,8 @@ def dashboard():
         )
 
     try:
-        ws_ed = open_existing_worksheet(sh, WS_EDICOES)
-    except WorksheetNotFound:
+        ws_ed = ensure_edicoes_worksheet(sh)
+    except Exception as e:
         return render_template_string(
             BASE_HTML,
             title=APP_TITLE,
@@ -588,7 +658,7 @@ def dashboard():
             user_name=session.get("rep_name", ""),
             user_type=session.get("user_type"),
             user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_EDICOES)}<br><br>Crie manualmente a aba <b>EDICOES</b> na planilha convertida para Google Sheets.</div>"
+            body=f"<div class='card'><b>Falha ao criar/abrir a aba EDICOES:</b><br><pre style='white-space:pre-wrap'>{h(str(e))}</pre></div>"
         )
 
     headers, base_rows = safe_get_raw_rows(ws_base)
@@ -619,7 +689,7 @@ def dashboard():
     t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
     t2026_col = pick_col_exact(headers, ["Total 2026 (PERIODO)"])
 
-    status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor"])
+    status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor", "STATUSCOR", "StatusCor"])
     cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
 
     meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
@@ -693,7 +763,6 @@ def dashboard():
     )
 
     out_rows = prepared_rows[:PAGE_SIZE]
-
     current_user_photo = get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else ""
 
     def opt_html(options, selected):
@@ -801,6 +870,10 @@ def dashboard():
 
     body = f"""
     <div class="card">
+      <div class="small">Diagnóstico rápido: <a href="{url_for('diag')}">abrir /diag</a></div>
+    </div>
+
+    <div class="card">
       <form method="get">
         <div class="grid">
           {filtros_html}
@@ -884,7 +957,7 @@ def salvar():
 
     try:
         sh = connect_gs()
-        ws_ed = sh.worksheet(WS_EDICOES)
+        ws_ed = ensure_edicoes_worksheet(sh)
 
         data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
         mes = norm(request.form.get("Mês", ""))
@@ -906,8 +979,6 @@ def salvar():
         ws_ed.append_row(row, value_input_option="USER_ENTERED")
         flash("Alteração gravada com sucesso.", "ok")
 
-    except WorksheetNotFound:
-        flash("A aba EDICOES não existe. Crie a aba EDICOES na planilha Google convertida.", "err")
     except Exception as e:
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
         flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
