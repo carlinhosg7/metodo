@@ -397,18 +397,6 @@ def get_base_structure(ws_base):
     return final_headers, data_rows
 
 
-def find_base_row_number(base_rows, headers, key_col, rep_col, client_key, rep_code):
-    for idx, row in enumerate(base_rows, start=2):  # linha 2 em diante
-        if norm(row.get(key_col, "")) == client_key and norm(row.get(rep_col, "")) == rep_code:
-            return idx
-
-    for idx, row in enumerate(base_rows, start=2):
-        if norm(row.get(key_col, "")) == client_key:
-            return idx
-
-    return None
-
-
 def try_get_rep_name(rep_code):
     rep_code = norm(rep_code)
     if not rep_code:
@@ -711,10 +699,10 @@ def dashboard():
     sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if (is_admin() and sup_col) else []
     rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if is_admin() else []
 
-        prepared_rows = []
-    for idx_base, r in enumerate(base_rows, start=2):  # linha real da BASE
-        ck = norm(r.get(key_col, ""))
-        repc = norm(r.get(rep_col, ""))
+    prepared_rows = []
+    for idx_base, r in enumerate(base_rows, start=2):
+        ck = norm(r.get(key_col, "")) if key_col else ""
+        repc = norm(r.get(rep_col, "")) if rep_col else ""
 
         if not is_admin() and repc != session.get("rep_code"):
             continue
@@ -745,7 +733,7 @@ def dashboard():
         key=lambda r: (
             r.get("_sort_priority", 99),
             norm(r.get(grupo_col, "")) if grupo_col else "",
-            norm(r.get(key_col, ""))
+            norm(r.get(key_col, "")) if key_col else ""
         )
     )
 
@@ -761,9 +749,9 @@ def dashboard():
 
     table_rows = []
     for idx, r in enumerate(out_rows, start=1):
-        ck = norm(r.get(key_col, ""))
+        ck = norm(r.get(key_col, "")) if key_col else ""
         grupo = norm(r.get(grupo_col, "")) if grupo_col else ""
-        repc = norm(r.get(rep_col, ""))
+        repc = norm(r.get(rep_col, "")) if rep_col else ""
         nome_rep = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
         supv = norm(r.get(sup_col, "")) if sup_col else ""
         cidade = norm(r.get(cidade_col, "")) if cidade_col else ""
@@ -779,8 +767,8 @@ def dashboard():
 
         status_cor = r.get("_status_cor", "")
         klass = r.get("_row_class", "")
-
         base_row_number = r.get("_base_row_number", "")
+        form_id = f"form_row_{idx}"
 
         hidden_filters = ""
         if sup_sel:
@@ -804,7 +792,7 @@ def dashboard():
           <td class="nowrap"><b>{h(status_cor)}</b></td>
 
           <td>
-             <form id="{form_id}" method="post" action="{url_for('salvar')}">
+            <form id="{form_id}" method="post" action="{url_for('salvar')}">
               <input type="hidden" name="client_key" value="{h(ck)}">
               <input type="hidden" name="rep_code" value="{h(repc)}">
               <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
