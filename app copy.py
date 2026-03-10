@@ -3,9 +3,7 @@ import re
 import json
 import base64
 import traceback
-import html
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlencode
 
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
@@ -78,10 +76,6 @@ def norm(s):
     s = str(s).strip()
     s = re.sub(r"\s+", " ", s)
     return s
-
-
-def h(s):
-    return html.escape(norm(s), quote=True)
 
 
 def unique_list(values):
@@ -226,55 +220,8 @@ def get_rep_photo_src(codigo_rep):
 
 
 def fmt_money(v):
+    # não soma, não recalcula, não converte
     return norm(v)
-
-
-def build_dashboard_query():
-    params = {}
-    sup = norm(request.args.get("sup", "")) or norm(request.form.get("sup", ""))
-    rep = norm(request.args.get("rep", "")) or norm(request.form.get("rep", ""))
-    q = norm(request.args.get("q", "")) or norm(request.form.get("q", ""))
-
-    if sup:
-        params["sup"] = sup
-    if rep:
-        params["rep"] = rep
-    if q:
-        params["q"] = q
-
-    return params
-
-
-def to_input_date(v):
-    v = norm(v)
-    if not v:
-        return ""
-
-    # aceita yyyy-mm-dd
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
-        return v
-
-    # aceita dd/mm/aaaa
-    m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", v)
-    if m:
-        dd, mm, yyyy = m.groups()
-        return f"{yyyy}-{mm}-{dd}"
-
-    return ""
-
-
-def from_input_date(v):
-    v = norm(v)
-    if not v:
-        return ""
-
-    # grava em dd/mm/aaaa
-    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v)
-    if m:
-        yyyy, mm, dd = m.groups()
-        return f"{dd}/{mm}/{yyyy}"
-
-    return v
 
 
 # =========================
@@ -395,7 +342,7 @@ def try_get_rep_name(rep_code):
 def handle_any_exception(e):
     app.logger.error("ERRO NÃO TRATADO:\n%s", traceback.format_exc())
     msg = norm(str(e)) or "Erro interno."
-    body = f"<div class='card'><b>Erro:</b><br><pre style='white-space:pre-wrap'>{h(msg)}</pre></div>"
+    body = f"<div class='card'><b>Erro:</b><br><pre style='white-space:pre-wrap'>{msg}</pre></div>"
 
     current_user_photo = ""
     if session.get("user_type") == "rep":
@@ -810,7 +757,7 @@ def dashboard():
             user_name=session.get("rep_name", ""),
             user_type=session.get("user_type"),
             user_photo_url=current_user_photo,
-            body=f"<div class='card'>A aba <b>{h(WS_BASE)}</b> está vazia.</div>"
+            body=f"<div class='card'>A aba <b>{WS_BASE}</b> está vazia.</div>"
         )
 
     key_col = pick_col_flexible(headers, [
@@ -833,6 +780,9 @@ def dashboard():
     ])
     cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
 
+    # =========================
+    # COLUNAS REAIS DA SUA BASE
+    # =========================
     t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
     t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
     t2026_col = pick_col_exact(headers, ["Total 2026 (PERIODO)"])
@@ -889,7 +839,7 @@ def dashboard():
           - Total 2024 (PERIODO)<br>
           - Total 2025 (PERIODO)<br>
           - Total 2026 (PERIODO)<br><br>
-          <span class='small'>Cabeçalhos encontrados: {h(', '.join(headers))}</span>
+          <span class='small'>Cabeçalhos encontrados: {', '.join(headers)}</span>
         </div>
         """
         return render_template_string(
@@ -1033,7 +983,7 @@ def dashboard():
         regiao_card = rep_reg_base
 
         foto_html = (
-            f'<img src="{h(foto_url)}" alt="Foto do representante" class="rep-photo">'
+            f'<img src="{foto_url}" alt="Foto do representante" class="rep-photo">'
             if foto_url else
             '<div class="rep-photo-placeholder">Sem foto</div>'
         )
@@ -1043,10 +993,10 @@ def dashboard():
           <div class="rep-card">
             {foto_html}
             <div>
-              <div style="font-size:20px;font-weight:700;">{h(nome_card)}</div>
-              <div class="small">Código: {h(selected_rep_code)}</div>
-              <div class="small">Supervisor: {h(sup_card)}</div>
-              <div class="small">Região: {h(regiao_card)}</div>
+              <div style="font-size:20px;font-weight:700;">{nome_card}</div>
+              <div class="small">Código: {selected_rep_code}</div>
+              <div class="small">Supervisor: {sup_card}</div>
+              <div class="small">Região: {regiao_card}</div>
             </div>
           </div>
         </div>
@@ -1056,11 +1006,11 @@ def dashboard():
         out = ["<option value=''></option>"]
         for o in options:
             sel = "selected" if norm(o) == norm(selected) else ""
-            out.append(f"<option value='{h(o)}' {sel}>{h(o)}</option>")
+            out.append(f"<option value='{o}' {sel}>{o}</option>")
         return "\n".join(out)
 
     table_rows = []
-    for idx, r in enumerate(out_rows, start=1):
+    for r in out_rows:
         ck = norm(r.get(key_col, ""))
         grupo = norm(r.get(grupo_col, "")) if grupo_col else ""
         repc = norm(r.get(rep_col, ""))
@@ -1080,57 +1030,40 @@ def dashboard():
         status_cor = r.get("_status_cor", "")
         klass = r.get("_row_class", "")
 
-        form_id = f"form_row_{idx}"
-
-        hidden_filters = ""
-        if sup_sel:
-            hidden_filters += f'<input type="hidden" name="sup" value="{h(sup_sel)}">'
-        if rep_sel:
-            hidden_filters += f'<input type="hidden" name="rep" value="{h(rep_sel)}">'
-        if q:
-            hidden_filters += f'<input type="hidden" name="q" value="{h(q)}">'
-
         row_html = f"""
-        <tr class="{h(klass)}">
-          <td class="nowrap">{h(ck)}</td>
-          <td>{h(grupo)}</td>
-          <td class="nowrap">{h(repc)}</td>
-          <td>{h(nome_rep)}</td>
-          <td class="nowrap">{h(supv)}</td>
-          <td>{h(cidade)}</td>
-          <td class="money nowrap">{h(t24)}</td>
-          <td class="money nowrap">{h(t25)}</td>
-          <td class="money nowrap">{h(t26)}</td>
-          <td class="nowrap"><b>{h(status_cor)}</b></td>
-
+        <tr class="{klass}">
+          <td class="nowrap">{ck}</td>
+          <td>{grupo}</td>
+          <td class="nowrap">{repc}</td>
+          <td>{nome_rep}</td>
+          <td class="nowrap">{supv}</td>
+          <td>{cidade}</td>
+          <td class="money nowrap">{t24}</td>
+          <td class="money nowrap">{t25}</td>
+          <td class="money nowrap">{t26}</td>
+          <td class="nowrap"><b>{status_cor}</b></td>
           <td>
-            <form id="{form_id}" method="post" action="{url_for('salvar')}">
-              <input type="hidden" name="client_key" value="{h(ck)}">
-              <input type="hidden" name="rep_code" value="{h(repc)}">
-              {hidden_filters}
+            <form method="post" action="{url_for('salvar')}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <input type="hidden" name="client_key" value="{ck}">
+              <input type="hidden" name="rep_code" value="{repc}">
+              <input type="date" name="Data Agenda Visita" value="{dav}" style="min-width:155px;">
+          </td>
+          <td>
+              <select name="Mês" style="min-width:140px;">
+                {opt_html(meses, mes)}
+              </select>
+          </td>
+          <td>
+              <select name="Semana Atendimento" style="min-width:160px;">
+                {opt_html(semanas, sem)}
+              </select>
+          </td>
+          <td>
+              <select name="Status Cliente" style="min-width:260px;">
+                {opt_html(status_list, stc)}
+              </select>
+              <button type="submit">Gravar</button>
             </form>
-            <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
-          </td>
-
-          <td>
-            <select name="Mês" form="{form_id}" style="min-width:140px;">
-              {opt_html(meses, mes)}
-            </select>
-          </td>
-
-          <td>
-            <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
-              {opt_html(semanas, sem)}
-            </select>
-          </td>
-
-          <td>
-            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
-              {opt_html(status_list, stc)}
-            </select>
-            <div style="margin-top:8px;">
-              <button type="submit" form="{form_id}">Gravar</button>
-            </div>
           </td>
         </tr>
         """
@@ -1143,14 +1076,14 @@ def dashboard():
           <label>Filtro Supervisor</label>
           <select name="sup">
             <option value="">(Todos)</option>
-            {''.join([f"<option value='{h(s)}' {'selected' if s == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
+            {''.join([f"<option value='{s}' {'selected' if s == sup_sel else ''}>{s}</option>" for s in sup_list])}
           </select>
         </div>
         <div>
           <label>Filtro Representante</label>
           <select name="rep">
             <option value="">(Todos)</option>
-            {''.join([f"<option value='{h(r)}' {'selected' if r == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
+            {''.join([f"<option value='{r}' {'selected' if r == rep_sel else ''}>{r}</option>" for r in rep_list])}
           </select>
         </div>
         """
@@ -1164,7 +1097,7 @@ def dashboard():
           {filtros_html}
           <div>
             <label>Buscar</label>
-            <input name="q" value="{h(q)}" placeholder="cliente/grupo/cidade...">
+            <input name="q" value="{q}" placeholder="cliente/grupo/cidade...">
           </div>
           <div style="display:flex;align-items:flex-end;gap:8px;">
             <button type="submit">Aplicar</button>
@@ -1210,7 +1143,7 @@ def dashboard():
     return render_template_string(
         BASE_HTML,
         title=APP_TITLE,
-        subtitle=f"Planilha: {h(WS_BASE)}",
+        subtitle=f"Planilha: {WS_BASE}",
         logged=True,
         user_login=session.get("user_login"),
         user_name=session.get("rep_name", ""),
@@ -1232,66 +1165,53 @@ def salvar():
     client_key = norm(request.form.get("client_key", ""))
     rep_code_form = norm(request.form.get("rep_code", ""))
 
-    sup = norm(request.form.get("sup", ""))
-    rep = norm(request.form.get("rep", ""))
-    q = norm(request.form.get("q", ""))
-
     if not client_key:
-        flash("client_key vazio.", "err")
-        return redirect(url_for("dashboard", **{k: v for k, v in {'sup': sup, 'rep': rep, 'q': q}.items() if v}))
+        flash("Client_key vazio.", "err")
+        return redirect(url_for("dashboard"))
 
-    if user_type == "rep" and rep_code_form != session.get("rep_code"):
-        flash("Você não pode gravar alterações em clientes de outro representante.", "err")
-        return redirect(url_for("dashboard", **{k: v for k, v in {'sup': sup, 'rep': rep, 'q': q}.items() if v}))
+    if user_type == "rep":
+        if rep_code_form != session.get("rep_code"):
+            flash("Você não pode gravar alterações em clientes de outro representante.", "err")
+            return redirect(url_for("dashboard"))
 
-    try:
-        sh = connect_gs()
+    sh = connect_gs()
 
-        ed_headers = [
-            "timestamp",
-            "user_type",
-            "user_login",
-            "rep_code",
-            "client_key",
-            "Data Agenda Visita",
-            "Mês",
-            "Semana Atendimento",
-            "Status Cliente"
-        ]
+    ed_headers = [
+        "timestamp",
+        "user_type",
+        "user_login",
+        "rep_code",
+        "client_key",
+        "Data Agenda Visita",
+        "Mês",
+        "Semana Atendimento",
+        "Status Cliente"
+    ]
 
-        ws_ed = get_or_create_worksheet(
-            sh,
-            WS_EDICOES,
-            rows=2000,
-            cols=20,
-            headers=ed_headers
-        )
+    ws_ed = get_or_create_worksheet(
+        sh,
+        WS_EDICOES,
+        rows=2000,
+        cols=20,
+        headers=ed_headers
+    )
 
-        data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
-        mes = norm(request.form.get("Mês", ""))
-        semana = norm(request.form.get("Semana Atendimento", ""))
-        status_cliente = norm(request.form.get("Status Cliente", ""))
+    row = [
+        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        user_type,
+        user_login,
+        rep_code_form,
+        client_key,
+        norm(request.form.get("Data Agenda Visita", "")),
+        norm(request.form.get("Mês", "")),
+        norm(request.form.get("Semana Atendimento", "")),
+        norm(request.form.get("Status Cliente", "")),
+    ]
 
-        row = [
-            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            user_type,
-            user_login,
-            rep_code_form,
-            client_key,
-            data_agenda,
-            mes,
-            semana,
-            status_cliente,
-        ]
+    ws_ed.append_row(row)
 
-        ws_ed.append_row(row, value_input_option="USER_ENTERED")
-        flash("Alteração gravada com sucesso.", "ok")
-
-    except Exception as e:
-        app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
-        flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
-
-    return redirect(url_for("dashboard", **{k: v for k, v in {'sup': sup, 'rep': rep, 'q': q}.items() if v}))
+    flash("Alteração gravada com sucesso.", "ok")
+    return redirect(url_for("dashboard"))
 
 
 if __name__ == "__main__":
