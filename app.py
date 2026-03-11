@@ -898,12 +898,19 @@ def dashboard():
             </select>
           </td>
 
-          <td style="min-width:280px;">
-            <textarea name="Observações" form="{form_id}" placeholder="Digite observações...">{h(obs)}</textarea>
-            <div style="margin-top:8px;">
-              <button type="submit" form="{form_id}">Gravar</button>
+          <<td style="min-width:380px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <input
+                type="text"
+                name="Observações"
+                form="{form_id}"
+                placeholder="Digite observações..."
+                value="{h(obs)}"
+                style="flex:1; min-width:220px;"
+                >
+                <button type="submit" form="{form_id}" style="white-space:nowrap;">Gravar</button>
             </div>
-          </td>
+            </td>
         </tr>
         """
         table_rows.append(row_html)
