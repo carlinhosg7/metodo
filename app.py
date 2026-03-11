@@ -908,7 +908,7 @@ def dashboard():
         </div>
         """
 
-    debug_html = "FALSE"
+    debug_html = ""
     if DEBUG_MODE:
         abas = ", ".join(debug_info.get("worksheets", []))
         last_row = h(last_save.get("row_num", ""))
