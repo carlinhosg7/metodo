@@ -357,7 +357,19 @@ def ensure_edicoes_worksheet(sh):
         "Status Cliente",
         "Observações"
     ]
-    ws = get_or_create_worksheet(sh, WS_EDICOES, rows=5000, cols=30)
+
+    try:
+        ws = sh.worksheet(WS_EDICOES)
+    except WorksheetNotFound:
+        try:
+            ws = sh.add_worksheet(title=WS_EDICOES, rows="5000", cols="30")
+        except Exception as e:
+            raise RuntimeError(
+                f"Não foi possível acessar/criar a aba '{WS_EDICOES}'. "
+                f"Crie essa aba manualmente na planilha ou conceda permissão de Editor à service account. "
+                f"Detalhe: {str(e)}"
+            )
+
     ensure_headers(ws, headers)
     return ws
 
@@ -702,7 +714,10 @@ def dashboard():
             body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_LISTAS)}</div>"
         )
 
-    ensure_edicoes_worksheet(sh)
+    try:
+        ensure_edicoes_worksheet(sh)
+    except Exception as e:
+        flash(str(e), "err")
 
     headers, base_rows = get_base_structure(ws_base)
     lista_rows = safe_get_all_records(ws_listas)
