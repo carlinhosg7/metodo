@@ -260,6 +260,11 @@ def from_input_date(v):
     return v
 
 
+def safe_cell(vals, idx_1_based):
+    pos = idx_1_based - 1
+    return norm(vals[pos]) if pos < len(vals) else ""
+
+
 # =========================
 # GOOGLE SHEETS
 # =========================
@@ -360,7 +365,7 @@ def ensure_edicoes_worksheet(sh):
 def ensure_base_tracking_columns(ws_base):
     headers = [norm(x) for x in ws_base.row_values(1)]
     if not headers:
-        return []
+        raise RuntimeError("A aba BASE está sem cabeçalho na linha 1.")
 
     required = [
         "Data Agenda Visita",
@@ -378,6 +383,7 @@ def ensure_base_tracking_columns(ws_base):
 
     if changed:
         ws_base.update("A1", [headers], value_input_option="USER_ENTERED")
+        headers = [norm(x) for x in ws_base.row_values(1)]
 
     return headers
 
@@ -397,6 +403,7 @@ def get_base_structure(ws_base):
             raw = raw + [""] * (len(final_headers) - len(raw))
         elif len(raw) > len(final_headers):
             raw = raw[:len(final_headers)]
+
         data_rows.append({final_headers[i]: raw[i] for i in range(len(final_headers))})
 
     return final_headers, data_rows
@@ -762,7 +769,6 @@ def dashboard():
                 continue
 
         row_copy = dict(r)
-
         row_copy["Data Agenda Visita"] = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
         row_copy["Mês"] = norm(r.get(mes_col, "")) if mes_col else ""
         row_copy["Semana Atendimento"] = norm(r.get(semana_col, "")) if semana_col else ""
@@ -1058,6 +1064,7 @@ def salvar():
         ws_ed = ensure_edicoes_worksheet(sh)
 
         headers = ensure_base_tracking_columns(ws_base)
+        headers_norm = [norm(x) for x in headers]
 
         data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
         mes = norm(request.form.get("Mês", ""))
@@ -1067,17 +1074,49 @@ def salvar():
 
         row_num = int(base_row_number)
 
-        col_data = headers.index("Data Agenda Visita") + 1
-        col_mes = headers.index("Mês") + 1
-        col_semana = headers.index("Semana Atendimento") + 1
-        col_status = headers.index("Status Cliente") + 1
-        col_obs = headers.index("Observações") + 1
+        col_data = headers_norm.index("Data Agenda Visita") + 1
+        col_mes = headers_norm.index("Mês") + 1
+        col_semana = headers_norm.index("Semana Atendimento") + 1
+        col_status = headers_norm.index("Status Cliente") + 1
+        col_obs = headers_norm.index("Observações") + 1
 
-        ws_base.update_acell(rowcol_to_a1(row_num, col_data), data_agenda)
-        ws_base.update_acell(rowcol_to_a1(row_num, col_mes), mes)
-        ws_base.update_acell(rowcol_to_a1(row_num, col_semana), semana)
-        ws_base.update_acell(rowcol_to_a1(row_num, col_status), status_cliente)
-        ws_base.update_acell(rowcol_to_a1(row_num, col_obs), observacoes)
+        ws_base.batch_update(
+            [
+                {"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]},
+                {"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]},
+                {"range": rowcol_to_a1(row_num, col_semana), "values": [[semana]]},
+                {"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]},
+                {"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]},
+            ],
+            value_input_option="USER_ENTERED"
+        )
+
+        row_values = ws_base.row_values(row_num)
+
+        gravado_data = safe_cell(row_values, col_data)
+        gravado_mes = safe_cell(row_values, col_mes)
+        gravado_semana = safe_cell(row_values, col_semana)
+        gravado_status = safe_cell(row_values, col_status)
+        gravado_obs = safe_cell(row_values, col_obs)
+
+        conferiu = (
+            gravado_data == norm(data_agenda) and
+            gravado_mes == norm(mes) and
+            gravado_semana == norm(semana) and
+            gravado_status == norm(status_cliente) and
+            gravado_obs == norm(observacoes)
+        )
+
+        if not conferiu:
+            raise RuntimeError(
+                "A gravação não foi confirmada na BASE. "
+                f"Linha={row_num} | "
+                f"Data='{gravado_data}' | "
+                f"Mês='{gravado_mes}' | "
+                f"Semana='{gravado_semana}' | "
+                f"Status='{gravado_status}' | "
+                f"Obs='{gravado_obs}'"
+            )
 
         row_log = [
             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
@@ -1093,7 +1132,10 @@ def salvar():
         ]
         ws_ed.append_row(row_log, value_input_option="USER_ENTERED")
 
-        flash("Alteração gravada na BASE e no histórico com sucesso.", "ok")
+        flash(
+            f"Gravado com sucesso na BASE na linha {row_num}.",
+            "ok"
+        )
 
     except Exception as e:
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
