@@ -391,6 +391,7 @@ def get_base_structure(ws_base):
 
     final_headers = [norm(x) for x in rows[0]]
     data_rows = []
+
     for raw in rows[1:]:
         if len(raw) < len(final_headers):
             raw = raw + [""] * (len(final_headers) - len(raw))
@@ -437,8 +438,14 @@ def try_get_rep_name(rep_code):
 @app.errorhandler(Exception)
 def handle_any_exception(e):
     app.logger.error("ERRO NÃO TRATADO:\n%s", traceback.format_exc())
-    msg = norm(str(e)) or "Erro interno."
-    body = f"<div class='card'><b>Erro:</b><br><pre style='white-space:pre-wrap'>{h(msg)}</pre></div>"
+    msg = traceback.format_exc()
+
+    body = f"""
+    <div class='card'>
+      <b>Erro:</b><br>
+      <pre style='white-space:pre-wrap'>{h(msg)}</pre>
+    </div>
+    """
 
     current_user_photo = ""
     if session.get("user_type") == "rep":
@@ -481,12 +488,33 @@ BASE_HTML = """
     .rep-photo-placeholder { width: 88px; height: 88px; border-radius: 50%; border: 2px solid #d1d5db; background: #f8fafc; display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 12px; text-align: center; flex-shrink: 0; padding: 6px; box-sizing: border-box; }
 
     label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
-    input, select, textarea { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; color: #111827; box-sizing: border-box; font-family: Arial, sans-serif; }
-    input:focus, select:focus, textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: #111827;
+      box-sizing: border-box;
+      font-family: Arial, sans-serif;
+    }
 
-    textarea { min-height: 90px; resize: vertical; }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+    }
 
-    button { padding: 10px 14px; border-radius: 10px; border: 0; background: #2563eb; color: #fff; cursor: pointer; font-weight: 600; }
+    button {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 0;
+      background: #2563eb;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
     button.secondary { background: #6b7280; }
     button.danger { background: #dc2626; }
 
@@ -503,7 +531,6 @@ BASE_HTML = """
 
     .pill { padding: 3px 8px; border-radius: 999px; font-size: 12px; background: #f3f4f6; border: 1px solid #d1d5db; display: inline-block; color: #111827; }
     .small { color: #6b7280; font-size: 12px; }
-    .hint { color: #6b7280; font-size: 12px; margin-top: 6px; }
     .nowrap { white-space: nowrap; }
     .money { font-variant-numeric: tabular-nums; }
 
@@ -533,10 +560,11 @@ BASE_HTML = """
       {% endif %}
     </div>
   </div>
+
   <div class="container">
     {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for cat,msg in messages %}
-        <div class="msg {{ 'ok' if cat=='ok' else 'err' }}">{{ msg }}</div>
+      {% for cat, msg in messages %}
+        <div class="msg {{ 'ok' if cat == 'ok' else 'err' }}">{{ msg }}</div>
       {% endfor %}
     {% endwith %}
     {{ body|safe }}
@@ -722,7 +750,7 @@ def dashboard():
         ck = norm(r.get(key_col, "")) if key_col else ""
         repc = norm(r.get(rep_col, "")) if rep_col else ""
 
-        if not is_admin() and repc != session.get("rep_code"):
+        if not is_admin() and repc != norm(session.get("rep_code", "")):
             continue
         if is_admin() and sup_col and sup_sel and norm(r.get(sup_col, "")) != sup_sel:
             continue
@@ -735,11 +763,11 @@ def dashboard():
 
         row_copy = dict(r)
 
-        row_copy.setdefault("Data Agenda Visita", norm(r.get(data_agenda_col, "")) if data_agenda_col else "")
-        row_copy.setdefault("Mês", norm(r.get(mes_col, "")) if mes_col else "")
-        row_copy.setdefault("Semana Atendimento", norm(r.get(semana_col, "")) if semana_col else "")
-        row_copy.setdefault("Status Cliente", norm(r.get(status_cliente_col, "")) if status_cliente_col else "")
-        row_copy.setdefault("Observações", norm(r.get(observacoes_col, "")) if observacoes_col else "")
+        row_copy["Data Agenda Visita"] = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
+        row_copy["Mês"] = norm(r.get(mes_col, "")) if mes_col else ""
+        row_copy["Semana Atendimento"] = norm(r.get(semana_col, "")) if semana_col else ""
+        row_copy["Status Cliente"] = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
+        row_copy["Observações"] = norm(r.get(observacoes_col, "")) if observacoes_col else ""
 
         row_copy["_base_row_number"] = idx_base
 
@@ -759,7 +787,7 @@ def dashboard():
         key=lambda r: (
             r.get("_sort_priority", 99),
             norm(r.get(grupo_col, "")) if grupo_col else "",
-            norm(r.get(key_col, ""))
+            norm(r.get(key_col, "")) if key_col else ""
         )
     )
 
@@ -826,6 +854,7 @@ def dashboard():
         return "\n".join(out)
 
     table_rows = []
+
     for idx, r in enumerate(out_rows, start=1):
         ck = norm(r.get(key_col, "")) if key_col else ""
         grupo = norm(r.get(grupo_col, "")) if grupo_col else ""
@@ -898,19 +927,17 @@ def dashboard():
             </select>
           </td>
 
-          <<td style="min-width:380px;">
+          <td style="min-width:420px;">
             <div style="display:flex; align-items:center; gap:8px;">
-                <input
-                type="text"
-                name="Observações"
-                form="{form_id}"
-                placeholder="Digite observações..."
-                value="{h(obs)}"
-                style="flex:1; min-width:220px;"
-                >
-                <button type="submit" form="{form_id}" style="white-space:nowrap;">Gravar</button>
+              <input type="text"
+                     name="Observações"
+                     form="{form_id}"
+                     placeholder="Digite observações..."
+                     value="{h(obs)}"
+                     style="flex:1; min-width:260px;">
+              <button type="submit" form="{form_id}" style="white-space:nowrap;">Gravar</button>
             </div>
-            </td>
+          </td>
         </tr>
         """
         table_rows.append(row_html)
@@ -922,14 +949,14 @@ def dashboard():
           <label>Filtro Supervisor</label>
           <select name="sup">
             <option value="">(Todos)</option>
-            {''.join([f"<option value='{h(s)}' {'selected' if s == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
+            {''.join([f"<option value='{h(s)}' {'selected' if norm(s) == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
           </select>
         </div>
         <div>
           <label>Filtro Representante</label>
           <select name="rep">
             <option value="">(Todos)</option>
-            {''.join([f"<option value='{h(r)}' {'selected' if r == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
+            {''.join([f"<option value='{h(r)}' {'selected' if norm(r) == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
           </select>
         </div>
         """
@@ -1021,7 +1048,7 @@ def salvar():
         flash("Linha da BASE inválida para gravação.", "err")
         return redirect(url_for("dashboard", **redirect_args))
 
-    if user_type == "rep" and rep_code_form != session.get("rep_code"):
+    if user_type == "rep" and rep_code_form != norm(session.get("rep_code", "")):
         flash("Você não pode gravar alterações em clientes de outro representante.", "err")
         return redirect(url_for("dashboard", **redirect_args))
 
@@ -1072,6 +1099,7 @@ def salvar():
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
         flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
 
+    return redirect(url_for("dashboard", **redirect_args))
 
 
 if __name__ == "__main__":
