@@ -124,7 +124,7 @@ def normalize_header(s):
 
 
 def pick_col_exact(headers, candidates):
-    hmap = {normalize_header(h): h for h in headers}
+    hmap = {normalize_header(x): x for x in headers}
     for cand in candidates:
         key = normalize_header(cand)
         if key in hmap:
@@ -133,18 +133,18 @@ def pick_col_exact(headers, candidates):
 
 
 def pick_col_flexible(headers, candidates):
-    hmap = {normalize_header(h): h for h in headers}
+    hmap = {normalize_header(x): x for x in headers}
 
     for cand in candidates:
         key = normalize_header(cand)
         if key in hmap:
             return hmap[key]
 
-    for hname in headers:
-        hl = normalize_header(hname)
+    for header in headers:
+        header_norm = normalize_header(header)
         for cand in candidates:
-            if normalize_header(cand) in hl:
-                return hname
+            if normalize_header(cand) in header_norm:
+                return header
 
     return None
 
@@ -217,20 +217,14 @@ def get_rep_photo_src(codigo_rep):
         return ""
 
     exts = ["png", "jpg", "jpeg", "webp"]
-
     base_static_dir = os.path.join(app.root_path, "static", "representantes")
+
     for ext in exts:
         abs_path = os.path.join(base_static_dir, f"{codigo}.{ext}")
         if os.path.exists(abs_path):
             return f"/static/representantes/{codigo}.{ext}"
 
     return ""
-
-
-def render_photo_html(photo_src, alt_text="Foto", css_class="rep-photo-mini"):
-    if photo_src:
-        return f'<img src="{h(photo_src)}" alt="{h(alt_text)}" class="{h(css_class)}">'
-    return '<div class="rep-photo-mini-placeholder">Sem foto</div>'
 
 
 def fmt_money(v):
@@ -486,9 +480,6 @@ BASE_HTML = """
     .rep-photo { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 2px solid #d1d5db; background: #f8fafc; flex-shrink: 0; }
     .rep-photo-placeholder { width: 88px; height: 88px; border-radius: 50%; border: 2px solid #d1d5db; background: #f8fafc; display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 12px; text-align: center; flex-shrink: 0; padding: 6px; box-sizing: border-box; }
 
-    .rep-photo-mini { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; display: block; margin: 0 auto; }
-    .rep-photo-mini-placeholder { width: 42px; height: 42px; border-radius: 50%; border: 1px solid #d1d5db; background: #f8fafc; color: #6b7280; font-size: 9px; display: flex; align-items: center; justify-content: center; margin: 0 auto; text-align: center; padding: 2px; box-sizing: border-box; }
-
     label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
     input, select, textarea { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; color: #111827; box-sizing: border-box; font-family: Arial, sans-serif; }
     input:focus, select:focus, textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
@@ -726,6 +717,7 @@ def dashboard():
     rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if is_admin() else []
 
     prepared_rows = []
+
     for idx_base, r in enumerate(base_rows, start=2):
         ck = norm(r.get(key_col, "")) if key_col else ""
         repc = norm(r.get(rep_col, "")) if rep_col else ""
@@ -742,6 +734,13 @@ def dashboard():
                 continue
 
         row_copy = dict(r)
+
+        row_copy.setdefault("Data Agenda Visita", norm(r.get(data_agenda_col, "")) if data_agenda_col else "")
+        row_copy.setdefault("Mês", norm(r.get(mes_col, "")) if mes_col else "")
+        row_copy.setdefault("Semana Atendimento", norm(r.get(semana_col, "")) if semana_col else "")
+        row_copy.setdefault("Status Cliente", norm(r.get(status_cliente_col, "")) if status_cliente_col else "")
+        row_copy.setdefault("Observações", norm(r.get(observacoes_col, "")) if observacoes_col else "")
+
         row_copy["_base_row_number"] = idx_base
 
         status_cor_final, row_class, priority = resolve_status_cor_from_base(
@@ -753,18 +752,71 @@ def dashboard():
         row_copy["_status_cor"] = status_cor_final
         row_copy["_row_class"] = row_class
         row_copy["_sort_priority"] = priority
+
         prepared_rows.append(row_copy)
 
     prepared_rows.sort(
         key=lambda r: (
             r.get("_sort_priority", 99),
             norm(r.get(grupo_col, "")) if grupo_col else "",
-            norm(r.get(key_col, "")) if key_col else ""
+            norm(r.get(key_col, ""))
         )
     )
 
     out_rows = prepared_rows[:PAGE_SIZE]
-    current_user_photo = get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else ""
+
+    current_user_photo = ""
+    if session.get("user_type") == "rep":
+        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
+    rep_card_html = ""
+
+    selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
+
+    if selected_rep_code and rep_col:
+        rep_name_base = ""
+        rep_sup_base = ""
+        rep_reg_base = ""
+
+        for r in base_rows:
+            if norm(r.get(rep_col, "")) == selected_rep_code:
+                rep_name_base = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+                rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
+                rep_reg_base = ""
+                if rep_name_base:
+                    break
+
+        foto_url = get_rep_photo_src(selected_rep_code)
+        nome_card = rep_name_base or f"Representante {selected_rep_code}"
+        sup_card = rep_sup_base
+        regiao_card = rep_reg_base
+
+        foto_html = (
+            f'<img src="{h(foto_url)}" alt="Foto do representante" class="rep-photo">'
+            if foto_url else
+            '<div class="rep-photo-placeholder">Sem foto</div>'
+        )
+
+        infos = []
+        infos.append(f"<div><b>Código:</b> {h(selected_rep_code)}</div>")
+        if nome_card:
+            infos.append(f"<div><b>Representante:</b> {h(nome_card)}</div>")
+        if sup_card:
+            infos.append(f"<div><b>Supervisor:</b> {h(sup_card)}</div>")
+        if regiao_card:
+            infos.append(f"<div><b>Região:</b> {h(regiao_card)}</div>")
+
+        rep_card_html = f"""
+        <div class="card">
+          <div class="rep-card">
+            {foto_html}
+            <div>
+              <div style="font-size:18px; font-weight:700; margin-bottom:6px;">Representante selecionado</div>
+              {''.join(infos)}
+            </div>
+          </div>
+        </div>
+        """
 
     def opt_html(options, selected):
         out = ["<option value=''></option>"]
@@ -786,19 +838,16 @@ def dashboard():
         t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
         t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
 
-        dav = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
-        mes = norm(r.get(mes_col, "")) if mes_col else ""
-        sem = norm(r.get(semana_col, "")) if semana_col else ""
-        stc = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
-        obs = norm(r.get(observacoes_col, "")) if observacoes_col else ""
+        dav = norm(r.get("Data Agenda Visita", ""))
+        mes = norm(r.get("Mês", ""))
+        sem = norm(r.get("Semana Atendimento", ""))
+        stc = norm(r.get("Status Cliente", ""))
+        obs = norm(r.get("Observações", ""))
 
         status_cor = r.get("_status_cor", "")
         klass = r.get("_row_class", "")
         base_row_number = r.get("_base_row_number", "")
         form_id = f"form_row_{idx}"
-
-        rep_photo_src = get_rep_photo_src(repc)
-        rep_photo_html = render_photo_html(rep_photo_src, f"Foto representante {repc}")
 
         hidden_filters = ""
         if sup_sel:
@@ -812,7 +861,6 @@ def dashboard():
         <tr class="{h(klass)}">
           <td class="nowrap">{h(ck)}</td>
           <td>{h(grupo)}</td>
-          <td style="text-align:center;">{rep_photo_html}</td>
           <td class="nowrap">{h(repc)}</td>
           <td>{h(nome_rep)}</td>
           <td class="nowrap">{h(supv)}</td>
@@ -880,6 +928,8 @@ def dashboard():
         """
 
     body = f"""
+    {rep_card_html}
+
     <div class="card">
       <form method="get">
         <div class="grid">
@@ -902,7 +952,6 @@ def dashboard():
           <tr>
             <th>Codigo Grupo Cliente</th>
             <th>Grupo Cliente</th>
-            <th>Foto</th>
             <th>Codigo Representante</th>
             <th>Representante</th>
             <th>Supervisor</th>
@@ -1016,7 +1065,6 @@ def salvar():
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
         flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
 
-    return redirect(url_for("dashboard", **redirect_args))
 
 
 if __name__ == "__main__":
