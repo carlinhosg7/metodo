@@ -31,6 +31,7 @@ WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
+DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
 
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
@@ -265,6 +266,14 @@ def safe_cell(vals, idx_1_based):
     return norm(vals[pos]) if pos < len(vals) else ""
 
 
+def set_last_save_debug(payload):
+    session["last_save_debug"] = payload
+
+
+def get_last_save_debug():
+    return session.get("last_save_debug", {})
+
+
 # =========================
 # GOOGLE SHEETS
 # =========================
@@ -327,13 +336,6 @@ def safe_get_raw_rows(ws):
         rows.append(row)
 
     return headers, rows
-
-
-def get_or_create_worksheet(sh, title, rows=1000, cols=20):
-    try:
-        return sh.worksheet(title)
-    except WorksheetNotFound:
-        return sh.add_worksheet(title=title, rows=str(rows), cols=str(cols))
 
 
 def ensure_headers(ws, headers):
@@ -451,6 +453,28 @@ def try_get_rep_name(rep_code):
         return ""
 
 
+def build_debug_sheet_info(sh=None):
+    try:
+        if sh is None:
+            sh = connect_gs()
+
+        abas = [ws.title for ws in sh.worksheets()]
+        return {
+            "sheet_id": SHEET_ID,
+            "spreadsheet_title": norm(getattr(sh, "title", "")),
+            "worksheets": abas,
+            "ok": True,
+        }
+    except Exception as e:
+        return {
+            "sheet_id": SHEET_ID,
+            "spreadsheet_title": "",
+            "worksheets": [],
+            "ok": False,
+            "error": str(e),
+        }
+
+
 # =========================
 # ERROR HANDLER
 # =========================
@@ -564,6 +588,21 @@ BASE_HTML = """
     .row-yellow { background: rgba(234,179,8,0.18); }
     .row-green { background: rgba(34,197,94,0.16); }
     .row-blue { background: rgba(56,189,248,0.14); }
+
+    .debug-card {
+      background: #0f172a;
+      color: #e2e8f0;
+      border: 1px solid #1e293b;
+    }
+    .debug-card .line {
+      margin-bottom: 6px;
+      word-break: break-word;
+    }
+    .debug-card .title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
   </style>
 </head>
 <body>
@@ -683,6 +722,8 @@ def dashboard():
         return redirect(url_for("login"))
 
     sh = connect_gs()
+    debug_info = build_debug_sheet_info(sh)
+    last_save = get_last_save_debug()
 
     try:
         ws_base = sh.worksheet(WS_BASE)
@@ -867,6 +908,39 @@ def dashboard():
         </div>
         """
 
+    debug_html = ""
+    if DEBUG_MODE:
+        abas = ", ".join(debug_info.get("worksheets", []))
+        last_row = h(last_save.get("row_num", ""))
+        last_ck = h(last_save.get("client_key", ""))
+        last_data = h(last_save.get("data_agenda", ""))
+        last_mes = h(last_save.get("mes", ""))
+        last_semana = h(last_save.get("semana", ""))
+        last_status = h(last_save.get("status_cliente", ""))
+        last_obs = h(last_save.get("observacoes", ""))
+        last_result = h(last_save.get("result", ""))
+
+        debug_html = f"""
+        <div class="card debug-card">
+          <div class="title">DEBUG CONEXÃO / GRAVAÇÃO</div>
+          <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
+          <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
+          <div class="line"><b>ABAS:</b> {h(abas)}</div>
+          <div class="line"><b>USUÁRIO:</b> {h(session.get("user_login", ""))} ({h(session.get("user_type", ""))})</div>
+          <div class="line"><b>REPRESENTANTE LOGADO:</b> {h(session.get("rep_code", ""))}</div>
+          <div class="line"><b>REPRESENTANTE FILTRADO:</b> {h(selected_rep_code)}</div>
+          <hr style="border-color:#334155;">
+          <div class="line"><b>ÚLTIMA LINHA GRAVADA:</b> {last_row}</div>
+          <div class="line"><b>ÚLTIMO CLIENT_KEY:</b> {last_ck}</div>
+          <div class="line"><b>ÚLTIMA DATA:</b> {last_data}</div>
+          <div class="line"><b>ÚLTIMO MÊS:</b> {last_mes}</div>
+          <div class="line"><b>ÚLTIMA SEMANA:</b> {last_semana}</div>
+          <div class="line"><b>ÚLTIMO STATUS:</b> {last_status}</div>
+          <div class="line"><b>ÚLTIMA OBS:</b> {last_obs}</div>
+          <div class="line"><b>RESULTADO:</b> {last_result}</div>
+        </div>
+        """
+
     def opt_html(options, selected):
         out = ["<option value=''></option>"]
         for o in options:
@@ -983,6 +1057,7 @@ def dashboard():
         """
 
     body = f"""
+    {debug_html}
     {rep_card_html}
 
     <div class="card">
@@ -1076,7 +1151,13 @@ def salvar():
     try:
         sh = connect_gs()
         ws_base = sh.worksheet(WS_BASE)
-        ws_ed = ensure_edicoes_worksheet(sh)
+
+        try:
+            ws_ed = ensure_edicoes_worksheet(sh)
+            edicoes_ok = True
+        except Exception:
+            ws_ed = None
+            edicoes_ok = False
 
         headers = ensure_base_tracking_columns(ws_base)
         headers_norm = [norm(x) for x in headers]
@@ -1123,6 +1204,16 @@ def salvar():
         )
 
         if not conferiu:
+            set_last_save_debug({
+                "row_num": row_num,
+                "client_key": client_key,
+                "data_agenda": gravado_data,
+                "mes": gravado_mes,
+                "semana": gravado_semana,
+                "status_cliente": gravado_status,
+                "observacoes": gravado_obs,
+                "result": "FALHA NA CONFIRMAÇÃO",
+            })
             raise RuntimeError(
                 "A gravação não foi confirmada na BASE. "
                 f"Linha={row_num} | "
@@ -1133,27 +1224,51 @@ def salvar():
                 f"Obs='{gravado_obs}'"
             )
 
-        row_log = [
-            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            user_type,
-            user_login,
-            rep_code_form,
-            client_key,
-            data_agenda,
-            mes,
-            semana,
-            status_cliente,
-            observacoes
-        ]
-        ws_ed.append_row(row_log, value_input_option="USER_ENTERED")
+        if edicoes_ok and ws_ed is not None:
+            row_log = [
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                user_type,
+                user_login,
+                rep_code_form,
+                client_key,
+                data_agenda,
+                mes,
+                semana,
+                status_cliente,
+                observacoes
+            ]
+            ws_ed.append_row(row_log, value_input_option="USER_ENTERED")
+            result_txt = "BASE OK / EDICOES OK"
+        else:
+            result_txt = "BASE OK / EDICOES NÃO DISPONÍVEL"
 
-        flash(
-            f"Gravado com sucesso na BASE na linha {row_num}.",
-            "ok"
-        )
+        set_last_save_debug({
+            "row_num": row_num,
+            "client_key": client_key,
+            "data_agenda": gravado_data,
+            "mes": gravado_mes,
+            "semana": gravado_semana,
+            "status_cliente": gravado_status,
+            "observacoes": gravado_obs,
+            "result": result_txt,
+        })
+
+        flash(f"Gravado com sucesso na BASE na linha {row_num}.", "ok")
+        if not edicoes_ok:
+            flash("A BASE foi gravada, mas a aba EDICOES não pôde ser usada. Crie a aba manualmente ou ajuste a permissão da service account.", "err")
 
     except Exception as e:
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
+        set_last_save_debug({
+            "row_num": base_row_number,
+            "client_key": client_key,
+            "data_agenda": request.form.get("Data Agenda Visita", ""),
+            "mes": request.form.get("Mês", ""),
+            "semana": request.form.get("Semana Atendimento", ""),
+            "status_cliente": request.form.get("Status Cliente", ""),
+            "observacoes": request.form.get("Observações", ""),
+            "result": f"ERRO: {str(e)}",
+        })
         flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
 
     return redirect(url_for("dashboard", **redirect_args))
