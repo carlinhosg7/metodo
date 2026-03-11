@@ -62,7 +62,7 @@ DEFAULT_STATUS = [
 # =========================
 # APP
 # =========================
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=7)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -140,11 +140,11 @@ def pick_col_flexible(headers, candidates):
         if key in hmap:
             return hmap[key]
 
-    for h in headers:
-        hl = normalize_header(h)
+    for hname in headers:
+        hl = normalize_header(hname)
         for cand in candidates:
             if normalize_header(cand) in hl:
-                return h
+                return hname
 
     return None
 
@@ -217,12 +217,20 @@ def get_rep_photo_src(codigo_rep):
         return ""
 
     exts = ["png", "jpg", "jpeg", "webp"]
+
+    base_static_dir = os.path.join(app.root_path, "static", "representantes")
     for ext in exts:
-        rel_path = os.path.join("static", "representantes", f"{codigo}.{ext}")
-        if os.path.exists(rel_path):
+        abs_path = os.path.join(base_static_dir, f"{codigo}.{ext}")
+        if os.path.exists(abs_path):
             return f"/static/representantes/{codigo}.{ext}"
 
     return ""
+
+
+def render_photo_html(photo_src, alt_text="Foto", css_class="rep-photo-mini"):
+    if photo_src:
+        return f'<img src="{h(photo_src)}" alt="{h(alt_text)}" class="{h(css_class)}">'
+    return '<div class="rep-photo-mini-placeholder">Sem foto</div>'
 
 
 def fmt_money(v):
@@ -347,9 +355,10 @@ def ensure_edicoes_worksheet(sh):
         "Data Agenda Visita",
         "Mês",
         "Semana Atendimento",
-        "Status Cliente"
+        "Status Cliente",
+        "Observações"
     ]
-    ws = get_or_create_worksheet(sh, WS_EDICOES, rows=5000, cols=20)
+    ws = get_or_create_worksheet(sh, WS_EDICOES, rows=5000, cols=30)
     ensure_headers(ws, headers)
     return ws
 
@@ -363,7 +372,8 @@ def ensure_base_tracking_columns(ws_base):
         "Data Agenda Visita",
         "Mês",
         "Semana Atendimento",
-        "Status Cliente"
+        "Status Cliente",
+        "Observações"
     ]
 
     changed = False
@@ -468,35 +478,50 @@ BASE_HTML = """
     .topbar { background: #ffffff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d1d5db; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
     .topbar-right { display: flex; align-items: center; gap: 10px; }
     .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
+
     .container { padding: 16px; }
     .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+
     .rep-card { display: flex; align-items: center; gap: 16px; }
     .rep-photo { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 2px solid #d1d5db; background: #f8fafc; flex-shrink: 0; }
     .rep-photo-placeholder { width: 88px; height: 88px; border-radius: 50%; border: 2px solid #d1d5db; background: #f8fafc; display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 12px; text-align: center; flex-shrink: 0; padding: 6px; box-sizing: border-box; }
+
+    .rep-photo-mini { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; display: block; margin: 0 auto; }
+    .rep-photo-mini-placeholder { width: 42px; height: 42px; border-radius: 50%; border: 1px solid #d1d5db; background: #f8fafc; color: #6b7280; font-size: 9px; display: flex; align-items: center; justify-content: center; margin: 0 auto; text-align: center; padding: 2px; box-sizing: border-box; }
+
     label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
-    input, select { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; color: #111827; box-sizing: border-box; }
-    input:focus, select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+    input, select, textarea { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #cbd5e1; background: #ffffff; color: #111827; box-sizing: border-box; font-family: Arial, sans-serif; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+
+    textarea { min-height: 90px; resize: vertical; }
+
     button { padding: 10px 14px; border-radius: 10px; border: 0; background: #2563eb; color: #fff; cursor: pointer; font-weight: 600; }
     button.secondary { background: #6b7280; }
     button.danger { background: #dc2626; }
+
     table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
     th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; vertical-align: top; }
     th { position: sticky; top: 0; background: #f8fafc; color: #374151; text-align: left; z-index: 2; }
+
     .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
     .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
     .ok { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
     .err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+
     .pill { padding: 3px 8px; border-radius: 999px; font-size: 12px; background: #f3f4f6; border: 1px solid #d1d5db; display: inline-block; color: #111827; }
     .small { color: #6b7280; font-size: 12px; }
     .hint { color: #6b7280; font-size: 12px; margin-top: 6px; }
     .nowrap { white-space: nowrap; }
     .money { font-variant-numeric: tabular-nums; }
+
     .login-wrap { min-height: calc(100vh - 90px); display: flex; align-items: center; justify-content: center; padding: 24px; }
     .login-card { width: 100%; max-width: 520px; text-align: center; }
     .login-logo { max-width: 220px; width: 100%; height: auto; margin: 0 auto 18px auto; display: block; }
     .login-title { margin-top: 0; margin-bottom: 6px; color: #111827; }
     .login-subtitle { margin-top: 0; margin-bottom: 20px; color: #6b7280; font-size: 14px; }
+
     .row-red { background: rgba(220,38,38,0.16); }
     .row-orange { background: rgba(249,115,22,0.16); }
     .row-yellow { background: rgba(234,179,8,0.18); }
@@ -687,6 +712,7 @@ def dashboard():
     mes_col = pick_col_exact(headers, ["Mês"])
     semana_col = pick_col_exact(headers, ["Semana Atendimento"])
     status_cliente_col = pick_col_exact(headers, ["Status Cliente"])
+    observacoes_col = pick_col_exact(headers, ["Observações", "Observacao", "Observacoes"])
 
     meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
     semanas = unique_list([r.get("Semana Atendimento", "") for r in lista_rows]) or DEFAULT_SEMANAS
@@ -764,11 +790,15 @@ def dashboard():
         mes = norm(r.get(mes_col, "")) if mes_col else ""
         sem = norm(r.get(semana_col, "")) if semana_col else ""
         stc = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
+        obs = norm(r.get(observacoes_col, "")) if observacoes_col else ""
 
         status_cor = r.get("_status_cor", "")
         klass = r.get("_row_class", "")
         base_row_number = r.get("_base_row_number", "")
         form_id = f"form_row_{idx}"
+
+        rep_photo_src = get_rep_photo_src(repc)
+        rep_photo_html = render_photo_html(rep_photo_src, f"Foto representante {repc}")
 
         hidden_filters = ""
         if sup_sel:
@@ -782,6 +812,7 @@ def dashboard():
         <tr class="{h(klass)}">
           <td class="nowrap">{h(ck)}</td>
           <td>{h(grupo)}</td>
+          <td style="text-align:center;">{rep_photo_html}</td>
           <td class="nowrap">{h(repc)}</td>
           <td>{h(nome_rep)}</td>
           <td class="nowrap">{h(supv)}</td>
@@ -817,6 +848,10 @@ def dashboard():
             <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
               {opt_html(status_list, stc)}
             </select>
+          </td>
+
+          <td style="min-width:280px;">
+            <textarea name="Observações" form="{form_id}" placeholder="Digite observações...">{h(obs)}</textarea>
             <div style="margin-top:8px;">
               <button type="submit" form="{form_id}">Gravar</button>
             </div>
@@ -867,6 +902,7 @@ def dashboard():
           <tr>
             <th>Codigo Grupo Cliente</th>
             <th>Grupo Cliente</th>
+            <th>Foto</th>
             <th>Codigo Representante</th>
             <th>Representante</th>
             <th>Supervisor</th>
@@ -879,6 +915,7 @@ def dashboard():
             <th>Mês</th>
             <th>Semana Atendimento</th>
             <th>Status Cliente</th>
+            <th>Observações</th>
           </tr>
         </thead>
         <tbody>
@@ -891,7 +928,7 @@ def dashboard():
     return render_template_string(
         BASE_HTML,
         title=APP_TITLE,
-        subtitle=f"Planilha: {h(WS_BASE)}",
+        subtitle=f"Planilha: {WS_BASE}",
         logged=True,
         user_login=session.get("user_login"),
         user_name=session.get("rep_name", ""),
@@ -943,6 +980,7 @@ def salvar():
         mes = norm(request.form.get("Mês", ""))
         semana = norm(request.form.get("Semana Atendimento", ""))
         status_cliente = norm(request.form.get("Status Cliente", ""))
+        observacoes = norm(request.form.get("Observações", ""))
 
         row_num = int(base_row_number)
 
@@ -950,11 +988,13 @@ def salvar():
         col_mes = headers.index("Mês") + 1
         col_semana = headers.index("Semana Atendimento") + 1
         col_status = headers.index("Status Cliente") + 1
+        col_obs = headers.index("Observações") + 1
 
         ws_base.update_acell(rowcol_to_a1(row_num, col_data), data_agenda)
         ws_base.update_acell(rowcol_to_a1(row_num, col_mes), mes)
         ws_base.update_acell(rowcol_to_a1(row_num, col_semana), semana)
         ws_base.update_acell(rowcol_to_a1(row_num, col_status), status_cliente)
+        ws_base.update_acell(rowcol_to_a1(row_num, col_obs), observacoes)
 
         row_log = [
             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
@@ -966,10 +1006,11 @@ def salvar():
             mes,
             semana,
             status_cliente,
+            observacoes
         ]
         ws_ed.append_row(row_log, value_input_option="USER_ENTERED")
 
-        flash("Alteração gravada na BASE com sucesso.", "ok")
+        flash("Alteração gravada na BASE e no histórico com sucesso.", "ok")
 
     except Exception as e:
         app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
