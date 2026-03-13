@@ -548,7 +548,7 @@ BASE_HTML = """
       box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
     }
 
-    button {
+    button, .btn-link {
       padding: 10px 14px;
       border-radius: 10px;
       border: 0;
@@ -556,10 +556,16 @@ BASE_HTML = """
       color: #fff;
       cursor: pointer;
       font-weight: 600;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
     }
 
-    button.secondary { background: #6b7280; }
-    button.danger { background: #dc2626; }
+    button.secondary, .btn-link.secondary { background: #6b7280; }
+    button.danger, .btn-link.danger { background: #dc2626; }
+    .btn-link.dark { background: #111827; }
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
     th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; vertical-align: top; }
@@ -567,6 +573,7 @@ BASE_HTML = """
 
     .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 
     .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
     .ok { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
@@ -603,6 +610,25 @@ BASE_HTML = """
       font-weight: 700;
       margin-bottom: 12px;
     }
+
+    .kpi {
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    .kpi-title {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .kpi-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: #111827;
+    }
   </style>
 </head>
 <body>
@@ -610,6 +636,10 @@ BASE_HTML = """
     <div><b>Acompanhamento de clientes</b> <span class="small">| {{ subtitle }}</span></div>
     <div class="topbar-right">
       {% if logged %}
+        {% if user_type == 'admin' %}
+          <a href="{{ url_for('admin_dashboard') }}" class="btn-link dark">Dashboard</a>
+          <a href="{{ url_for('dashboard') }}" class="btn-link secondary">Carteira</a>
+        {% endif %}
         {% if user_photo_url %}
           <img src="{{ user_photo_url }}" alt="Foto do usuário" class="topbar-avatar">
         {% endif %}
@@ -713,6 +743,167 @@ def logout():
     session.clear()
     flash("Sessão encerrada.", "ok")
     return redirect(url_for("login"))
+
+
+@app.route("/admin-dashboard", methods=["GET"])
+def admin_dashboard():
+    if not require_login():
+        flash("Faça login para continuar.", "err")
+        return redirect(url_for("login"))
+
+    if not is_admin():
+        flash("Acesso permitido somente para admin.", "err")
+        return redirect(url_for("dashboard"))
+
+    try:
+        sh = connect_gs()
+        debug_info = build_debug_sheet_info(sh)
+
+        try:
+            ws_base = sh.worksheet(WS_BASE)
+            headers, base_rows = get_base_structure(ws_base)
+        except Exception:
+            headers, base_rows = [], []
+
+        rep_col = pick_col_flexible(headers, [
+            "Codigo Representante", "Código Representante",
+            "CODIGO REPRESENTANTE", "COD_REP"
+        ])
+        sup_col = pick_col_flexible(headers, [
+            "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
+        ])
+        grupo_col = pick_col_flexible(headers, [
+            "Grupo Cliente", "Nome Cliente", "Cliente",
+            "Razao Social", "Razão Social", "Fantasia", "Nome"
+        ])
+        status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor", "STATUSCOR", "StatusCor"])
+        cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
+
+        total_registros = len(base_rows)
+        total_representantes = len(unique_list([r.get(rep_col, "") for r in base_rows])) if rep_col else 0
+        total_supervisores = len(unique_list([r.get(sup_col, "") for r in base_rows])) if sup_col else 0
+
+        clientes_vermelhos = 0
+        clientes_laranja = 0
+        clientes_amarelos = 0
+        clientes_verdes = 0
+        clientes_azuis = 0
+
+        for r in base_rows:
+            status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                r,
+                status_cor_col=status_cor_col,
+                cliente_novo_col=cliente_novo_col
+            )
+
+            s = normalize_text_for_match(status_cor_final)
+            if "VERMELH" in s:
+                clientes_vermelhos += 1
+            elif "LARANJ" in s:
+                clientes_laranja += 1
+            elif "AMAREL" in s:
+                clientes_amarelos += 1
+            elif "VERDE" in s:
+                clientes_verdes += 1
+            elif "AZUL" in s or "NOVO" in s:
+                clientes_azuis += 1
+
+        body = f"""
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+            <div>
+              <div style="font-size:22px; font-weight:700;">Dashboard Administrativo</div>
+              <div class="small">Estrutura inicial criada. Depois você me passa os blocos e métricas que quer aqui.</div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <a href="{url_for('dashboard')}" class="btn-link secondary">Voltar para Carteira</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-3" style="margin-bottom:14px;">
+          <div class="kpi">
+            <div class="kpi-title">Total de registros na base</div>
+            <div class="kpi-value">{total_registros}</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-title">Representantes</div>
+            <div class="kpi-value">{total_representantes}</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-title">Supervisores</div>
+            <div class="kpi-value">{total_supervisores}</div>
+          </div>
+        </div>
+
+        <div class="grid-3" style="margin-bottom:14px;">
+          <div class="kpi">
+            <div class="kpi-title">Status Vermelho</div>
+            <div class="kpi-value">{clientes_vermelhos}</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-title">Status Laranja</div>
+            <div class="kpi-value">{clientes_laranja}</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-title">Status Amarelo</div>
+            <div class="kpi-value">{clientes_amarelos}</div>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-bottom:14px;">
+          <div class="kpi">
+            <div class="kpi-title">Status Verde</div>
+            <div class="kpi-value">{clientes_verdes}</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-title">Status Azul / Cliente Novo</div>
+            <div class="kpi-value">{clientes_azuis}</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="font-size:18px; font-weight:700; margin-bottom:8px;">Próxima estrutura</div>
+          <div class="small" style="line-height:1.7;">
+            Esta área já está pronta para receber:<br>
+            • KPIs principais<br>
+            • gráficos por supervisor<br>
+            • gráficos por representante<br>
+            • funil de atendimento<br>
+            • clientes por status<br>
+            • agenda por mês/semana<br>
+            • ranking comercial
+          </div>
+        </div>
+        """
+
+        if DEBUG_MODE:
+            abas = ", ".join(debug_info.get("worksheets", []))
+            body += f"""
+            <div class="card debug-card">
+              <div class="title">DEBUG DASHBOARD ADMIN</div>
+              <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
+              <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
+              <div class="line"><b>ABAS:</b> {h(abas)}</div>
+              <div class="line"><b>TOTAL BASE_ROWS:</b> {h(total_registros)}</div>
+            </div>
+            """
+
+        return render_template_string(
+            BASE_HTML,
+            title=APP_TITLE,
+            subtitle="Dashboard Admin",
+            logged=True,
+            user_login=session.get("user_login"),
+            user_name=session.get("rep_name", ""),
+            user_type=session.get("user_type"),
+            user_photo_url="",
+            body=body
+        )
+
+    except Exception as e:
+        flash(f"Erro ao abrir dashboard admin: {norm(str(e))}", "err")
+        return redirect(url_for("dashboard"))
 
 
 @app.route("/dashboard", methods=["GET"])
