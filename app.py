@@ -30,6 +30,9 @@ WS_BASE = os.getenv("WS_BASE", "BASE").strip()
 WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 
+MUNICIPIOS_SHEET_ID = os.getenv("MUNICIPIOS_SHEET_ID", "").strip()
+WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
+
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
 
@@ -124,6 +127,32 @@ def normalize_header(s):
     return s
 
 
+def normalize_text_for_match(v):
+    s = norm(v).upper()
+    s = (
+        s.replace("Á", "A")
+         .replace("À", "A")
+         .replace("Ã", "A")
+         .replace("Â", "A")
+         .replace("É", "E")
+         .replace("Ê", "E")
+         .replace("Í", "I")
+         .replace("Ó", "O")
+         .replace("Ô", "O")
+         .replace("Õ", "O")
+         .replace("Ú", "U")
+         .replace("Ç", "C")
+    )
+    return s
+
+
+def normalize_city_key(v):
+    s = normalize_text_for_match(v)
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def pick_col_exact(headers, candidates):
     hmap = {normalize_header(x): x for x in headers}
     for cand in candidates:
@@ -152,25 +181,6 @@ def pick_col_flexible(headers, candidates):
 
 def clean_color_text(v):
     return norm(v)
-
-
-def normalize_text_for_match(v):
-    s = norm(v).upper()
-    s = (
-        s.replace("Á", "A")
-         .replace("À", "A")
-         .replace("Ã", "A")
-         .replace("Â", "A")
-         .replace("É", "E")
-         .replace("Ê", "E")
-         .replace("Í", "I")
-         .replace("Ó", "O")
-         .replace("Ô", "O")
-         .replace("Õ", "O")
-         .replace("Ú", "U")
-         .replace("Ç", "C")
-    )
-    return s
 
 
 def is_truthy_novo(v):
@@ -280,7 +290,6 @@ def parse_number_br(value):
         return 0.0
 
     s = s.replace("R$", "").replace(" ", "")
-
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
@@ -290,6 +299,23 @@ def parse_number_br(value):
         return float(s)
     except Exception:
         return 0.0
+
+
+def parse_float_any(value):
+    s = norm(value)
+    if not s:
+        return None
+
+    s = s.replace(" ", "")
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+
+    try:
+        return float(s)
+    except Exception:
+        return None
 
 
 def format_number_br(value):
@@ -306,10 +332,6 @@ def format_money_br(value):
     return f"R$ {format_number_br(value)}"
 
 
-def is_zero_or_blank(v):
-    return parse_number_br(v) == 0.0
-
-
 def render_status_badge_text(status_cor):
     s = normalize_text_for_match(status_cor)
     if "VERMELH" in s:
@@ -323,6 +345,82 @@ def render_status_badge_text(status_cor):
     if "AZUL" in s or "NOVO" in s:
         return "Azul"
     return norm(status_cor)
+
+
+def city_sale_color(total_2026_value):
+    return "#16a34a" if parse_number_br(total_2026_value) > 0 else "#dc2626"
+
+
+def build_city_map_svg(city_points, width=700, height=420):
+    if not city_points:
+        return """
+        <div class="dash-map-placeholder">
+          Não foi possível montar o mapa.<br><br>
+          Verifique a planilha de municípios, a aba <b>cidades</b> e as colunas de cidade, latitude e longitude.
+        </div>
+        """
+
+    valid_points = [
+        p for p in city_points
+        if p.get("lat") is not None and p.get("lon") is not None
+    ]
+
+    if not valid_points:
+        return """
+        <div class="dash-map-placeholder">
+          Nenhuma coordenada válida encontrada na aba <b>cidades</b>.
+        </div>
+        """
+
+    min_lon = min(p["lon"] for p in valid_points)
+    max_lon = max(p["lon"] for p in valid_points)
+    min_lat = min(p["lat"] for p in valid_points)
+    max_lat = max(p["lat"] for p in valid_points)
+
+    if min_lon == max_lon:
+        max_lon += 0.01
+    if min_lat == max_lat:
+        max_lat += 0.01
+
+    pad = 24
+
+    def project(lon, lat):
+        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
+        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
+        return x, y
+
+    circles = []
+    labels = []
+    for p in valid_points:
+        x, y = project(p["lon"], p["lat"])
+        fill = p["fill"]
+        title = h(f"{p['cidade']} | {p['status_txt']} | Total 2026: {format_number_br(p['total_2026'])}")
+        circles.append(
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="5.5" fill="{fill}" stroke="#ffffff" stroke-width="1.5">'
+            f'<title>{title}</title></circle>'
+        )
+
+    svg = f"""
+    <div style="width:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:8px; box-sizing:border-box;">
+      <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
+        <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
+        <rect x="12" y="12" width="{width-24}" height="{height-24}" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 4"></rect>
+        {''.join(circles)}
+      </svg>
+
+      <div style="display:flex; gap:14px; justify-content:center; align-items:center; margin-top:8px; flex-wrap:wrap; font-size:11px;">
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:12px; height:12px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
+          Com vendas
+        </span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:12px; height:12px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
+          Sem vendas
+        </span>
+      </div>
+    </div>
+    """
+    return svg
 
 
 # =========================
@@ -344,9 +442,9 @@ def _load_service_account_info():
     return info
 
 
-def connect_gs():
-    if not SHEET_ID:
-        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
+def connect_gs_by_key(sheet_key):
+    if not sheet_key:
+        raise RuntimeError("Sheet ID não informado.")
 
     info = _load_service_account_info()
     scopes = [
@@ -355,7 +453,18 @@ def connect_gs():
     ]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(SHEET_ID)
+    return gc.open_by_key(sheet_key)
+
+
+def connect_gs():
+    if not SHEET_ID:
+        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
+    return connect_gs_by_key(SHEET_ID)
+
+
+def connect_municipios_gs():
+    target_id = MUNICIPIOS_SHEET_ID or SHEET_ID
+    return connect_gs_by_key(target_id)
 
 
 def safe_get_all_records(ws):
@@ -662,9 +771,6 @@ BASE_HTML = """
       margin-bottom: 12px;
     }
 
-    /* ===============================
-       DASHBOARD ADMIN A3
-       =============================== */
     .dash-page {
       display: flex;
       flex-direction: column;
@@ -947,23 +1053,9 @@ BASE_HTML = """
     }
 
     @media print {
-      body {
-        background: #ffffff;
-      }
-
-      .topbar,
-      .card:first-child,
-      .print-toolbar,
-      .no-print,
-      .msg {
-        display: none !important;
-      }
-
-      .container {
-        padding: 0;
-        margin: 0;
-      }
-
+      body { background: #ffffff; }
+      .topbar, .card:first-child, .print-toolbar, .no-print, .msg { display: none !important; }
+      .container { padding: 0; margin: 0; }
       .dash-shell {
         border-radius: 0;
         box-shadow: none;
@@ -971,18 +1063,8 @@ BASE_HTML = """
         border-right: 1px solid #cfd4dc;
         width: 100%;
       }
-
-      .dash-table-mini,
-      .dash-table-big {
-        font-size: 9px;
-      }
-
-      .dash-table-mini th,
-      .dash-table-mini td,
-      .dash-table-big th,
-      .dash-table-big td {
-        padding: 3px 4px;
-      }
+      .dash-table-mini, .dash-table-big { font-size: 9px; }
+      .dash-table-mini th, .dash-table-mini td, .dash-table-big th, .dash-table-big td { padding: 3px 4px; }
     }
 
     @media (max-width: 1200px) {
@@ -1131,9 +1213,6 @@ def admin_dashboard():
         except Exception:
             headers, base_rows = [], []
 
-        # =========================================
-        # BLOCO: LOCALIZAÇÃO DAS COLUNAS
-        # =========================================
         key_col = pick_col_flexible(headers, [
             "Codigo Grupo Cliente", "Código Grupo Cliente",
             "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
@@ -1167,9 +1246,6 @@ def admin_dashboard():
         status_cliente_col = pick_col_exact(headers, ["Status Cliente"])
         observacoes_col = pick_col_exact(headers, ["Observações", "Observacao", "Observacoes"])
 
-        # =========================================
-        # BLOCO: FILTROS
-        # =========================================
         sup_sel = norm(request.args.get("sup", ""))
         rep_sel = norm(request.args.get("rep", ""))
 
@@ -1184,9 +1260,6 @@ def admin_dashboard():
                 continue
             filtered_rows.append(r)
 
-        # =========================================
-        # BLOCO: DADOS CABEÇALHO
-        # =========================================
         header_rep_code = rep_sel
         header_rep_name = ""
         header_sup = sup_sel
@@ -1203,15 +1276,11 @@ def admin_dashboard():
                         header_sup = norm(r.get(sup_col, ""))
                     break
 
-        # Realizado = soma do Total 2026 filtrado
         total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
         header_realizado = format_money_br(total_realizado_2026)
 
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
 
-        # =========================================
-        # BLOCO: TOP 10 MAIORES 2026
-        # =========================================
         ranking_2026 = []
         if grupo_col and t2026_col:
             for r in filtered_rows:
@@ -1230,9 +1299,6 @@ def admin_dashboard():
             ranking_2026.sort(key=lambda x: x["valor"], reverse=True)
             ranking_2026 = ranking_2026[:10]
 
-        # =========================================
-        # BLOCO: TOP 10 MAIORES 2025
-        # =========================================
         ranking_2025 = []
         if grupo_col and t2025_col:
             for r in filtered_rows:
@@ -1251,10 +1317,6 @@ def admin_dashboard():
             ranking_2025.sort(key=lambda x: x["valor"], reverse=True)
             ranking_2025 = ranking_2025[:10]
 
-        # =========================================
-        # BLOCO: CLIENTES SEM COMPRA
-        # REGRA ATUAL = Total 2026 vazio ou zero
-        # =========================================
         clientes_sem_compra = []
         if key_col and grupo_col and t2026_col:
             for r in filtered_rows:
@@ -1278,30 +1340,16 @@ def admin_dashboard():
                     })
 
             clientes_sem_compra.sort(
-                key=lambda x: (
-                    x["t2025"],
-                    x["t2024"],
-                    x["grupo"]
-                ),
+                key=lambda x: (x["t2025"], x["t2024"], x["grupo"]),
                 reverse=True
             )
 
-        # =========================================
-        # BLOCO: CLIENTES GOLD (placeholder de contagem)
-        # =========================================
         total_gold = 0
-
-        # =========================================
-        # BLOCO: COBERTURA CARTEIRA
-        # =========================================
         total_carteira = len(filtered_rows)
         total_sem_compra = len(clientes_sem_compra)
         total_com_compra = max(total_carteira - total_sem_compra, 0)
         cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
 
-        # =========================================
-        # HTMLS AUXILIARES
-        # =========================================
         def chip_class(status_cor):
             s = normalize_text_for_match(status_cor)
             if "VERMELH" in s:
@@ -1432,6 +1480,82 @@ def admin_dashboard():
             </div>
             """
 
+        # =========================
+        # MAPA DAS CIDADES
+        # Verde = com vendas / Vermelho = sem vendas
+        # Fonte = planilha Municipios Brasileiros / aba cidades
+        # =========================
+        mapa_svg_html = ""
+        mapa_info_msg = ""
+        cidades_mapa_qtd = 0
+
+        try:
+            sh_muni = connect_municipios_gs()
+            ws_cidades = sh_muni.worksheet(WS_CIDADES)
+            headers_cidades, rows_cidades = safe_get_raw_rows(ws_cidades)
+
+            cidade_muni_col = pick_col_flexible(headers_cidades, [
+                "cidade", "municipio", "município", "nome", "nome municipio", "nome município"
+            ])
+            lat_col = pick_col_flexible(headers_cidades, [
+                "latitude", "lat"
+            ])
+            lon_col = pick_col_flexible(headers_cidades, [
+                "longitude", "long", "lon", "lng"
+            ])
+
+            vendas_por_cidade = {}
+            if cidade_col:
+                for r in filtered_rows:
+                    cidade_base = normalize_city_key(r.get(cidade_col, ""))
+                    if not cidade_base:
+                        continue
+
+                    total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
+                    if cidade_base not in vendas_por_cidade:
+                        vendas_por_cidade[cidade_base] = {
+                            "cidade_original": norm(r.get(cidade_col, "")),
+                            "total_2026": 0.0
+                        }
+                    vendas_por_cidade[cidade_base]["total_2026"] += total_2026
+
+            city_points = []
+            if cidade_muni_col and lat_col and lon_col:
+                for r in rows_cidades:
+                    cidade_sheet = normalize_city_key(r.get(cidade_muni_col, ""))
+                    if not cidade_sheet:
+                        continue
+
+                    if cidade_sheet not in vendas_por_cidade:
+                        continue
+
+                    lat = parse_float_any(r.get(lat_col, ""))
+                    lon = parse_float_any(r.get(lon_col, ""))
+                    total_2026 = vendas_por_cidade[cidade_sheet]["total_2026"]
+
+                    city_points.append({
+                        "cidade": vendas_por_cidade[cidade_sheet]["cidade_original"] or norm(r.get(cidade_muni_col, "")),
+                        "lat": lat,
+                        "lon": lon,
+                        "total_2026": total_2026,
+                        "fill": "#16a34a" if total_2026 > 0 else "#dc2626",
+                        "status_txt": "Com vendas" if total_2026 > 0 else "Sem vendas"
+                    })
+
+            cidades_mapa_qtd = len(city_points)
+            mapa_svg_html = build_city_map_svg(city_points)
+
+            if not city_points:
+                mapa_info_msg = "Nenhuma cidade cruzou entre a carteira e a planilha de municípios."
+
+        except Exception as e:
+            mapa_svg_html = f"""
+            <div class="dash-map-placeholder">
+              Erro ao montar mapa.<br><br>
+              {h(str(e))}
+            </div>
+            """
+
         body = f"""
         <div class="dash-page">
 
@@ -1524,10 +1648,10 @@ def admin_dashboard():
               <div class="dash-panel">
                 <div class="dash-panel-title">Cidades da Região</div>
                 <div class="dash-panel-body">
-                  <div class="dash-map-placeholder">
-                    LOCAL DO MAPA<br><br>
-                    Estrutura preservada para depois ligar latitude/longitude
-                    ou mapa por cidade/região.
+                  {mapa_svg_html}
+                  <div style="margin-top:8px; text-align:center; font-size:11px; color:#6b7280;">
+                    Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
+                    {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                   </div>
                 </div>
               </div>
@@ -1595,10 +1719,12 @@ def admin_dashboard():
               <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
               <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
               <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
+              <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
+              <div class="line"><b>MUNICIPIOS_SHEET_ID:</b> {h(MUNICIPIOS_SHEET_ID or SHEET_ID)}</div>
+              <div class="line"><b>WS_CIDADES:</b> {h(WS_CIDADES)}</div>
               <div class="line"><b>REP COL:</b> {h(rep_col)}</div>
               <div class="line"><b>GRUPO COL:</b> {h(grupo_col)}</div>
-              <div class="line"><b>T2024 COL:</b> {h(t2024_col)}</div>
-              <div class="line"><b>T2025 COL:</b> {h(t2025_col)}</div>
+              <div class="line"><b>CIDADE COL:</b> {h(cidade_col)}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
               <div class="line"><b>DATA COL:</b> {h(data_agenda_col)}</div>
               <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
