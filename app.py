@@ -370,10 +370,6 @@ def extract_google_sheet_id(raw_value):
     return raw
 
 
-def city_sale_color(total_2026_value):
-    return "#16a34a" if parse_number_br(total_2026_value) > 0 else "#dc2626"
-
-
 def build_city_map_svg(city_points, width=650, height=360):
     if not city_points:
         return """
@@ -691,7 +687,7 @@ def handle_any_exception(e):
 
 
 # =========================
-# TEMPLATE BASE
+# TEMPLATES
 # =========================
 BASE_HTML = """
 <!doctype html>
@@ -1269,9 +1265,6 @@ def logout():
     return redirect(url_for("login"))
 
 
-# =========================
-# ROUTE ADMIN DASHBOARD
-# =========================
 @app.route("/admin-dashboard", methods=["GET"])
 def admin_dashboard():
     if not require_login():
@@ -1559,9 +1552,6 @@ def admin_dashboard():
             </div>
             """
 
-        # =========================
-        # MAPA DAS CIDADES
-        # =========================
         mapa_svg_html = ""
         mapa_info_msg = ""
         cidades_mapa_qtd = 0
@@ -1650,10 +1640,17 @@ def admin_dashboard():
             </div>
             """
         except Exception as e:
+            erro_txt = norm(str(e))
+            if "This operation is not supported for this document" in erro_txt:
+                erro_txt = (
+                    "O arquivo informado em MUNICIPIOS_SHEET_ID não é uma planilha Google Sheets válida. "
+                    "Converta o arquivo para Google Sheets e use o ID da planilha convertida."
+                )
+
             mapa_svg_html = f"""
             <div class="dash-map-placeholder">
               Erro ao montar mapa.<br><br>
-              {h(str(e))}
+              {h(erro_txt)}
             </div>
             """
 
