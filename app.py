@@ -274,6 +274,57 @@ def get_last_save_debug():
     return session.get("last_save_debug", {})
 
 
+def parse_number_br(value):
+    s = norm(value)
+    if not s:
+        return 0.0
+
+    s = s.replace("R$", "").replace(" ", "")
+
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def format_number_br(value):
+    try:
+        n = float(value)
+    except Exception:
+        n = 0.0
+    txt = f"{n:,.2f}"
+    txt = txt.replace(",", "X").replace(".", ",").replace("X", ".")
+    return txt
+
+
+def format_money_br(value):
+    return f"R$ {format_number_br(value)}"
+
+
+def is_zero_or_blank(v):
+    return parse_number_br(v) == 0.0
+
+
+def render_status_badge_text(status_cor):
+    s = normalize_text_for_match(status_cor)
+    if "VERMELH" in s:
+        return "Vermelho"
+    if "LARANJ" in s:
+        return "Laranja"
+    if "AMAREL" in s:
+        return "Amarelo"
+    if "VERDE" in s:
+        return "Verde"
+    if "AZUL" in s or "NOVO" in s:
+        return "Azul"
+    return norm(status_cor)
+
+
 # =========================
 # GOOGLE SHEETS
 # =========================
@@ -612,7 +663,7 @@ BASE_HTML = """
     }
 
     /* ===============================
-       DASHBOARD ADMIN NOVO
+       DASHBOARD ADMIN A3
        =============================== */
     .dash-page {
       display: flex;
@@ -625,24 +676,26 @@ BASE_HTML = """
       border: 1px solid #cfd4dc;
       border-top: 3px solid #f97316;
       border-bottom: 3px solid #f97316;
-      padding: 14px;
+      padding: 12px;
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+      width: 100%;
+      box-sizing: border-box;
     }
 
     .dash-header {
       display: grid;
-      grid-template-columns: 90px 1.3fr 1fr auto;
-      gap: 12px;
+      grid-template-columns: 80px 1.35fr 1fr 70px;
+      gap: 10px;
       align-items: center;
       border-bottom: 2px solid #f97316;
-      padding-bottom: 10px;
-      margin-bottom: 12px;
+      padding-bottom: 8px;
+      margin-bottom: 10px;
     }
 
     .dash-avatar {
-      width: 72px;
-      height: 72px;
+      width: 66px;
+      height: 66px;
       border-radius: 8px;
       object-fit: cover;
       border: 1px solid #d1d5db;
@@ -650,8 +703,8 @@ BASE_HTML = """
     }
 
     .dash-avatar-placeholder {
-      width: 72px;
-      height: 72px;
+      width: 66px;
+      height: 66px;
       border-radius: 8px;
       border: 1px solid #d1d5db;
       background: #f8fafc;
@@ -659,18 +712,15 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       color: #6b7280;
-      font-size: 12px;
+      font-size: 11px;
       text-align: center;
       padding: 6px;
       box-sizing: border-box;
     }
 
-    .dash-title-wrap {
-      min-width: 0;
-    }
-
+    .dash-title-wrap { min-width: 0; }
     .dash-main-title {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 800;
       text-transform: uppercase;
       text-align: center;
@@ -678,40 +728,40 @@ BASE_HTML = """
     }
 
     .dash-subline {
-      font-size: 12px;
+      font-size: 11px;
       color: #374151;
-      line-height: 1.5;
+      line-height: 1.4;
     }
 
     .dash-meta-box {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
+      gap: 6px;
     }
 
     .dash-metric {
       border: 1px solid #d1d5db;
       border-radius: 8px;
-      padding: 8px;
+      padding: 6px;
       background: #fafafa;
     }
 
     .dash-metric-label {
-      font-size: 11px;
+      font-size: 10px;
       color: #6b7280;
       font-weight: 700;
       text-transform: uppercase;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }
 
     .dash-metric-value {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 800;
       color: #111827;
     }
 
     .dash-kidy-logo {
-      max-width: 70px;
+      max-width: 60px;
       width: 100%;
       height: auto;
       justify-self: end;
@@ -719,115 +769,228 @@ BASE_HTML = """
 
     .dash-row-top {
       display: grid;
-      grid-template-columns: 1fr 1fr 1.25fr;
-      gap: 12px;
-      margin-bottom: 12px;
+      grid-template-columns: 1fr 1fr 1.1fr;
+      gap: 10px;
+      margin-bottom: 10px;
     }
 
     .dash-row-bottom {
       display: grid;
-      grid-template-columns: 1.15fr 1fr;
-      gap: 12px;
+      grid-template-columns: 1.18fr 0.95fr;
+      gap: 10px;
       align-items: start;
     }
 
     .dash-right-stack {
       display: grid;
       grid-template-rows: auto auto auto;
-      gap: 12px;
+      gap: 10px;
     }
 
     .dash-panel {
       border: 1px solid #9ca3af;
       background: #ffffff;
-      min-height: 140px;
       position: relative;
       overflow: hidden;
     }
 
     .dash-panel-title {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 800;
       text-transform: uppercase;
       color: #111827;
       background: #f3f4f6;
       border-bottom: 1px solid #d1d5db;
-      padding: 8px 10px;
+      padding: 6px 8px;
       text-align: center;
     }
 
     .dash-panel-body {
-      padding: 10px;
-      min-height: 90px;
+      padding: 8px;
+      box-sizing: border-box;
     }
 
-    .dash-placeholder {
-      border: 2px dashed #cbd5e1;
-      border-radius: 8px;
-      background: #f8fafc;
-      color: #64748b;
-      min-height: 90px;
+    .dash-table-mini {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10px;
+    }
+
+    .dash-table-mini th,
+    .dash-table-mini td {
+      border: 1px solid #d1d5db;
+      padding: 3px 5px;
+      line-height: 1.2;
+    }
+
+    .dash-table-mini th {
+      background: #e5e7eb;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 9px;
+      position: static;
+    }
+
+    .dash-table-big {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10px;
+    }
+
+    .dash-table-big th,
+    .dash-table-big td {
+      border: 1px solid #d1d5db;
+      padding: 4px 5px;
+      line-height: 1.2;
+      vertical-align: middle;
+    }
+
+    .dash-table-big th {
+      background: #e5e7eb;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 9px;
+      position: static;
+    }
+
+    .dash-map-placeholder {
+      min-height: 210px;
+      background: #ecfeff;
+      border: 2px dashed #06b6d4;
+      color: #155e75;
       display: flex;
       align-items: center;
       justify-content: center;
       text-align: center;
-      padding: 12px;
-      font-size: 13px;
-      line-height: 1.5;
+      font-size: 12px;
+      border-radius: 6px;
+      padding: 10px;
     }
 
-    .dash-red-placeholder {
-      background: #fee2e2;
-      border: 2px dashed #ef4444;
-      color: #991b1b;
-      min-height: 320px;
-    }
-
-    .dash-green-placeholder {
-      background: #ecfdf5;
-      border: 2px dashed #22c55e;
-      color: #166534;
-    }
-
-    .dash-gold-placeholder {
+    .dash-gold-box {
+      min-height: 68px;
       background: #fef3c7;
       border: 2px dashed #f59e0b;
       color: #92400e;
-      min-height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 12px;
+      border-radius: 6px;
+      padding: 10px;
     }
 
-    .dash-map-placeholder {
-      min-height: 220px;
-      background: #ecfeff;
-      border: 2px dashed #06b6d4;
-      color: #155e75;
+    .dash-coverage-box {
+      min-height: 90px;
+      background: #f8fafc;
+      border: 2px dashed #94a3b8;
+      color: #334155;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 12px;
+      border-radius: 6px;
+      padding: 10px;
     }
 
-    .dash-table-placeholder {
-      min-height: 180px;
+    .dash-summary-box {
+      min-height: 150px;
+      background: #f8fafc;
+      border: 2px dashed #94a3b8;
+      color: #334155;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 12px;
+      border-radius: 6px;
+      padding: 10px;
     }
 
-    .dash-note {
-      margin-top: 8px;
+    .print-toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .print-note {
       font-size: 11px;
       color: #6b7280;
-      line-height: 1.5;
     }
 
-    .dash-filter-bar {
-      display: grid;
-      grid-template-columns: 180px 220px 220px 1fr auto;
-      gap: 10px;
-      align-items: end;
+    .status-chip {
+      display: inline-block;
+      min-width: 70px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      text-align: center;
+      font-size: 9px;
+      font-weight: 700;
+      border: 1px solid rgba(0,0,0,0.08);
+    }
+
+    .chip-red { background: rgba(220,38,38,0.18); color: #991b1b; }
+    .chip-orange { background: rgba(249,115,22,0.18); color: #9a3412; }
+    .chip-yellow { background: rgba(234,179,8,0.22); color: #854d0e; }
+    .chip-green { background: rgba(34,197,94,0.18); color: #166534; }
+    .chip-blue { background: rgba(56,189,248,0.18); color: #0c4a6e; }
+    .chip-gray { background: #e5e7eb; color: #374151; }
+
+    .no-break { page-break-inside: avoid; break-inside: avoid; }
+
+    @page {
+      size: A3 landscape;
+      margin: 10mm;
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+
+      .topbar,
+      .card:first-child,
+      .print-toolbar,
+      .no-print,
+      .msg {
+        display: none !important;
+      }
+
+      .container {
+        padding: 0;
+        margin: 0;
+      }
+
+      .dash-shell {
+        border-radius: 0;
+        box-shadow: none;
+        border-left: 1px solid #cfd4dc;
+        border-right: 1px solid #cfd4dc;
+        width: 100%;
+      }
+
+      .dash-table-mini,
+      .dash-table-big {
+        font-size: 9px;
+      }
+
+      .dash-table-mini th,
+      .dash-table-mini td,
+      .dash-table-big th,
+      .dash-table-big td {
+        padding: 3px 4px;
+      }
     }
 
     @media (max-width: 1200px) {
-      .dash-header { grid-template-columns: 90px 1fr; }
+      .dash-header { grid-template-columns: 80px 1fr; }
       .dash-meta-box { grid-column: 1 / -1; }
       .dash-kidy-logo { justify-self: start; }
       .dash-row-top { grid-template-columns: 1fr; }
       .dash-row-bottom { grid-template-columns: 1fr; }
-      .dash-filter-bar { grid-template-columns: 1fr 1fr; }
     }
   </style>
 </head>
@@ -946,8 +1109,7 @@ def logout():
 
 
 # =========================
-# BLOCO NOVO
-# ROUTE: ADMIN DASHBOARD
+# ROUTE ADMIN DASHBOARD
 # =========================
 @app.route("/admin-dashboard", methods=["GET"])
 def admin_dashboard():
@@ -970,8 +1132,16 @@ def admin_dashboard():
             headers, base_rows = [], []
 
         # =========================================
-        # BLOCO: LOCALIZAÇÃO DAS COLUNAS DA BASE
+        # BLOCO: LOCALIZAÇÃO DAS COLUNAS
         # =========================================
+        key_col = pick_col_flexible(headers, [
+            "Codigo Grupo Cliente", "Código Grupo Cliente",
+            "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
+        ])
+        grupo_col = pick_col_flexible(headers, [
+            "Grupo Cliente", "Nome Cliente", "Cliente",
+            "Razao Social", "Razão Social", "Fantasia", "Nome"
+        ])
         rep_col = pick_col_flexible(headers, [
             "Codigo Representante", "Código Representante",
             "CODIGO REPRESENTANTE", "COD_REP"
@@ -982,21 +1152,23 @@ def admin_dashboard():
         sup_col = pick_col_flexible(headers, [
             "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
         ])
-        grupo_col = pick_col_flexible(headers, [
-            "Grupo Cliente", "Nome Cliente", "Cliente",
-            "Razao Social", "Razão Social", "Fantasia", "Nome"
-        ])
         cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
-        status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor", "STATUSCOR", "StatusCor"])
-        cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
 
         t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
         t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
         t2026_col = pick_col_exact(headers, ["Total 2026 (PERIODO)"])
 
+        status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor", "STATUSCOR", "StatusCor"])
+        cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
+
+        data_agenda_col = pick_col_exact(headers, ["Data Agenda Visita"])
+        mes_col = pick_col_exact(headers, ["Mês"])
+        semana_col = pick_col_exact(headers, ["Semana Atendimento"])
+        status_cliente_col = pick_col_exact(headers, ["Status Cliente"])
+        observacoes_col = pick_col_exact(headers, ["Observações", "Observacao", "Observacoes"])
+
         # =========================================
-        # BLOCO: FILTROS DO DASHBOARD
-        # depois você me fala de onde virão os dados
+        # BLOCO: FILTROS
         # =========================================
         sup_sel = norm(request.args.get("sup", ""))
         rep_sel = norm(request.args.get("rep", ""))
@@ -1013,7 +1185,7 @@ def admin_dashboard():
             filtered_rows.append(r)
 
         # =========================================
-        # BLOCO: DADOS DO CABEÇALHO
+        # BLOCO: DADOS CABEÇALHO
         # =========================================
         header_rep_code = rep_sel
         header_rep_name = ""
@@ -1031,18 +1203,241 @@ def admin_dashboard():
                         header_sup = norm(r.get(sup_col, ""))
                     break
 
+        # Realizado = soma do Total 2026 filtrado
+        total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
+        header_realizado = format_money_br(total_realizado_2026)
+
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
 
         # =========================================
-        # BLOCO: PLACEHOLDERS
-        # Você vai me passar depois as origens reais
+        # BLOCO: TOP 10 MAIORES 2026
         # =========================================
+        ranking_2026 = []
+        if grupo_col and t2026_col:
+            for r in filtered_rows:
+                nome = norm(r.get(grupo_col, ""))
+                valor = parse_number_br(r.get(t2026_col, ""))
+                if nome and valor > 0:
+                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
+                    )
+                    ranking_2026.append({
+                        "grupo": nome,
+                        "valor": valor,
+                        "status_cor": status_cor_final,
+                        "row_class": row_class
+                    })
+            ranking_2026.sort(key=lambda x: x["valor"], reverse=True)
+            ranking_2026 = ranking_2026[:10]
+
+        # =========================================
+        # BLOCO: TOP 10 MAIORES 2025
+        # =========================================
+        ranking_2025 = []
+        if grupo_col and t2025_col:
+            for r in filtered_rows:
+                nome = norm(r.get(grupo_col, ""))
+                valor = parse_number_br(r.get(t2025_col, ""))
+                if nome and valor > 0:
+                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
+                    )
+                    ranking_2025.append({
+                        "grupo": nome,
+                        "valor": valor,
+                        "status_cor": status_cor_final,
+                        "row_class": row_class
+                    })
+            ranking_2025.sort(key=lambda x: x["valor"], reverse=True)
+            ranking_2025 = ranking_2025[:10]
+
+        # =========================================
+        # BLOCO: CLIENTES SEM COMPRA
+        # REGRA ATUAL = Total 2026 vazio ou zero
+        # =========================================
+        clientes_sem_compra = []
+        if key_col and grupo_col and t2026_col:
+            for r in filtered_rows:
+                v2026 = parse_number_br(r.get(t2026_col, ""))
+                if v2026 == 0:
+                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
+                    )
+                    clientes_sem_compra.append({
+                        "codigo": norm(r.get(key_col, "")),
+                        "grupo": norm(r.get(grupo_col, "")),
+                        "t2024": parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0,
+                        "t2025": parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0,
+                        "t2026": parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0,
+                        "data": norm(r.get(data_agenda_col, "")) if data_agenda_col else "",
+                        "mes": norm(r.get(mes_col, "")) if mes_col else "",
+                        "semana": norm(r.get(semana_col, "")) if semana_col else "",
+                        "status": norm(r.get(status_cliente_col, "")) if status_cliente_col else "",
+                        "status_cor": status_cor_final,
+                        "row_class": row_class
+                    })
+
+            clientes_sem_compra.sort(
+                key=lambda x: (
+                    x["t2025"],
+                    x["t2024"],
+                    x["grupo"]
+                ),
+                reverse=True
+            )
+
+        # =========================================
+        # BLOCO: CLIENTES GOLD (placeholder de contagem)
+        # =========================================
+        total_gold = 0
+
+        # =========================================
+        # BLOCO: COBERTURA CARTEIRA
+        # =========================================
+        total_carteira = len(filtered_rows)
+        total_sem_compra = len(clientes_sem_compra)
+        total_com_compra = max(total_carteira - total_sem_compra, 0)
+        cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
+
+        # =========================================
+        # HTMLS AUXILIARES
+        # =========================================
+        def chip_class(status_cor):
+            s = normalize_text_for_match(status_cor)
+            if "VERMELH" in s:
+                return "chip-red"
+            if "LARANJ" in s:
+                return "chip-orange"
+            if "AMAREL" in s:
+                return "chip-yellow"
+            if "VERDE" in s:
+                return "chip-green"
+            if "AZUL" in s or "NOVO" in s:
+                return "chip-blue"
+            return "chip-gray"
+
+        ranking_2026_html = ""
+        if ranking_2026:
+            rows = []
+            for i, item in enumerate(ranking_2026, start=1):
+                rows.append(f"""
+                <tr class="{h(item['row_class'])}">
+                  <td style="width:26px; text-align:center;">{i}</td>
+                  <td>{h(item['grupo'])}</td>
+                  <td style="width:110px; text-align:right;">{h(format_number_br(item['valor']))}</td>
+                  <td style="width:82px; text-align:center;">
+                    <span class="status-chip {chip_class(item['status_cor'])}">{h(render_status_badge_text(item['status_cor']))}</span>
+                  </td>
+                </tr>
+                """)
+            ranking_2026_html = f"""
+            <table class="dash-table-mini">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Grupo</th>
+                  <th>Total 2026</th>
+                  <th>Cor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {''.join(rows)}
+              </tbody>
+            </table>
+            """
+        else:
+            ranking_2026_html = """
+            <div class="dash-map-placeholder" style="min-height:150px;">
+              Sem dados para o Top 10 de 2026
+            </div>
+            """
+
+        ranking_2025_html = ""
+        if ranking_2025:
+            rows = []
+            for i, item in enumerate(ranking_2025, start=1):
+                rows.append(f"""
+                <tr class="{h(item['row_class'])}">
+                  <td style="width:26px; text-align:center;">{i}</td>
+                  <td>{h(item['grupo'])}</td>
+                  <td style="width:110px; text-align:right;">{h(format_number_br(item['valor']))}</td>
+                  <td style="width:82px; text-align:center;">
+                    <span class="status-chip {chip_class(item['status_cor'])}">{h(render_status_badge_text(item['status_cor']))}</span>
+                  </td>
+                </tr>
+                """)
+            ranking_2025_html = f"""
+            <table class="dash-table-mini">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Grupo</th>
+                  <th>Total 2025</th>
+                  <th>Cor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {''.join(rows)}
+              </tbody>
+            </table>
+            """
+        else:
+            ranking_2025_html = """
+            <div class="dash-map-placeholder" style="min-height:150px;">
+              Sem dados para o Top 10 de 2025
+            </div>
+            """
+
+        clientes_sem_compra_html = ""
+        if clientes_sem_compra:
+            rows = []
+            for item in clientes_sem_compra[:38]:
+                rows.append(f"""
+                <tr class="{h(item['row_class'])}">
+                  <td>{h(item['codigo'])}</td>
+                  <td>{h(item['grupo'])}</td>
+                  <td style="text-align:right;">{h(format_number_br(item['t2024']))}</td>
+                  <td style="text-align:right;">{h(format_number_br(item['t2025']))}</td>
+                  <td style="text-align:right;">{h(format_number_br(item['t2026']))}</td>
+                  <td>{h(item['data'])}</td>
+                  <td>{h(item['mes'])}</td>
+                  <td>{h(item['semana'])}</td>
+                  <td>{h(item['status'])}</td>
+                </tr>
+                """)
+            clientes_sem_compra_html = f"""
+            <table class="dash-table-big">
+              <thead>
+                <tr>
+                  <th>Código Grupo</th>
+                  <th>Grupo</th>
+                  <th>Total 2024</th>
+                  <th>Total 2025</th>
+                  <th>Total 2026</th>
+                  <th>Data</th>
+                  <th>Mês</th>
+                  <th>Semana</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {''.join(rows)}
+              </tbody>
+            </table>
+            """
+        else:
+            clientes_sem_compra_html = """
+            <div class="dash-map-placeholder" style="min-height:260px;">
+              Nenhum cliente sem compra encontrado pela regra atual (Total 2026 = 0)
+            </div>
+            """
+
         body = f"""
         <div class="dash-page">
 
-          <div class="card">
+          <div class="card no-print">
             <form method="get">
-              <div class="dash-filter-bar">
+              <div class="grid">
                 <div>
                   <label>Supervisor</label>
                   <select name="sup">
@@ -1059,27 +1454,21 @@ def admin_dashboard():
                   </select>
                 </div>
 
-                <div>
-                  <label>Período</label>
-                  <input value="" placeholder="Depois vamos ligar ao período real" readonly>
-                </div>
-
-                <div>
-                  <label>Observação</label>
-                  <input value="Estrutura do dashboard pronta para conectar dados" readonly>
-                </div>
-
-                <div style="display:flex; gap:8px;">
+                <div class="print-toolbar">
                   <button type="submit">Aplicar</button>
                   <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
+                  <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
+                </div>
+
+                <div class="print-note">
+                  Dashboard ajustado para impressão em A3 horizontal.
                 </div>
               </div>
             </form>
           </div>
 
-          <div class="dash-shell">
+          <div class="dash-shell no-break">
 
-            <!-- CABEÇALHO -->
             <div class="dash-header">
               <div>
                 {
@@ -1116,85 +1505,51 @@ def admin_dashboard():
               </div>
             </div>
 
-            <!-- TOPO -->
             <div class="dash-row-top">
 
-              <!-- BLOCO 1 -->
               <div class="dash-panel">
                 <div class="dash-panel-title">10 Maiores Clientes</div>
                 <div class="dash-panel-body">
-                  <div class="dash-placeholder">
-                    LOCAL DO GRÁFICO / TABELA<br><br>
-                    Origem a definir por você<br>
-                    Ex.: top 10 por faturamento, volume ou carteira
-                  </div>
-                  <div class="dash-note">
-                    Bloco pronto para receber tabela, barras horizontais ou ranking colorido.
-                  </div>
+                  {ranking_2026_html}
                 </div>
               </div>
 
-              <!-- BLOCO 2 -->
               <div class="dash-panel">
                 <div class="dash-panel-title">10 Maiores Clientes 2025</div>
                 <div class="dash-panel-body">
-                  <div class="dash-placeholder dash-green-placeholder">
-                    LOCAL DO GRÁFICO / TABELA 2025<br><br>
-                    Origem a definir por você
-                  </div>
-                  <div class="dash-note">
-                    Aqui podemos usar uma segunda visão comparativa do mesmo ranking.
-                  </div>
+                  {ranking_2025_html}
                 </div>
               </div>
 
-              <!-- BLOCO 3 -->
               <div class="dash-panel">
                 <div class="dash-panel-title">Cidades da Região</div>
                 <div class="dash-panel-body">
-                  <div class="dash-placeholder dash-map-placeholder">
+                  <div class="dash-map-placeholder">
                     LOCAL DO MAPA<br><br>
-                    Pode entrar mapa por latitude/longitude,<br>
-                    cidade, status, representante ou cobertura.
-                  </div>
-                  <div class="dash-note">
-                    Este espaço está reservado para mapa interativo ou imagem estática do mapa.
+                    Estrutura preservada para depois ligar latitude/longitude
+                    ou mapa por cidade/região.
                   </div>
                 </div>
               </div>
 
             </div>
 
-            <!-- PARTE DE BAIXO -->
             <div class="dash-row-bottom">
 
-              <!-- ESQUERDA GRANDE -->
               <div class="dash-panel">
                 <div class="dash-panel-title">Clientes sem Compra</div>
                 <div class="dash-panel-body">
-                  <div class="dash-placeholder dash-red-placeholder">
-                    LOCAL DA TABELA PRINCIPAL DE RECUPERAÇÃO<br><br>
-                    Aqui entra a lista grande dos clientes sem compra,
-                    com colunas como cliente, cidade, último pedido,
-                    representante, supervisor, potencial, etc.
-                  </div>
-                  <div class="dash-note">
-                    Ideal para tabela operacional com scroll.
-                  </div>
+                  {clientes_sem_compra_html}
                 </div>
               </div>
 
-              <!-- DIREITA EMPILHADA -->
               <div class="dash-right-stack">
 
                 <div class="dash-panel">
                   <div class="dash-panel-title">Clientes Gold</div>
                   <div class="dash-panel-body">
-                    <div class="dash-placeholder dash-gold-placeholder">
-                      LOCAL DOS INDICADORES GOLD
-                    </div>
-                    <div class="dash-note">
-                      Pode ser KPI, contagem, lista ou classificação.
+                    <div class="dash-gold-box">
+                      Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
                     </div>
                   </div>
                 </div>
@@ -1202,13 +1557,11 @@ def admin_dashboard():
                 <div class="dash-panel">
                   <div class="dash-panel-title">Cobertura da Carteira</div>
                   <div class="dash-panel-body">
-                    <div class="dash-placeholder">
-                      LOCAL DOS KPIs DE COBERTURA<br><br>
-                      Ex.: clientes atendidos, clientes ativos,
-                      cobertura %, meta diária, saldo
-                    </div>
-                    <div class="dash-note">
-                      Aqui também cabem mini-cards e velocímetro.
+                    <div class="dash-coverage-box">
+                      Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                      Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                      Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                      Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
                     </div>
                   </div>
                 </div>
@@ -1216,13 +1569,9 @@ def admin_dashboard():
                 <div class="dash-panel">
                   <div class="dash-panel-title">Tabela / Resumo Operacional</div>
                   <div class="dash-panel-body">
-                    <div class="dash-placeholder dash-table-placeholder">
-                      LOCAL DA TABELA RESUMO<br><br>
-                      Ex.: mês, semana, visitas, pedidos,
-                      clientes sem compra, cobertura e saldo
-                    </div>
-                    <div class="dash-note">
-                      Reservado para resumo final do painel.
+                    <div class="dash-summary-box">
+                      Estrutura pronta para entrar depois com resumo operacional,
+                      metas, visitas, pedidos, saldo e KPIs adicionais.
                     </div>
                   </div>
                 </div>
@@ -1237,20 +1586,24 @@ def admin_dashboard():
         if DEBUG_MODE:
             abas = ", ".join(debug_info.get("worksheets", []))
             body += f"""
-            <div class="card debug-card">
+            <div class="card debug-card no-print">
               <div class="title">DEBUG DASHBOARD ADMIN</div>
               <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
               <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
               <div class="line"><b>ABAS:</b> {h(abas)}</div>
               <div class="line"><b>ROWS FILTRADAS:</b> {h(len(filtered_rows))}</div>
+              <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
+              <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
+              <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
               <div class="line"><b>REP COL:</b> {h(rep_col)}</div>
-              <div class="line"><b>NOME REP COL:</b> {h(nome_rep_col)}</div>
-              <div class="line"><b>SUP COL:</b> {h(sup_col)}</div>
               <div class="line"><b>GRUPO COL:</b> {h(grupo_col)}</div>
-              <div class="line"><b>CIDADE COL:</b> {h(cidade_col)}</div>
               <div class="line"><b>T2024 COL:</b> {h(t2024_col)}</div>
               <div class="line"><b>T2025 COL:</b> {h(t2025_col)}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
+              <div class="line"><b>DATA COL:</b> {h(data_agenda_col)}</div>
+              <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
+              <div class="line"><b>SEMANA COL:</b> {h(semana_col)}</div>
+              <div class="line"><b>STATUS COL:</b> {h(status_cliente_col)}</div>
             </div>
             """
 
