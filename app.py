@@ -508,7 +508,7 @@ def handle_any_exception(e):
 
 
 # =========================
-# TEMPLATES
+# TEMPLATE BASE
 # =========================
 BASE_HTML = """
 <!doctype html>
@@ -518,7 +518,7 @@ BASE_HTML = """
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }}</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; background: #ffffff; color: #111827; }
+    body { font-family: Arial, sans-serif; margin: 0; background: #f5f6f8; color: #111827; }
     .topbar { background: #ffffff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d1d5db; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
     .topbar-right { display: flex; align-items: center; gap: 10px; }
     .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
@@ -566,6 +566,7 @@ BASE_HTML = """
     button.secondary, .btn-link.secondary { background: #6b7280; }
     button.danger, .btn-link.danger { background: #dc2626; }
     .btn-link.dark { background: #111827; }
+    .btn-link.orange { background: #f97316; }
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
     th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; vertical-align: top; }
@@ -573,7 +574,6 @@ BASE_HTML = """
 
     .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 
     .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
     .ok { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
@@ -611,23 +611,223 @@ BASE_HTML = """
       margin-bottom: 12px;
     }
 
-    .kpi {
+    /* ===============================
+       DASHBOARD ADMIN NOVO
+       =============================== */
+    .dash-page {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .dash-shell {
       background: #ffffff;
+      border: 1px solid #cfd4dc;
+      border-top: 3px solid #f97316;
+      border-bottom: 3px solid #f97316;
+      padding: 14px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+
+    .dash-header {
+      display: grid;
+      grid-template-columns: 90px 1.3fr 1fr auto;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 2px solid #f97316;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+    }
+
+    .dash-avatar {
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
+      object-fit: cover;
       border: 1px solid #d1d5db;
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+      background: #f8fafc;
     }
-    .kpi-title {
-      font-size: 12px;
+
+    .dash-avatar-placeholder {
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
+      border: 1px solid #d1d5db;
+      background: #f8fafc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       color: #6b7280;
-      margin-bottom: 6px;
-      font-weight: 600;
+      font-size: 12px;
+      text-align: center;
+      padding: 6px;
+      box-sizing: border-box;
     }
-    .kpi-value {
-      font-size: 28px;
+
+    .dash-title-wrap {
+      min-width: 0;
+    }
+
+    .dash-main-title {
+      font-size: 20px;
+      font-weight: 800;
+      text-transform: uppercase;
+      text-align: center;
+      margin-bottom: 4px;
+    }
+
+    .dash-subline {
+      font-size: 12px;
+      color: #374151;
+      line-height: 1.5;
+    }
+
+    .dash-meta-box {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .dash-metric {
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 8px;
+      background: #fafafa;
+    }
+
+    .dash-metric-label {
+      font-size: 11px;
+      color: #6b7280;
       font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .dash-metric-value {
+      font-size: 18px;
+      font-weight: 800;
       color: #111827;
+    }
+
+    .dash-kidy-logo {
+      max-width: 70px;
+      width: 100%;
+      height: auto;
+      justify-self: end;
+    }
+
+    .dash-row-top {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1.25fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .dash-row-bottom {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .dash-right-stack {
+      display: grid;
+      grid-template-rows: auto auto auto;
+      gap: 12px;
+    }
+
+    .dash-panel {
+      border: 1px solid #9ca3af;
+      background: #ffffff;
+      min-height: 140px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .dash-panel-title {
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: #111827;
+      background: #f3f4f6;
+      border-bottom: 1px solid #d1d5db;
+      padding: 8px 10px;
+      text-align: center;
+    }
+
+    .dash-panel-body {
+      padding: 10px;
+      min-height: 90px;
+    }
+
+    .dash-placeholder {
+      border: 2px dashed #cbd5e1;
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #64748b;
+      min-height: 90px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 12px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .dash-red-placeholder {
+      background: #fee2e2;
+      border: 2px dashed #ef4444;
+      color: #991b1b;
+      min-height: 320px;
+    }
+
+    .dash-green-placeholder {
+      background: #ecfdf5;
+      border: 2px dashed #22c55e;
+      color: #166534;
+    }
+
+    .dash-gold-placeholder {
+      background: #fef3c7;
+      border: 2px dashed #f59e0b;
+      color: #92400e;
+      min-height: 70px;
+    }
+
+    .dash-map-placeholder {
+      min-height: 220px;
+      background: #ecfeff;
+      border: 2px dashed #06b6d4;
+      color: #155e75;
+    }
+
+    .dash-table-placeholder {
+      min-height: 180px;
+    }
+
+    .dash-note {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #6b7280;
+      line-height: 1.5;
+    }
+
+    .dash-filter-bar {
+      display: grid;
+      grid-template-columns: 180px 220px 220px 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    @media (max-width: 1200px) {
+      .dash-header { grid-template-columns: 90px 1fr; }
+      .dash-meta-box { grid-column: 1 / -1; }
+      .dash-kidy-logo { justify-self: start; }
+      .dash-row-top { grid-template-columns: 1fr; }
+      .dash-row-bottom { grid-template-columns: 1fr; }
+      .dash-filter-bar { grid-template-columns: 1fr 1fr; }
     }
   </style>
 </head>
@@ -745,6 +945,10 @@ def logout():
     return redirect(url_for("login"))
 
 
+# =========================
+# BLOCO NOVO
+# ROUTE: ADMIN DASHBOARD
+# =========================
 @app.route("/admin-dashboard", methods=["GET"])
 def admin_dashboard():
     if not require_login():
@@ -765,9 +969,15 @@ def admin_dashboard():
         except Exception:
             headers, base_rows = [], []
 
+        # =========================================
+        # BLOCO: LOCALIZAÇÃO DAS COLUNAS DA BASE
+        # =========================================
         rep_col = pick_col_flexible(headers, [
             "Codigo Representante", "Código Representante",
             "CODIGO REPRESENTANTE", "COD_REP"
+        ])
+        nome_rep_col = pick_col_flexible(headers, [
+            "Representante", "Nome Representante", "REPRESENTANTE"
         ])
         sup_col = pick_col_flexible(headers, [
             "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
@@ -776,103 +986,250 @@ def admin_dashboard():
             "Grupo Cliente", "Nome Cliente", "Cliente",
             "Razao Social", "Razão Social", "Fantasia", "Nome"
         ])
+        cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
         status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor", "STATUSCOR", "StatusCor"])
         cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
 
-        total_registros = len(base_rows)
-        total_representantes = len(unique_list([r.get(rep_col, "") for r in base_rows])) if rep_col else 0
-        total_supervisores = len(unique_list([r.get(sup_col, "") for r in base_rows])) if sup_col else 0
+        t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
+        t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
+        t2026_col = pick_col_exact(headers, ["Total 2026 (PERIODO)"])
 
-        clientes_vermelhos = 0
-        clientes_laranja = 0
-        clientes_amarelos = 0
-        clientes_verdes = 0
-        clientes_azuis = 0
+        # =========================================
+        # BLOCO: FILTROS DO DASHBOARD
+        # depois você me fala de onde virão os dados
+        # =========================================
+        sup_sel = norm(request.args.get("sup", ""))
+        rep_sel = norm(request.args.get("rep", ""))
 
+        sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if sup_col else []
+        rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if rep_col else []
+
+        filtered_rows = []
         for r in base_rows:
-            status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                r,
-                status_cor_col=status_cor_col,
-                cliente_novo_col=cliente_novo_col
-            )
+            if sup_sel and sup_col and norm(r.get(sup_col, "")) != sup_sel:
+                continue
+            if rep_sel and rep_col and norm(r.get(rep_col, "")) != rep_sel:
+                continue
+            filtered_rows.append(r)
 
-            s = normalize_text_for_match(status_cor_final)
-            if "VERMELH" in s:
-                clientes_vermelhos += 1
-            elif "LARANJ" in s:
-                clientes_laranja += 1
-            elif "AMAREL" in s:
-                clientes_amarelos += 1
-            elif "VERDE" in s:
-                clientes_verdes += 1
-            elif "AZUL" in s or "NOVO" in s:
-                clientes_azuis += 1
+        # =========================================
+        # BLOCO: DADOS DO CABEÇALHO
+        # =========================================
+        header_rep_code = rep_sel
+        header_rep_name = ""
+        header_sup = sup_sel
+        header_region = "REGIÃO / ÁREA"
+        header_meta = "R$ 0,00"
+        header_realizado = "R$ 0,00"
+        header_percentual = "0,00%"
 
+        if header_rep_code and rep_col:
+            for r in filtered_rows:
+                if norm(r.get(rep_col, "")) == header_rep_code:
+                    header_rep_name = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+                    if not header_sup and sup_col:
+                        header_sup = norm(r.get(sup_col, ""))
+                    break
+
+        rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
+
+        # =========================================
+        # BLOCO: PLACEHOLDERS
+        # Você vai me passar depois as origens reais
+        # =========================================
         body = f"""
-        <div class="card">
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-            <div>
-              <div style="font-size:22px; font-weight:700;">Dashboard Administrativo</div>
-              <div class="small">Estrutura inicial criada. Depois você me passa os blocos e métricas que quer aqui.</div>
+        <div class="dash-page">
+
+          <div class="card">
+            <form method="get">
+              <div class="dash-filter-bar">
+                <div>
+                  <label>Supervisor</label>
+                  <select name="sup">
+                    <option value="">(Todos)</option>
+                    {''.join([f"<option value='{h(s)}' {'selected' if norm(s) == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
+                  </select>
+                </div>
+
+                <div>
+                  <label>Representante</label>
+                  <select name="rep">
+                    <option value="">(Todos)</option>
+                    {''.join([f"<option value='{h(r)}' {'selected' if norm(r) == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
+                  </select>
+                </div>
+
+                <div>
+                  <label>Período</label>
+                  <input value="" placeholder="Depois vamos ligar ao período real" readonly>
+                </div>
+
+                <div>
+                  <label>Observação</label>
+                  <input value="Estrutura do dashboard pronta para conectar dados" readonly>
+                </div>
+
+                <div style="display:flex; gap:8px;">
+                  <button type="submit">Aplicar</button>
+                  <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <div class="dash-shell">
+
+            <!-- CABEÇALHO -->
+            <div class="dash-header">
+              <div>
+                {
+                    f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
+                    if rep_photo else
+                    '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
+                }
+              </div>
+
+              <div class="dash-title-wrap">
+                <div class="dash-main-title">Acompanhamento de Representante</div>
+                <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
+              </div>
+
+              <div class="dash-meta-box">
+                <div class="dash-metric">
+                  <div class="dash-metric-label">Meta</div>
+                  <div class="dash-metric-value">{h(header_meta)}</div>
+                </div>
+                <div class="dash-metric">
+                  <div class="dash-metric-label">Realizado</div>
+                  <div class="dash-metric-value">{h(header_realizado)}</div>
+                </div>
+                <div class="dash-metric">
+                  <div class="dash-metric-label">% Realizado</div>
+                  <div class="dash-metric-value">{h(header_percentual)}</div>
+                </div>
+              </div>
+
+              <div>
+                <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
+              </div>
             </div>
-            <div style="display:flex; gap:8px; flex-wrap:wrap;">
-              <a href="{url_for('dashboard')}" class="btn-link secondary">Voltar para Carteira</a>
+
+            <!-- TOPO -->
+            <div class="dash-row-top">
+
+              <!-- BLOCO 1 -->
+              <div class="dash-panel">
+                <div class="dash-panel-title">10 Maiores Clientes</div>
+                <div class="dash-panel-body">
+                  <div class="dash-placeholder">
+                    LOCAL DO GRÁFICO / TABELA<br><br>
+                    Origem a definir por você<br>
+                    Ex.: top 10 por faturamento, volume ou carteira
+                  </div>
+                  <div class="dash-note">
+                    Bloco pronto para receber tabela, barras horizontais ou ranking colorido.
+                  </div>
+                </div>
+              </div>
+
+              <!-- BLOCO 2 -->
+              <div class="dash-panel">
+                <div class="dash-panel-title">10 Maiores Clientes 2025</div>
+                <div class="dash-panel-body">
+                  <div class="dash-placeholder dash-green-placeholder">
+                    LOCAL DO GRÁFICO / TABELA 2025<br><br>
+                    Origem a definir por você
+                  </div>
+                  <div class="dash-note">
+                    Aqui podemos usar uma segunda visão comparativa do mesmo ranking.
+                  </div>
+                </div>
+              </div>
+
+              <!-- BLOCO 3 -->
+              <div class="dash-panel">
+                <div class="dash-panel-title">Cidades da Região</div>
+                <div class="dash-panel-body">
+                  <div class="dash-placeholder dash-map-placeholder">
+                    LOCAL DO MAPA<br><br>
+                    Pode entrar mapa por latitude/longitude,<br>
+                    cidade, status, representante ou cobertura.
+                  </div>
+                  <div class="dash-note">
+                    Este espaço está reservado para mapa interativo ou imagem estática do mapa.
+                  </div>
+                </div>
+              </div>
+
             </div>
-          </div>
-        </div>
 
-        <div class="grid-3" style="margin-bottom:14px;">
-          <div class="kpi">
-            <div class="kpi-title">Total de registros na base</div>
-            <div class="kpi-value">{total_registros}</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-title">Representantes</div>
-            <div class="kpi-value">{total_representantes}</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-title">Supervisores</div>
-            <div class="kpi-value">{total_supervisores}</div>
-          </div>
-        </div>
+            <!-- PARTE DE BAIXO -->
+            <div class="dash-row-bottom">
 
-        <div class="grid-3" style="margin-bottom:14px;">
-          <div class="kpi">
-            <div class="kpi-title">Status Vermelho</div>
-            <div class="kpi-value">{clientes_vermelhos}</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-title">Status Laranja</div>
-            <div class="kpi-value">{clientes_laranja}</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-title">Status Amarelo</div>
-            <div class="kpi-value">{clientes_amarelos}</div>
-          </div>
-        </div>
+              <!-- ESQUERDA GRANDE -->
+              <div class="dash-panel">
+                <div class="dash-panel-title">Clientes sem Compra</div>
+                <div class="dash-panel-body">
+                  <div class="dash-placeholder dash-red-placeholder">
+                    LOCAL DA TABELA PRINCIPAL DE RECUPERAÇÃO<br><br>
+                    Aqui entra a lista grande dos clientes sem compra,
+                    com colunas como cliente, cidade, último pedido,
+                    representante, supervisor, potencial, etc.
+                  </div>
+                  <div class="dash-note">
+                    Ideal para tabela operacional com scroll.
+                  </div>
+                </div>
+              </div>
 
-        <div class="grid-2" style="margin-bottom:14px;">
-          <div class="kpi">
-            <div class="kpi-title">Status Verde</div>
-            <div class="kpi-value">{clientes_verdes}</div>
-          </div>
-          <div class="kpi">
-            <div class="kpi-title">Status Azul / Cliente Novo</div>
-            <div class="kpi-value">{clientes_azuis}</div>
-          </div>
-        </div>
+              <!-- DIREITA EMPILHADA -->
+              <div class="dash-right-stack">
 
-        <div class="card">
-          <div style="font-size:18px; font-weight:700; margin-bottom:8px;">Próxima estrutura</div>
-          <div class="small" style="line-height:1.7;">
-            Esta área já está pronta para receber:<br>
-            • KPIs principais<br>
-            • gráficos por supervisor<br>
-            • gráficos por representante<br>
-            • funil de atendimento<br>
-            • clientes por status<br>
-            • agenda por mês/semana<br>
-            • ranking comercial
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Clientes Gold</div>
+                  <div class="dash-panel-body">
+                    <div class="dash-placeholder dash-gold-placeholder">
+                      LOCAL DOS INDICADORES GOLD
+                    </div>
+                    <div class="dash-note">
+                      Pode ser KPI, contagem, lista ou classificação.
+                    </div>
+                  </div>
+                </div>
+
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Cobertura da Carteira</div>
+                  <div class="dash-panel-body">
+                    <div class="dash-placeholder">
+                      LOCAL DOS KPIs DE COBERTURA<br><br>
+                      Ex.: clientes atendidos, clientes ativos,
+                      cobertura %, meta diária, saldo
+                    </div>
+                    <div class="dash-note">
+                      Aqui também cabem mini-cards e velocímetro.
+                    </div>
+                  </div>
+                </div>
+
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Tabela / Resumo Operacional</div>
+                  <div class="dash-panel-body">
+                    <div class="dash-placeholder dash-table-placeholder">
+                      LOCAL DA TABELA RESUMO<br><br>
+                      Ex.: mês, semana, visitas, pedidos,
+                      clientes sem compra, cobertura e saldo
+                    </div>
+                    <div class="dash-note">
+                      Reservado para resumo final do painel.
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
           </div>
         </div>
         """
@@ -885,7 +1242,15 @@ def admin_dashboard():
               <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
               <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
               <div class="line"><b>ABAS:</b> {h(abas)}</div>
-              <div class="line"><b>TOTAL BASE_ROWS:</b> {h(total_registros)}</div>
+              <div class="line"><b>ROWS FILTRADAS:</b> {h(len(filtered_rows))}</div>
+              <div class="line"><b>REP COL:</b> {h(rep_col)}</div>
+              <div class="line"><b>NOME REP COL:</b> {h(nome_rep_col)}</div>
+              <div class="line"><b>SUP COL:</b> {h(sup_col)}</div>
+              <div class="line"><b>GRUPO COL:</b> {h(grupo_col)}</div>
+              <div class="line"><b>CIDADE COL:</b> {h(cidade_col)}</div>
+              <div class="line"><b>T2024 COL:</b> {h(t2024_col)}</div>
+              <div class="line"><b>T2025 COL:</b> {h(t2025_col)}</div>
+              <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
             </div>
             """
 
