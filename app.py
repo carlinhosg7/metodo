@@ -5,6 +5,7 @@ import base64
 import traceback
 import html
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse, parse_qs
 
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
@@ -347,11 +348,33 @@ def render_status_badge_text(status_cor):
     return norm(status_cor)
 
 
+def extract_google_sheet_id(raw_value):
+    raw = norm(raw_value)
+    if not raw:
+        return ""
+
+    if "/spreadsheets/d/" in raw:
+        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw)
+        if m:
+            return m.group(1)
+
+    if raw.startswith("http://") or raw.startswith("https://"):
+        try:
+            parsed = urlparse(raw)
+            qs = parse_qs(parsed.query)
+            if "id" in qs and qs["id"]:
+                return qs["id"][0]
+        except Exception:
+            pass
+
+    return raw
+
+
 def city_sale_color(total_2026_value):
     return "#16a34a" if parse_number_br(total_2026_value) > 0 else "#dc2626"
 
 
-def build_city_map_svg(city_points, width=700, height=420):
+def build_city_map_svg(city_points, width=650, height=360):
     if not city_points:
         return """
         <div class="dash-map-placeholder">
@@ -382,7 +405,7 @@ def build_city_map_svg(city_points, width=700, height=420):
     if min_lat == max_lat:
         max_lat += 0.01
 
-    pad = 24
+    pad = 18
 
     def project(lon, lat):
         x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
@@ -390,31 +413,30 @@ def build_city_map_svg(city_points, width=700, height=420):
         return x, y
 
     circles = []
-    labels = []
     for p in valid_points:
         x, y = project(p["lon"], p["lat"])
         fill = p["fill"]
         title = h(f"{p['cidade']} | {p['status_txt']} | Total 2026: {format_number_br(p['total_2026'])}")
         circles.append(
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="5.5" fill="{fill}" stroke="#ffffff" stroke-width="1.5">'
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="4.8" fill="{fill}" stroke="#ffffff" stroke-width="1.2">'
             f'<title>{title}</title></circle>'
         )
 
     svg = f"""
-    <div style="width:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:8px; box-sizing:border-box;">
+    <div style="width:100%; height:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
       <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
         <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
-        <rect x="12" y="12" width="{width-24}" height="{height-24}" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 4"></rect>
+        <rect x="10" y="10" width="{width-20}" height="{height-20}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
         {''.join(circles)}
       </svg>
 
-      <div style="display:flex; gap:14px; justify-content:center; align-items:center; margin-top:8px; flex-wrap:wrap; font-size:11px;">
+      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
         <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:12px; height:12px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
+          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
           Com vendas
         </span>
         <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:12px; height:12px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
+          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
           Sem vendas
         </span>
       </div>
@@ -442,8 +464,9 @@ def _load_service_account_info():
     return info
 
 
-def connect_gs_by_key(sheet_key):
-    if not sheet_key:
+def connect_gs_by_key(sheet_key_or_url):
+    resolved_key = extract_google_sheet_id(sheet_key_or_url)
+    if not resolved_key:
         raise RuntimeError("Sheet ID não informado.")
 
     info = _load_service_account_info()
@@ -453,7 +476,7 @@ def connect_gs_by_key(sheet_key):
     ]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(sheet_key)
+    return gc.open_by_key(resolved_key)
 
 
 def connect_gs():
@@ -620,14 +643,14 @@ def build_debug_sheet_info(sh=None):
 
         abas = [ws.title for ws in sh.worksheets()]
         return {
-            "sheet_id": SHEET_ID,
+            "sheet_id": extract_google_sheet_id(SHEET_ID),
             "spreadsheet_title": norm(getattr(sh, "title", "")),
             "worksheets": abas,
             "ok": True,
         }
     except Exception as e:
         return {
-            "sheet_id": SHEET_ID,
+            "sheet_id": extract_google_sheet_id(SHEET_ID),
             "spreadsheet_title": "",
             "worksheets": [],
             "ok": False,
@@ -683,8 +706,8 @@ BASE_HTML = """
     .topbar-right { display: flex; align-items: center; gap: 10px; }
     .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
 
-    .container { padding: 16px; }
-    .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .container { padding: 12px; }
+    .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
 
     .rep-card { display: flex; align-items: center; gap: 16px; }
     .rep-photo { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 2px solid #d1d5db; background: #f8fafc; flex-shrink: 0; }
@@ -693,7 +716,7 @@ BASE_HTML = """
     label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
     input, select {
       width: 100%;
-      padding: 10px;
+      padding: 9px;
       border-radius: 10px;
       border: 1px solid #cbd5e1;
       background: #ffffff;
@@ -709,7 +732,7 @@ BASE_HTML = """
     }
 
     button, .btn-link {
-      padding: 10px 14px;
+      padding: 9px 13px;
       border-radius: 10px;
       border: 0;
       background: #2563eb;
@@ -729,7 +752,7 @@ BASE_HTML = """
     .btn-link.orange { background: #f97316; }
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
-    th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; vertical-align: top; }
+    th, td { border-bottom: 1px solid #e5e7eb; padding: 8px; vertical-align: top; }
     th { position: sticky; top: 0; background: #f8fafc; color: #374151; text-align: left; z-index: 2; }
 
     .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
@@ -774,7 +797,13 @@ BASE_HTML = """
     .dash-page {
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .a3-page {
+      width: min(100%, 1560px);
+      background: #ffffff;
     }
 
     .dash-shell {
@@ -782,26 +811,27 @@ BASE_HTML = """
       border: 1px solid #cfd4dc;
       border-top: 3px solid #f97316;
       border-bottom: 3px solid #f97316;
-      padding: 12px;
+      padding: 10px;
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.05);
       width: 100%;
       box-sizing: border-box;
+      overflow: hidden;
     }
 
     .dash-header {
       display: grid;
-      grid-template-columns: 80px 1.35fr 1fr 70px;
-      gap: 10px;
+      grid-template-columns: 74px 1.35fr 1fr 64px;
+      gap: 8px;
       align-items: center;
       border-bottom: 2px solid #f97316;
-      padding-bottom: 8px;
-      margin-bottom: 10px;
+      padding-bottom: 6px;
+      margin-bottom: 8px;
     }
 
     .dash-avatar {
-      width: 66px;
-      height: 66px;
+      width: 62px;
+      height: 62px;
       border-radius: 8px;
       object-fit: cover;
       border: 1px solid #d1d5db;
@@ -809,8 +839,8 @@ BASE_HTML = """
     }
 
     .dash-avatar-placeholder {
-      width: 66px;
-      height: 66px;
+      width: 62px;
+      height: 62px;
       border-radius: 8px;
       border: 1px solid #d1d5db;
       background: #f8fafc;
@@ -818,7 +848,7 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       color: #6b7280;
-      font-size: 11px;
+      font-size: 10px;
       text-align: center;
       padding: 6px;
       box-sizing: border-box;
@@ -826,17 +856,17 @@ BASE_HTML = """
 
     .dash-title-wrap { min-width: 0; }
     .dash-main-title {
-      font-size: 18px;
+      font-size: 17px;
       font-weight: 800;
       text-transform: uppercase;
       text-align: center;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }
 
     .dash-subline {
-      font-size: 11px;
+      font-size: 10px;
       color: #374151;
-      line-height: 1.4;
+      line-height: 1.35;
     }
 
     .dash-meta-box {
@@ -848,26 +878,26 @@ BASE_HTML = """
     .dash-metric {
       border: 1px solid #d1d5db;
       border-radius: 8px;
-      padding: 6px;
+      padding: 5px;
       background: #fafafa;
     }
 
     .dash-metric-label {
-      font-size: 10px;
+      font-size: 9px;
       color: #6b7280;
       font-weight: 700;
       text-transform: uppercase;
-      margin-bottom: 3px;
+      margin-bottom: 2px;
     }
 
     .dash-metric-value {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 800;
       color: #111827;
     }
 
     .dash-kidy-logo {
-      max-width: 60px;
+      max-width: 54px;
       width: 100%;
       height: auto;
       justify-self: end;
@@ -875,79 +905,78 @@ BASE_HTML = """
 
     .dash-row-top {
       display: grid;
-      grid-template-columns: 1fr 1fr 1.1fr;
-      gap: 10px;
-      margin-bottom: 10px;
+      grid-template-columns: 1fr 1fr 1.08fr;
+      gap: 8px;
+      margin-bottom: 8px;
     }
 
     .dash-row-bottom {
       display: grid;
-      grid-template-columns: 1.18fr 0.95fr;
-      gap: 10px;
+      grid-template-columns: 1.22fr 0.92fr;
+      gap: 8px;
       align-items: start;
     }
 
     .dash-right-stack {
       display: grid;
       grid-template-rows: auto auto auto;
-      gap: 10px;
+      gap: 8px;
     }
 
     .dash-panel {
       border: 1px solid #9ca3af;
       background: #ffffff;
-      position: relative;
       overflow: hidden;
     }
 
     .dash-panel-title {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 800;
       text-transform: uppercase;
       color: #111827;
       background: #f3f4f6;
       border-bottom: 1px solid #d1d5db;
-      padding: 6px 8px;
+      padding: 5px 8px;
       text-align: center;
     }
 
     .dash-panel-body {
-      padding: 8px;
+      padding: 6px;
       box-sizing: border-box;
     }
 
     .dash-table-mini {
       width: 100%;
       border-collapse: collapse;
-      font-size: 10px;
+      font-size: 9px;
     }
 
     .dash-table-mini th,
     .dash-table-mini td {
       border: 1px solid #d1d5db;
-      padding: 3px 5px;
-      line-height: 1.2;
+      padding: 2px 4px;
+      line-height: 1.15;
     }
 
     .dash-table-mini th {
       background: #e5e7eb;
       font-weight: 700;
       text-transform: uppercase;
-      font-size: 9px;
+      font-size: 8px;
       position: static;
     }
 
     .dash-table-big {
       width: 100%;
       border-collapse: collapse;
-      font-size: 10px;
+      font-size: 9px;
     }
 
     .dash-table-big th,
     .dash-table-big td {
       border: 1px solid #d1d5db;
-      padding: 4px 5px;
-      line-height: 1.2;
+      padding: 3px 4px;
+      line-height: 1.12;
       vertical-align: middle;
     }
 
@@ -955,12 +984,12 @@ BASE_HTML = """
       background: #e5e7eb;
       font-weight: 700;
       text-transform: uppercase;
-      font-size: 9px;
+      font-size: 8px;
       position: static;
     }
 
     .dash-map-placeholder {
-      min-height: 210px;
+      min-height: 285px;
       background: #ecfeff;
       border: 2px dashed #06b6d4;
       color: #155e75;
@@ -971,10 +1000,11 @@ BASE_HTML = """
       font-size: 12px;
       border-radius: 6px;
       padding: 10px;
+      box-sizing: border-box;
     }
 
     .dash-gold-box {
-      min-height: 68px;
+      min-height: 58px;
       background: #fef3c7;
       border: 2px dashed #f59e0b;
       color: #92400e;
@@ -982,13 +1012,14 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       text-align: center;
-      font-size: 12px;
+      font-size: 11px;
       border-radius: 6px;
-      padding: 10px;
+      padding: 8px;
+      box-sizing: border-box;
     }
 
     .dash-coverage-box {
-      min-height: 90px;
+      min-height: 82px;
       background: #f8fafc;
       border: 2px dashed #94a3b8;
       color: #334155;
@@ -996,13 +1027,14 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       text-align: center;
-      font-size: 12px;
+      font-size: 11px;
       border-radius: 6px;
-      padding: 10px;
+      padding: 8px;
+      box-sizing: border-box;
     }
 
     .dash-summary-box {
-      min-height: 150px;
+      min-height: 130px;
       background: #f8fafc;
       border: 2px dashed #94a3b8;
       color: #334155;
@@ -1010,9 +1042,10 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       text-align: center;
-      font-size: 12px;
+      font-size: 11px;
       border-radius: 6px;
-      padding: 10px;
+      padding: 8px;
+      box-sizing: border-box;
     }
 
     .print-toolbar {
@@ -1029,11 +1062,11 @@ BASE_HTML = """
 
     .status-chip {
       display: inline-block;
-      min-width: 70px;
-      padding: 2px 6px;
+      min-width: 64px;
+      padding: 2px 5px;
       border-radius: 999px;
       text-align: center;
-      font-size: 9px;
+      font-size: 8px;
       font-weight: 700;
       border: 1px solid rgba(0,0,0,0.08);
     }
@@ -1049,26 +1082,72 @@ BASE_HTML = """
 
     @page {
       size: A3 landscape;
-      margin: 10mm;
+      margin: 4mm;
     }
 
     @media print {
-      body { background: #ffffff; }
-      .topbar, .card:first-child, .print-toolbar, .no-print, .msg { display: none !important; }
-      .container { padding: 0; margin: 0; }
-      .dash-shell {
-        border-radius: 0;
-        box-shadow: none;
-        border-left: 1px solid #cfd4dc;
-        border-right: 1px solid #cfd4dc;
+      html, body {
+        width: 420mm;
+        height: 297mm;
+        background: #ffffff !important;
+      }
+
+      .topbar,
+      .no-print,
+      .msg {
+        display: none !important;
+      }
+
+      .container {
+        padding: 0 !important;
+        margin: 0 !important;
         width: 100%;
       }
-      .dash-table-mini, .dash-table-big { font-size: 9px; }
-      .dash-table-mini th, .dash-table-mini td, .dash-table-big th, .dash-table-big td { padding: 3px 4px; }
+
+      .dash-page {
+        gap: 0 !important;
+        width: 100%;
+      }
+
+      .a3-page {
+        width: 412mm !important;
+        height: 288mm !important;
+        margin: 0 auto !important;
+        overflow: hidden !important;
+      }
+
+      .dash-shell {
+        width: 100% !important;
+        height: 100% !important;
+        padding: 6mm !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        overflow: hidden !important;
+      }
+
+      .dash-header,
+      .dash-row-top,
+      .dash-row-bottom,
+      .dash-right-stack,
+      .dash-panel,
+      .dash-panel-body {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+      }
+
+      .dash-table-mini,
+      .dash-table-big {
+        font-size: 8px !important;
+      }
+
+      .dash-table-mini th, .dash-table-mini td,
+      .dash-table-big th, .dash-table-big td {
+        padding: 2px 3px !important;
+      }
     }
 
     @media (max-width: 1200px) {
-      .dash-header { grid-template-columns: 80px 1fr; }
+      .dash-header { grid-template-columns: 74px 1fr; }
       .dash-meta-box { grid-column: 1 / -1; }
       .dash-kidy-logo { justify-self: start; }
       .dash-row-top { grid-template-columns: 1fr; }
@@ -1370,10 +1449,10 @@ def admin_dashboard():
             for i, item in enumerate(ranking_2026, start=1):
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
-                  <td style="width:26px; text-align:center;">{i}</td>
+                  <td style="width:22px; text-align:center;">{i}</td>
                   <td>{h(item['grupo'])}</td>
-                  <td style="width:110px; text-align:right;">{h(format_number_br(item['valor']))}</td>
-                  <td style="width:82px; text-align:center;">
+                  <td style="width:90px; text-align:right;">{h(format_number_br(item['valor']))}</td>
+                  <td style="width:70px; text-align:center;">
                     <span class="status-chip {chip_class(item['status_cor'])}">{h(render_status_badge_text(item['status_cor']))}</span>
                   </td>
                 </tr>
@@ -1395,7 +1474,7 @@ def admin_dashboard():
             """
         else:
             ranking_2026_html = """
-            <div class="dash-map-placeholder" style="min-height:150px;">
+            <div class="dash-map-placeholder" style="min-height:120px;">
               Sem dados para o Top 10 de 2026
             </div>
             """
@@ -1406,10 +1485,10 @@ def admin_dashboard():
             for i, item in enumerate(ranking_2025, start=1):
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
-                  <td style="width:26px; text-align:center;">{i}</td>
+                  <td style="width:22px; text-align:center;">{i}</td>
                   <td>{h(item['grupo'])}</td>
-                  <td style="width:110px; text-align:right;">{h(format_number_br(item['valor']))}</td>
-                  <td style="width:82px; text-align:center;">
+                  <td style="width:90px; text-align:right;">{h(format_number_br(item['valor']))}</td>
+                  <td style="width:70px; text-align:center;">
                     <span class="status-chip {chip_class(item['status_cor'])}">{h(render_status_badge_text(item['status_cor']))}</span>
                   </td>
                 </tr>
@@ -1431,7 +1510,7 @@ def admin_dashboard():
             """
         else:
             ranking_2025_html = """
-            <div class="dash-map-placeholder" style="min-height:150px;">
+            <div class="dash-map-placeholder" style="min-height:120px;">
               Sem dados para o Top 10 de 2025
             </div>
             """
@@ -1439,7 +1518,7 @@ def admin_dashboard():
         clientes_sem_compra_html = ""
         if clientes_sem_compra:
             rows = []
-            for item in clientes_sem_compra[:38]:
+            for item in clientes_sem_compra[:24]:
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
                   <td>{h(item['codigo'])}</td>
@@ -1475,19 +1554,24 @@ def admin_dashboard():
             """
         else:
             clientes_sem_compra_html = """
-            <div class="dash-map-placeholder" style="min-height:260px;">
+            <div class="dash-map-placeholder" style="min-height:220px;">
               Nenhum cliente sem compra encontrado pela regra atual (Total 2026 = 0)
             </div>
             """
 
         # =========================
         # MAPA DAS CIDADES
-        # Verde = com vendas / Vermelho = sem vendas
-        # Fonte = planilha Municipios Brasileiros / aba cidades
         # =========================
         mapa_svg_html = ""
         mapa_info_msg = ""
         cidades_mapa_qtd = 0
+        map_debug = {
+            "municipios_sheet_resolved": extract_google_sheet_id(MUNICIPIOS_SHEET_ID or SHEET_ID),
+            "ws_cidades": WS_CIDADES,
+            "cidade_muni_col": "",
+            "lat_col": "",
+            "lon_col": "",
+        }
 
         try:
             sh_muni = connect_municipios_gs()
@@ -1504,43 +1588,54 @@ def admin_dashboard():
                 "longitude", "long", "lon", "lng"
             ])
 
-            vendas_por_cidade = {}
-            if cidade_col:
-                for r in filtered_rows:
-                    cidade_base = normalize_city_key(r.get(cidade_col, ""))
-                    if not cidade_base:
-                        continue
+            map_debug["cidade_muni_col"] = cidade_muni_col or ""
+            map_debug["lat_col"] = lat_col or ""
+            map_debug["lon_col"] = lon_col or ""
 
-                    total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
-                    if cidade_base not in vendas_por_cidade:
-                        vendas_por_cidade[cidade_base] = {
-                            "cidade_original": norm(r.get(cidade_col, "")),
-                            "total_2026": 0.0
-                        }
-                    vendas_por_cidade[cidade_base]["total_2026"] += total_2026
+            if not cidade_col:
+                raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
+
+            if not cidade_muni_col:
+                raise RuntimeError("A coluna de cidade não foi encontrada na aba 'cidades'.")
+
+            if not lat_col or not lon_col:
+                raise RuntimeError("As colunas de latitude/longitude não foram encontradas na aba 'cidades'.")
+
+            vendas_por_cidade = {}
+            for r in filtered_rows:
+                cidade_base = normalize_city_key(r.get(cidade_col, ""))
+                if not cidade_base:
+                    continue
+
+                total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
+                if cidade_base not in vendas_por_cidade:
+                    vendas_por_cidade[cidade_base] = {
+                        "cidade_original": norm(r.get(cidade_col, "")),
+                        "total_2026": 0.0
+                    }
+                vendas_por_cidade[cidade_base]["total_2026"] += total_2026
 
             city_points = []
-            if cidade_muni_col and lat_col and lon_col:
-                for r in rows_cidades:
-                    cidade_sheet = normalize_city_key(r.get(cidade_muni_col, ""))
-                    if not cidade_sheet:
-                        continue
+            for r in rows_cidades:
+                cidade_sheet = normalize_city_key(r.get(cidade_muni_col, ""))
+                if not cidade_sheet:
+                    continue
 
-                    if cidade_sheet not in vendas_por_cidade:
-                        continue
+                if cidade_sheet not in vendas_por_cidade:
+                    continue
 
-                    lat = parse_float_any(r.get(lat_col, ""))
-                    lon = parse_float_any(r.get(lon_col, ""))
-                    total_2026 = vendas_por_cidade[cidade_sheet]["total_2026"]
+                lat = parse_float_any(r.get(lat_col, ""))
+                lon = parse_float_any(r.get(lon_col, ""))
+                total_2026 = vendas_por_cidade[cidade_sheet]["total_2026"]
 
-                    city_points.append({
-                        "cidade": vendas_por_cidade[cidade_sheet]["cidade_original"] or norm(r.get(cidade_muni_col, "")),
-                        "lat": lat,
-                        "lon": lon,
-                        "total_2026": total_2026,
-                        "fill": "#16a34a" if total_2026 > 0 else "#dc2626",
-                        "status_txt": "Com vendas" if total_2026 > 0 else "Sem vendas"
-                    })
+                city_points.append({
+                    "cidade": vendas_por_cidade[cidade_sheet]["cidade_original"] or norm(r.get(cidade_muni_col, "")),
+                    "lat": lat,
+                    "lon": lon,
+                    "total_2026": total_2026,
+                    "fill": "#16a34a" if total_2026 > 0 else "#dc2626",
+                    "status_txt": "Com vendas" if total_2026 > 0 else "Sem vendas"
+                })
 
             cidades_mapa_qtd = len(city_points)
             mapa_svg_html = build_city_map_svg(city_points)
@@ -1548,6 +1643,12 @@ def admin_dashboard():
             if not city_points:
                 mapa_info_msg = "Nenhuma cidade cruzou entre a carteira e a planilha de municípios."
 
+        except WorksheetNotFound:
+            mapa_svg_html = f"""
+            <div class="dash-map-placeholder">
+              Aba <b>{h(WS_CIDADES)}</b> não encontrada na planilha de municípios.
+            </div>
+            """
         except Exception as e:
             mapa_svg_html = f"""
             <div class="dash-map-placeholder">
@@ -1559,7 +1660,7 @@ def admin_dashboard():
         body = f"""
         <div class="dash-page">
 
-          <div class="card no-print">
+          <div class="card no-print a3-page">
             <form method="get">
               <div class="grid">
                 <div>
@@ -1585,124 +1686,126 @@ def admin_dashboard():
                 </div>
 
                 <div class="print-note">
-                  Dashboard ajustado para impressão em A3 horizontal.
+                  Ajustado para sair em uma única página A3 horizontal.
                 </div>
               </div>
             </form>
           </div>
 
-          <div class="dash-shell no-break">
+          <div class="a3-page no-break">
+            <div class="dash-shell">
 
-            <div class="dash-header">
-              <div>
-                {
-                    f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
-                    if rep_photo else
-                    '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
-                }
-              </div>
-
-              <div class="dash-title-wrap">
-                <div class="dash-main-title">Acompanhamento de Representante</div>
-                <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
-                <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
-              </div>
-
-              <div class="dash-meta-box">
-                <div class="dash-metric">
-                  <div class="dash-metric-label">Meta</div>
-                  <div class="dash-metric-value">{h(header_meta)}</div>
+              <div class="dash-header">
+                <div>
+                  {
+                      f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
+                      if rep_photo else
+                      '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
+                  }
                 </div>
-                <div class="dash-metric">
-                  <div class="dash-metric-label">Realizado</div>
-                  <div class="dash-metric-value">{h(header_realizado)}</div>
+
+                <div class="dash-title-wrap">
+                  <div class="dash-main-title">Acompanhamento de Representante</div>
+                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                  <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
                 </div>
-                <div class="dash-metric">
-                  <div class="dash-metric-label">% Realizado</div>
-                  <div class="dash-metric-value">{h(header_percentual)}</div>
-                </div>
-              </div>
 
-              <div>
-                <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
-              </div>
-            </div>
-
-            <div class="dash-row-top">
-
-              <div class="dash-panel">
-                <div class="dash-panel-title">10 Maiores Clientes</div>
-                <div class="dash-panel-body">
-                  {ranking_2026_html}
-                </div>
-              </div>
-
-              <div class="dash-panel">
-                <div class="dash-panel-title">10 Maiores Clientes 2025</div>
-                <div class="dash-panel-body">
-                  {ranking_2025_html}
-                </div>
-              </div>
-
-              <div class="dash-panel">
-                <div class="dash-panel-title">Cidades da Região</div>
-                <div class="dash-panel-body">
-                  {mapa_svg_html}
-                  <div style="margin-top:8px; text-align:center; font-size:11px; color:#6b7280;">
-                    Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
-                    {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
+                <div class="dash-meta-box">
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">Meta</div>
+                    <div class="dash-metric-value">{h(header_meta)}</div>
+                  </div>
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">Realizado</div>
+                    <div class="dash-metric-value">{h(header_realizado)}</div>
+                  </div>
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">% Realizado</div>
+                    <div class="dash-metric-value">{h(header_percentual)}</div>
                   </div>
                 </div>
-              </div>
 
-            </div>
-
-            <div class="dash-row-bottom">
-
-              <div class="dash-panel">
-                <div class="dash-panel-title">Clientes sem Compra</div>
-                <div class="dash-panel-body">
-                  {clientes_sem_compra_html}
+                <div>
+                  <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
                 </div>
               </div>
 
-              <div class="dash-right-stack">
+              <div class="dash-row-top">
 
                 <div class="dash-panel">
-                  <div class="dash-panel-title">Clientes Gold</div>
+                  <div class="dash-panel-title">10 Maiores Clientes</div>
                   <div class="dash-panel-body">
-                    <div class="dash-gold-box">
-                      Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
-                    </div>
+                    {ranking_2026_html}
                   </div>
                 </div>
 
                 <div class="dash-panel">
-                  <div class="dash-panel-title">Cobertura da Carteira</div>
+                  <div class="dash-panel-title">10 Maiores Clientes 2025</div>
                   <div class="dash-panel-body">
-                    <div class="dash-coverage-box">
-                      Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                      Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                      Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                      Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
-                    </div>
+                    {ranking_2025_html}
                   </div>
                 </div>
 
                 <div class="dash-panel">
-                  <div class="dash-panel-title">Tabela / Resumo Operacional</div>
+                  <div class="dash-panel-title">Cidades da Região</div>
                   <div class="dash-panel-body">
-                    <div class="dash-summary-box">
-                      Estrutura pronta para entrar depois com resumo operacional,
-                      metas, visitas, pedidos, saldo e KPIs adicionais.
+                    {mapa_svg_html}
+                    <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                      Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
+                      {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                     </div>
                   </div>
                 </div>
 
               </div>
-            </div>
 
+              <div class="dash-row-bottom">
+
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Clientes sem Compra</div>
+                  <div class="dash-panel-body">
+                    {clientes_sem_compra_html}
+                  </div>
+                </div>
+
+                <div class="dash-right-stack">
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Clientes Gold</div>
+                    <div class="dash-panel-body">
+                      <div class="dash-gold-box">
+                        Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Cobertura da Carteira</div>
+                    <div class="dash-panel-body">
+                      <div class="dash-coverage-box">
+                        Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                        Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Tabela / Resumo Operacional</div>
+                    <div class="dash-panel-body">
+                      <div class="dash-summary-box">
+                        Estrutura pronta para entrar depois com resumo operacional,
+                        metas, visitas, pedidos, saldo e KPIs adicionais.
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+            </div>
           </div>
         </div>
         """
@@ -1720,16 +1823,13 @@ def admin_dashboard():
               <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
               <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
-              <div class="line"><b>MUNICIPIOS_SHEET_ID:</b> {h(MUNICIPIOS_SHEET_ID or SHEET_ID)}</div>
-              <div class="line"><b>WS_CIDADES:</b> {h(WS_CIDADES)}</div>
-              <div class="line"><b>REP COL:</b> {h(rep_col)}</div>
-              <div class="line"><b>GRUPO COL:</b> {h(grupo_col)}</div>
-              <div class="line"><b>CIDADE COL:</b> {h(cidade_col)}</div>
+              <div class="line"><b>MUNICIPIOS_SHEET_ID RESOLVIDO:</b> {h(map_debug['municipios_sheet_resolved'])}</div>
+              <div class="line"><b>WS_CIDADES:</b> {h(map_debug['ws_cidades'])}</div>
+              <div class="line"><b>COLUNA CIDADE BASE:</b> {h(cidade_col)}</div>
+              <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
+              <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
+              <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
-              <div class="line"><b>DATA COL:</b> {h(data_agenda_col)}</div>
-              <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
-              <div class="line"><b>SEMANA COL:</b> {h(semana_col)}</div>
-              <div class="line"><b>STATUS COL:</b> {h(status_cliente_col)}</div>
             </div>
             """
 
