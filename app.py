@@ -40,6 +40,21 @@ DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "s
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
 
+# =========================
+# AGENDA SEMANAL
+# =========================
+AGENDA_FILE = r"D:\metodo\agenda_atendimentos.txt"
+
+DIAS_SEMANA = [
+    "SEGUNDA",
+    "TERCA",
+    "QUARTA",
+    "QUINTA",
+    "SEXTA"
+]
+
+ATENDIMENTOS = [1, 2, 3, 4]
+
 
 # =========================
 # LISTAS FIXAS (fallback)
@@ -50,12 +65,7 @@ DEFAULT_MESES = [
 ]
 
 DEFAULT_SEMANAS = [
-    "Segunda-feira",
-    "Terça-feira",
-    "Quarta-feira",
-    "Quinta-feira",
-    "Sexta-feira",
-    "Sem Agenda"
+    "Semana 01", "Semana 02", "Semana 03", "Semana 04", "sem Agenda"
 ]
 
 DEFAULT_STATUS = [
@@ -444,6 +454,190 @@ def build_city_map_svg(city_points, width=650, height=360):
     </div>
     """
     return svg
+
+
+# =========================
+# AGENDA - FUNÇÕES
+# =========================
+def _agenda_vazia():
+    agenda = {}
+    for dia in DIAS_SEMANA:
+        agenda[dia] = {}
+        for at in ATENDIMENTOS:
+            agenda[dia][at] = {
+                "cliente": "",
+                "valor": ""
+            }
+    return agenda
+
+
+def carregar_agenda_rep(rep_code):
+    rep_code = norm(rep_code)
+    agenda = _agenda_vazia()
+
+    if not rep_code:
+        return agenda
+
+    if not os.path.exists(AGENDA_FILE):
+        return agenda
+
+    try:
+        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
+            linhas = f.readlines()
+    except Exception:
+        return agenda
+
+    current_rep = ""
+    for linha in linhas:
+        linha = linha.strip()
+        if not linha:
+            continue
+
+        if linha.startswith("REP="):
+            current_rep = norm(linha.replace("REP=", ""))
+            continue
+
+        if current_rep != rep_code:
+            continue
+
+        partes = linha.split("|")
+        if len(partes) != 4:
+            continue
+
+        dia, at_txt, cliente, valor = partes
+        dia = normalize_text_for_match(dia)
+        try:
+            at = int(norm(at_txt))
+        except Exception:
+            continue
+
+        if dia in agenda and at in agenda[dia]:
+            agenda[dia][at]["cliente"] = norm(cliente)
+            agenda[dia][at]["valor"] = norm(valor)
+
+    return agenda
+
+
+def salvar_agenda_rep(rep_code, agenda_dict):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        raise RuntimeError("Representante da agenda não informado.")
+
+    os.makedirs(os.path.dirname(AGENDA_FILE), exist_ok=True)
+
+    linhas_existentes = []
+    if os.path.exists(AGENDA_FILE):
+        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
+            linhas_existentes = f.readlines()
+
+    novas_linhas = []
+    skip_bloco = False
+
+    for linha in linhas_existentes:
+        linha_strip = linha.strip()
+
+        if linha_strip.startswith("REP="):
+            bloco_rep = norm(linha_strip.replace("REP=", ""))
+            if bloco_rep == rep_code:
+                skip_bloco = True
+                continue
+            else:
+                skip_bloco = False
+
+        if not skip_bloco:
+            novas_linhas.append(linha)
+
+    if novas_linhas and not novas_linhas[-1].endswith("\n"):
+        novas_linhas[-1] += "\n"
+
+    novas_linhas.append(f"REP={rep_code}\n")
+
+    for dia in DIAS_SEMANA:
+        for at in ATENDIMENTOS:
+            cliente = norm(agenda_dict.get(dia, {}).get(at, {}).get("cliente", ""))
+            valor = norm(agenda_dict.get(dia, {}).get(at, {}).get("valor", ""))
+
+            if cliente or valor:
+                novas_linhas.append(f"{dia}|{at}|{cliente}|{valor}\n")
+
+    with open(AGENDA_FILE, "w", encoding="utf-8") as f:
+        f.writelines(novas_linhas)
+
+
+def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        return """
+        <div class="dash-summary-box">
+          Selecione um representante para exibir e salvar a agenda semanal.
+        </div>
+        """
+
+    agenda = carregar_agenda_rep(rep_code)
+
+    header_top = []
+    header_top.append("<tr>")
+    header_top.append('<th style="width:90px;">DIA</th>')
+    for at in ATENDIMENTOS:
+        header_top.append(f'<th colspan="2" style="text-align:center;">ATENDIMENTO {at:02d}</th>')
+    header_top.append("</tr>")
+
+    header_sub = []
+    header_sub.append("<tr>")
+    header_sub.append("<th></th>")
+    for _ in ATENDIMENTOS:
+        header_sub.append('<th style="width:150px;">CLIENTE</th>')
+        header_sub.append('<th style="width:80px;">VALOR</th>')
+    header_sub.append("</tr>")
+
+    body_rows = []
+
+    for dia in DIAS_SEMANA:
+        row = [f"<tr><td><b>{h(dia)}</b></td>"]
+        for at in ATENDIMENTOS:
+            cliente = agenda[dia][at]["cliente"]
+            valor = agenda[dia][at]["valor"]
+
+            row.append(
+                f'<td><input class="agenda-input" type="text" name="{h(dia)}_{at}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
+            )
+            row.append(
+                f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor"></td>'
+            )
+        row.append("</tr>")
+        body_rows.append("".join(row))
+
+    hidden_sup = f'<input type="hidden" name="sup" value="{h(sup_sel)}">' if sup_sel else ""
+    hidden_rep = f'<input type="hidden" name="rep" value="{h(rep_sel)}">' if rep_sel else ""
+
+    return f"""
+    <form method="post" action="{url_for('salvar_agenda')}">
+      <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
+      {hidden_sup}
+      {hidden_rep}
+
+      <div class="agenda-topbar">
+        <div class="agenda-rep-label">
+          Agenda semanal do representante <b>{h(rep_code)}</b>
+        </div>
+        <div>
+          <button type="submit" class="agenda-save-btn">Salvar Agenda</button>
+        </div>
+      </div>
+
+      <div class="agenda-wrapper">
+        <table class="agenda-table">
+          <thead>
+            {''.join(header_top)}
+            {''.join(header_sub)}
+          </thead>
+          <tbody>
+            {''.join(body_rows)}
+          </tbody>
+        </table>
+      </div>
+    </form>
+    """
 
 
 # =========================
@@ -1079,6 +1273,58 @@ BASE_HTML = """
     .chip-blue { background: rgba(56,189,248,0.18); color: #0c4a6e; }
     .chip-gray { background: #e5e7eb; color: #374151; }
 
+    .agenda-wrapper { overflow:auto; width:100%; }
+    .agenda-table { width:100%; border-collapse:collapse; font-size:10px; }
+    .agenda-table th, .agenda-table td {
+      border:1px solid #9ca3af;
+      padding:4px;
+      vertical-align:middle;
+      background:#ffffff;
+    }
+    .agenda-table thead th {
+      background:#f3f4f6;
+      text-align:center;
+      font-size:10px;
+      font-weight:800;
+      text-transform:uppercase;
+      position:static;
+    }
+    .agenda-input {
+      width:100%;
+      min-width:80px;
+      padding:5px 6px;
+      border-radius:4px;
+      border:1px solid #cbd5e1;
+      font-size:10px;
+      box-sizing:border-box;
+    }
+    .agenda-valor {
+      min-width:58px;
+      text-align:center;
+    }
+    .agenda-topbar {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:8px;
+      margin-bottom:6px;
+      flex-wrap:wrap;
+    }
+    .agenda-rep-label {
+      font-size:11px;
+      color:#374151;
+      font-weight:700;
+    }
+    .agenda-save-btn {
+      background:#f97316;
+      padding:8px 12px;
+      border-radius:8px;
+      border:0;
+      color:#fff;
+      cursor:pointer;
+      font-weight:700;
+    }
+
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
     @page {
@@ -1137,12 +1383,14 @@ BASE_HTML = """
       }
 
       .dash-table-mini,
-      .dash-table-big {
+      .dash-table-big,
+      .agenda-table {
         font-size: 8px !important;
       }
 
       .dash-table-mini th, .dash-table-mini td,
-      .dash-table-big th, .dash-table-big td {
+      .dash-table-big th, .dash-table-big td,
+      .agenda-table th, .agenda-table td {
         padding: 2px 3px !important;
       }
     }
@@ -1153,8 +1401,6 @@ BASE_HTML = """
       .dash-kidy-logo { justify-self: start; }
       .dash-row-top { grid-template-columns: 1fr; }
       .dash-row-bottom { grid-template-columns: 1fr; }
-      .grid { grid-template-columns: 1fr !important; }
-      .grid-2 { grid-template-columns: 1fr !important; }
     }
   </style>
 </head>
@@ -1221,8 +1467,6 @@ LOGIN_BODY = """
 @app.route("/", methods=["GET", "POST"])
 def login():
     if require_login():
-        if is_admin():
-            return redirect(url_for("admin_dashboard"))
         return redirect(url_for("dashboard"))
 
     if request.method == "POST":
@@ -1239,7 +1483,7 @@ def login():
             session["rep_name"] = ""
             session["rep_code"] = ""
             flash("Logado como ADMIN.", "ok")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("dashboard"))
         elif u.isdigit() and p.isdigit() and u == p:
             rep_nome = try_get_rep_name(u)
             session.clear()
@@ -1272,6 +1516,47 @@ def logout():
     session.clear()
     flash("Sessão encerrada.", "ok")
     return redirect(url_for("login"))
+
+
+@app.route("/salvar_agenda", methods=["POST"])
+def salvar_agenda():
+    if not require_login():
+        flash("Sessão expirada. Faça login novamente.", "err")
+        return redirect(url_for("login"))
+
+    if not is_admin():
+        flash("Somente admin pode salvar a agenda do dashboard.", "err")
+        return redirect(url_for("dashboard"))
+
+    rep_code = norm(request.form.get("rep_code_agenda", ""))
+    sup = norm(request.form.get("sup", ""))
+    rep = norm(request.form.get("rep", ""))
+
+    if not rep_code:
+        flash("Selecione um representante antes de salvar a agenda.", "err")
+        return redirect(url_for("admin_dashboard", sup=sup, rep=rep))
+
+    agenda_dict = _agenda_vazia()
+
+    for dia in DIAS_SEMANA:
+        for at in ATENDIMENTOS:
+            cliente = norm(request.form.get(f"{dia}_{at}_cliente", ""))
+            valor = norm(request.form.get(f"{dia}_{at}_valor", ""))
+            agenda_dict[dia][at]["cliente"] = cliente
+            agenda_dict[dia][at]["valor"] = valor
+
+    try:
+        salvar_agenda_rep(rep_code, agenda_dict)
+        flash(f"Agenda do representante {rep_code} salva com sucesso em {AGENDA_FILE}.", "ok")
+    except Exception as e:
+        flash(f"Erro ao salvar agenda: {norm(str(e))}", "err")
+
+    args = {}
+    if sup:
+        args["sup"] = sup
+    if rep:
+        args["rep"] = rep
+    return redirect(url_for("admin_dashboard", **args))
 
 
 @app.route("/admin-dashboard", methods=["GET"])
@@ -1425,9 +1710,6 @@ def admin_dashboard():
                 reverse=True
             )
 
-        # =========================
-        # AGENDA DO DASHBOARD ADMIN
-        # =========================
         agenda_rows = []
 
         if key_col and grupo_col:
@@ -1453,7 +1735,6 @@ def admin_dashboard():
                     "grupo": norm(r.get(grupo_col, "")),
                     "cidade": norm(r.get(cidade_col, "")) if cidade_col else "",
                     "representante": norm(r.get(nome_rep_col, "")) if nome_rep_col else "",
-                    "codigo_rep": norm(r.get(rep_col, "")) if rep_col else "",
                     "data": data_ag,
                     "mes": mes_ag,
                     "semana": semana_ag,
@@ -1472,21 +1753,20 @@ def admin_dashboard():
             else:
                 data_ord = "99999999"
             return (
-                x.get("codigo_rep", ""),
                 data_ord,
+                x.get("mes", ""),
+                x.get("semana", ""),
                 x.get("grupo", "")
             )
 
         agenda_rows.sort(key=agenda_sort_key)
 
-        agenda_html = ""
+        agenda_visitas_html = ""
         if agenda_rows:
             rows = []
-            for item in agenda_rows[:40]:
+            for item in agenda_rows[:18]:
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
-                  <td>{h(item['codigo_rep'])}</td>
-                  <td>{h(item['representante'])}</td>
                   <td>{h(item['data'])}</td>
                   <td>{h(item['mes'])}</td>
                   <td>{h(item['semana'])}</td>
@@ -1496,15 +1776,13 @@ def admin_dashboard():
                   <td>{h(item['status'])}</td>
                 </tr>
                 """)
-            agenda_html = f"""
+            agenda_visitas_html = f"""
             <table class="dash-table-big">
               <thead>
                 <tr>
-                  <th>Cód. Rep</th>
-                  <th>Representante</th>
                   <th>Data</th>
                   <th>Mês</th>
-                  <th>Dia/Semana</th>
+                  <th>Semana</th>
                   <th>Código</th>
                   <th>Grupo</th>
                   <th>Cidade</th>
@@ -1517,11 +1795,17 @@ def admin_dashboard():
             </table>
             """
         else:
-            agenda_html = """
+            agenda_visitas_html = """
             <div class="dash-summary-box">
               Nenhum registro de agenda encontrado para os filtros atuais.
             </div>
             """
+
+        agenda_semanal_html = render_agenda_semana_html(
+            rep_code=header_rep_code,
+            sup_sel=sup_sel,
+            rep_sel=rep_sel
+        )
 
         total_gold = 0
         total_carteira = len(filtered_rows)
@@ -1643,7 +1927,7 @@ def admin_dashboard():
                   <th>Total 2026</th>
                   <th>Data</th>
                   <th>Mês</th>
-                  <th>Dia/Semana</th>
+                  <th>Semana</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -1810,8 +2094,8 @@ def admin_dashboard():
 
                 <div class="dash-title-wrap">
                   <div class="dash-main-title">Acompanhamento de Representante</div>
-                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "Todos")}</div>
-                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "Todos")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "Todos")}</div>
+                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
                   <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
                 </div>
 
@@ -1897,12 +2181,21 @@ def admin_dashboard():
                   </div>
 
                   <div class="dash-panel">
-                    <div class="dash-panel-title">Agenda</div>
+                    <div class="dash-panel-title">Agenda de Visitas</div>
                     <div class="dash-panel-body">
-                      {agenda_html}
+                      {agenda_visitas_html}
                     </div>
                   </div>
 
+                </div>
+              </div>
+
+              <div style="margin-top:8px;">
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Agenda Semanal do Representante</div>
+                  <div class="dash-panel-body">
+                    {agenda_semanal_html}
+                  </div>
                 </div>
               </div>
 
@@ -1924,6 +2217,8 @@ def admin_dashboard():
               <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
               <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
               <div class="line"><b>AGENDA ROWS:</b> {h(len(agenda_rows))}</div>
+              <div class="line"><b>AGENDA FILE:</b> {h(AGENDA_FILE)}</div>
+              <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
               <div class="line"><b>MUNICIPIOS_SHEET_ID RESOLVIDO:</b> {h(map_debug['municipios_sheet_resolved'])}</div>
               <div class="line"><b>WS_CIDADES:</b> {h(map_debug['ws_cidades'])}</div>
@@ -2183,6 +2478,13 @@ def dashboard():
         </div>
         """
 
+    def opt_html(options, selected):
+        out = ["<option value=''></option>"]
+        for o in options:
+            sel = "selected" if norm(o) == norm(selected) else ""
+            out.append(f"<option value='{h(o)}' {sel}>{h(o)}</option>")
+        return "\n".join(out)
+
     table_rows = []
 
     for idx, r in enumerate(out_rows, start=1):
@@ -2197,8 +2499,24 @@ def dashboard():
         t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
         t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
 
+        dav = norm(r.get("Data Agenda Visita", ""))
+        mes = norm(r.get("Mês", ""))
+        sem = norm(r.get("Semana Atendimento", ""))
+        stc = norm(r.get("Status Cliente", ""))
+        obs = norm(r.get("Observações", ""))
+
         status_cor = r.get("_status_cor", "")
         klass = r.get("_row_class", "")
+        base_row_number = r.get("_base_row_number", "")
+        form_id = f"form_row_{idx}"
+
+        hidden_filters = ""
+        if sup_sel:
+            hidden_filters += f'<input type="hidden" name="sup" value="{h(sup_sel)}">'
+        if rep_sel:
+            hidden_filters += f'<input type="hidden" name="rep" value="{h(rep_sel)}">'
+        if q:
+            hidden_filters += f'<input type="hidden" name="q" value="{h(q)}">'
 
         row_html = f"""
         <tr class="{h(klass)}">
@@ -2212,6 +2530,46 @@ def dashboard():
           <td class="money nowrap">{h(t25)}</td>
           <td class="money nowrap">{h(t26)}</td>
           <td class="nowrap"><b>{h(status_cor)}</b></td>
+
+          <td>
+            <form id="{form_id}" method="post" action="{url_for('salvar')}">
+              <input type="hidden" name="client_key" value="{h(ck)}">
+              <input type="hidden" name="rep_code" value="{h(repc)}">
+              <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
+              {hidden_filters}
+            </form>
+            <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
+          </td>
+
+          <td>
+            <select name="Mês" form="{form_id}" style="min-width:140px;">
+              {opt_html(meses, mes)}
+            </select>
+          </td>
+
+          <td>
+            <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
+              {opt_html(semanas, sem)}
+            </select>
+          </td>
+
+          <td>
+            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
+              {opt_html(status_list, stc)}
+            </select>
+          </td>
+
+          <td style="min-width:420px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="text"
+                     name="Observações"
+                     form="{form_id}"
+                     placeholder="Digite observações..."
+                     value="{h(obs)}"
+                     style="flex:1; min-width:260px;">
+              <button type="submit" form="{form_id}" style="white-space:nowrap;">Gravar</button>
+            </div>
+          </td>
         </tr>
         """
         table_rows.append(row_html)
@@ -2269,6 +2627,11 @@ def dashboard():
             <th>Total 2025</th>
             <th>Total 2026</th>
             <th>Status Cor</th>
+            <th>Data Agenda Visita</th>
+            <th>Mês</th>
+            <th>Semana Atendimento</th>
+            <th>Status Cliente</th>
+            <th>Observações</th>
           </tr>
         </thead>
         <tbody>
