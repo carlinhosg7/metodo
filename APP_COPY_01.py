@@ -15,9 +15,9 @@ from gspread.exceptions import WorksheetNotFound
 from gspread.utils import rowcol_to_a1
 
 
-# =========================================================
-# CONFIG
-# =========================================================
+# =========================
+# CONFIG ENV
+# =========================
 SHEET_ID = os.getenv("SHEET_ID", "").strip()
 
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
@@ -40,13 +40,25 @@ DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "s
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
 
-# Arquivo da agenda semanal por representante
+# =========================
+# AGENDA SEMANAL
+# =========================
 AGENDA_FILE = r"D:\metodo\agenda_atendimentos.txt"
 
-# Agenda semanal fixa
-AGENDA_DIAS = ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA"]
-AGENDA_SLOTS = [1, 2, 3, 4]
+DIAS_SEMANA = [
+    "SEGUNDA",
+    "TERCA",
+    "QUARTA",
+    "QUINTA",
+    "SEXTA"
+]
 
+ATENDIMENTOS = [1, 2, 3, 4]
+
+
+# =========================
+# LISTAS FIXAS (fallback)
+# =========================
 DEFAULT_MESES = [
     "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
@@ -67,9 +79,9 @@ DEFAULT_STATUS = [
 ]
 
 
-# =========================================================
+# =========================
 # APP
-# =========================================================
+# =========================
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=7)
@@ -77,9 +89,9 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 
-# =========================================================
-# HELPERS GERAIS
-# =========================================================
+# =========================
+# HELPERS
+# =========================
 def norm(s):
     if s is None:
         return ""
@@ -444,9 +456,193 @@ def build_city_map_svg(city_points, width=650, height=360):
     return svg
 
 
-# =========================================================
+# =========================
+# AGENDA - FUNÇÕES
+# =========================
+def _agenda_vazia():
+    agenda = {}
+    for dia in DIAS_SEMANA:
+        agenda[dia] = {}
+        for at in ATENDIMENTOS:
+            agenda[dia][at] = {
+                "cliente": "",
+                "valor": ""
+            }
+    return agenda
+
+
+def carregar_agenda_rep(rep_code):
+    rep_code = norm(rep_code)
+    agenda = _agenda_vazia()
+
+    if not rep_code:
+        return agenda
+
+    if not os.path.exists(AGENDA_FILE):
+        return agenda
+
+    try:
+        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
+            linhas = f.readlines()
+    except Exception:
+        return agenda
+
+    current_rep = ""
+    for linha in linhas:
+        linha = linha.strip()
+        if not linha:
+            continue
+
+        if linha.startswith("REP="):
+            current_rep = norm(linha.replace("REP=", ""))
+            continue
+
+        if current_rep != rep_code:
+            continue
+
+        partes = linha.split("|")
+        if len(partes) != 4:
+            continue
+
+        dia, at_txt, cliente, valor = partes
+        dia = normalize_text_for_match(dia)
+        try:
+            at = int(norm(at_txt))
+        except Exception:
+            continue
+
+        if dia in agenda and at in agenda[dia]:
+            agenda[dia][at]["cliente"] = norm(cliente)
+            agenda[dia][at]["valor"] = norm(valor)
+
+    return agenda
+
+
+def salvar_agenda_rep(rep_code, agenda_dict):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        raise RuntimeError("Representante da agenda não informado.")
+
+    os.makedirs(os.path.dirname(AGENDA_FILE), exist_ok=True)
+
+    linhas_existentes = []
+    if os.path.exists(AGENDA_FILE):
+        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
+            linhas_existentes = f.readlines()
+
+    novas_linhas = []
+    skip_bloco = False
+
+    for linha in linhas_existentes:
+        linha_strip = linha.strip()
+
+        if linha_strip.startswith("REP="):
+            bloco_rep = norm(linha_strip.replace("REP=", ""))
+            if bloco_rep == rep_code:
+                skip_bloco = True
+                continue
+            else:
+                skip_bloco = False
+
+        if not skip_bloco:
+            novas_linhas.append(linha)
+
+    if novas_linhas and not novas_linhas[-1].endswith("\n"):
+        novas_linhas[-1] += "\n"
+
+    novas_linhas.append(f"REP={rep_code}\n")
+
+    for dia in DIAS_SEMANA:
+        for at in ATENDIMENTOS:
+            cliente = norm(agenda_dict.get(dia, {}).get(at, {}).get("cliente", ""))
+            valor = norm(agenda_dict.get(dia, {}).get(at, {}).get("valor", ""))
+
+            if cliente or valor:
+                novas_linhas.append(f"{dia}|{at}|{cliente}|{valor}\n")
+
+    with open(AGENDA_FILE, "w", encoding="utf-8") as f:
+        f.writelines(novas_linhas)
+
+
+def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        return """
+        <div class="dash-summary-box">
+          Selecione um representante para exibir e salvar a agenda semanal.
+        </div>
+        """
+
+    agenda = carregar_agenda_rep(rep_code)
+
+    header_top = []
+    header_top.append("<tr>")
+    header_top.append('<th style="width:90px;">DIA</th>')
+    for at in ATENDIMENTOS:
+        header_top.append(f'<th colspan="2" style="text-align:center;">ATENDIMENTO {at:02d}</th>')
+    header_top.append("</tr>")
+
+    header_sub = []
+    header_sub.append("<tr>")
+    header_sub.append("<th></th>")
+    for _ in ATENDIMENTOS:
+        header_sub.append('<th style="width:150px;">CLIENTE</th>')
+        header_sub.append('<th style="width:80px;">VALOR</th>')
+    header_sub.append("</tr>")
+
+    body_rows = []
+
+    for dia in DIAS_SEMANA:
+        row = [f"<tr><td><b>{h(dia)}</b></td>"]
+        for at in ATENDIMENTOS:
+            cliente = agenda[dia][at]["cliente"]
+            valor = agenda[dia][at]["valor"]
+
+            row.append(
+                f'<td><input class="agenda-input" type="text" name="{h(dia)}_{at}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
+            )
+            row.append(
+                f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor"></td>'
+            )
+        row.append("</tr>")
+        body_rows.append("".join(row))
+
+    hidden_sup = f'<input type="hidden" name="sup" value="{h(sup_sel)}">' if sup_sel else ""
+    hidden_rep = f'<input type="hidden" name="rep" value="{h(rep_sel)}">' if rep_sel else ""
+
+    return f"""
+    <form method="post" action="{url_for('salvar_agenda')}">
+      <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
+      {hidden_sup}
+      {hidden_rep}
+
+      <div class="agenda-topbar">
+        <div class="agenda-rep-label">
+          Agenda semanal do representante <b>{h(rep_code)}</b>
+        </div>
+        <div>
+          <button type="submit" class="agenda-save-btn">Salvar Agenda</button>
+        </div>
+      </div>
+
+      <div class="agenda-wrapper">
+        <table class="agenda-table">
+          <thead>
+            {''.join(header_top)}
+            {''.join(header_sub)}
+          </thead>
+          <tbody>
+            {''.join(body_rows)}
+          </tbody>
+        </table>
+      </div>
+    </form>
+    """
+
+
+# =========================
 # GOOGLE SHEETS
-# =========================================================
+# =========================
 def _load_service_account_info():
     if GOOGLE_SERVICE_ACCOUNT_JSON:
         info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
@@ -657,198 +853,9 @@ def build_debug_sheet_info(sh=None):
         }
 
 
-# =========================================================
-# AGENDA SEMANAL POR REPRESENTANTE
-# =========================================================
-def ensure_agenda_file():
-    folder = os.path.dirname(AGENDA_FILE)
-    if folder:
-        os.makedirs(folder, exist_ok=True)
-
-    if not os.path.exists(AGENDA_FILE):
-        with open(AGENDA_FILE, "w", encoding="utf-8") as f:
-            f.write("")
-
-
-def build_empty_week_agenda():
-    agenda = {}
-    for dia in AGENDA_DIAS:
-        agenda[dia] = {}
-        for slot in AGENDA_SLOTS:
-            agenda[dia][slot] = {"cliente": "", "valor": ""}
-    return agenda
-
-
-def load_week_agenda(rep_code):
-    rep_code = norm(rep_code)
-    agenda = build_empty_week_agenda()
-
-    if not rep_code:
-        return agenda
-
-    ensure_agenda_file()
-
-    try:
-        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except Exception:
-        return agenda
-
-    current_rep = ""
-
-    for raw in lines:
-        line = norm(raw)
-        if not line:
-            continue
-
-        if line.startswith("REP="):
-            current_rep = norm(line.replace("REP=", ""))
-            continue
-
-        if current_rep != rep_code:
-            continue
-
-        parts = line.split("|")
-        if len(parts) != 4:
-            continue
-
-        dia, slot_txt, cliente, valor = parts
-        dia = normalize_text_for_match(dia)
-
-        try:
-            slot = int(norm(slot_txt))
-        except Exception:
-            continue
-
-        if dia in agenda and slot in agenda[dia]:
-            agenda[dia][slot]["cliente"] = norm(cliente)
-            agenda[dia][slot]["valor"] = norm(valor)
-
-    return agenda
-
-
-def save_week_agenda(rep_code, agenda):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        raise RuntimeError("Representante da agenda não informado.")
-
-    ensure_agenda_file()
-
-    old_lines = []
-    if os.path.exists(AGENDA_FILE):
-        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
-            old_lines = f.readlines()
-
-    new_lines = []
-    skipping = False
-
-    for raw in old_lines:
-        line = raw.rstrip("\n")
-
-        if line.startswith("REP="):
-            block_rep = norm(line.replace("REP=", ""))
-            if block_rep == rep_code:
-                skipping = True
-                continue
-            skipping = False
-
-        if not skipping:
-            new_lines.append(raw if raw.endswith("\n") else raw + "\n")
-
-    if new_lines and new_lines[-1].strip():
-        if not new_lines[-1].endswith("\n"):
-            new_lines[-1] += "\n"
-
-    new_lines.append(f"REP={rep_code}\n")
-
-    for dia in AGENDA_DIAS:
-        for slot in AGENDA_SLOTS:
-            cliente = norm(agenda.get(dia, {}).get(slot, {}).get("cliente", ""))
-            valor = norm(agenda.get(dia, {}).get(slot, {}).get("valor", ""))
-
-            if cliente or valor:
-                new_lines.append(f"{dia}|{slot}|{cliente}|{valor}\n")
-
-    with open(AGENDA_FILE, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-
-
-def render_week_agenda_html(rep_code, sup_sel="", rep_sel=""):
-    rep_code = norm(rep_code)
-
-    if not rep_code:
-        return """
-        <div class="dash-summary-box">
-          Selecione um representante para carregar a agenda semanal.
-        </div>
-        """
-
-    agenda = load_week_agenda(rep_code)
-
-    top_header = ['<tr><th style="width:90px;">DIA</th>']
-    sub_header = ['<tr><th></th>']
-
-    for slot in AGENDA_SLOTS:
-        top_header.append(f'<th colspan="2">ATENDIMENTO {slot:02d}</th>')
-        sub_header.append('<th>CLIENTE</th>')
-        sub_header.append('<th>VALOR</th>')
-
-    top_header.append("</tr>")
-    sub_header.append("</tr>")
-
-    rows = []
-
-    for dia in AGENDA_DIAS:
-        row = [f"<tr><td><b>{h(dia)}</b></td>"]
-
-        for slot in AGENDA_SLOTS:
-            cliente = agenda[dia][slot]["cliente"]
-            valor = agenda[dia][slot]["valor"]
-
-            row.append(
-                f'<td><input type="text" class="agenda-input" name="{h(dia)}_{slot}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
-            )
-            row.append(
-                f'<td><input type="text" class="agenda-input agenda-input-valor" name="{h(dia)}_{slot}_valor" value="{h(valor)}" placeholder="Valor"></td>'
-            )
-
-        row.append("</tr>")
-        rows.append("".join(row))
-
-    hidden_sup = f'<input type="hidden" name="sup" value="{h(sup_sel)}">' if sup_sel else ""
-    hidden_rep = f'<input type="hidden" name="rep" value="{h(rep_sel)}">' if rep_sel else ""
-
-    return f"""
-    <form method="post" action="{url_for('salvar_agenda_semanal')}">
-      <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
-      {hidden_sup}
-      {hidden_rep}
-
-      <div class="agenda-form-top">
-        <div class="agenda-form-label">
-          Agenda do representante <b>{h(rep_code)}</b>
-        </div>
-        <button type="submit" class="agenda-btn-save">Salvar Agenda</button>
-      </div>
-
-      <div class="agenda-wrap">
-        <table class="agenda-table">
-          <thead>
-            {''.join(top_header)}
-            {''.join(sub_header)}
-          </thead>
-          <tbody>
-            {''.join(rows)}
-          </tbody>
-        </table>
-      </div>
-    </form>
-    """
-
-
-# =========================================================
+# =========================
 # ERROR HANDLER
-# =========================================================
+# =========================
 @app.errorhandler(Exception)
 def handle_any_exception(e):
     app.logger.error("ERRO NÃO TRATADO:\n%s", traceback.format_exc())
@@ -878,9 +885,9 @@ def handle_any_exception(e):
     ), 500
 
 
-# =========================================================
-# TEMPLATE BASE
-# =========================================================
+# =========================
+# TEMPLATES
+# =========================
 BASE_HTML = """
 <!doctype html>
 <html lang="pt-br">
@@ -1266,15 +1273,57 @@ BASE_HTML = """
     .chip-blue { background: rgba(56,189,248,0.18); color: #0c4a6e; }
     .chip-gray { background: #e5e7eb; color: #374151; }
 
-    .agenda-wrap { overflow:auto; width:100%; }
+    .agenda-wrapper { overflow:auto; width:100%; }
     .agenda-table { width:100%; border-collapse:collapse; font-size:10px; }
-    .agenda-table th, .agenda-table td { border:1px solid #9ca3af; padding:4px; vertical-align:middle; }
-    .agenda-table thead th { background:#e5e7eb; text-transform:uppercase; font-size:8px; font-weight:700; position:static; text-align:center; }
-    .agenda-input { width:100%; min-width:80px; padding:5px 6px; border:1px solid #cbd5e1; border-radius:4px; box-sizing:border-box; font-size:10px; }
-    .agenda-input-valor { min-width:60px; text-align:center; }
-    .agenda-form-top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
-    .agenda-form-label { font-size:11px; font-weight:700; color:#374151; }
-    .agenda-btn-save { background:#f97316; }
+    .agenda-table th, .agenda-table td {
+      border:1px solid #9ca3af;
+      padding:4px;
+      vertical-align:middle;
+      background:#ffffff;
+    }
+    .agenda-table thead th {
+      background:#f3f4f6;
+      text-align:center;
+      font-size:10px;
+      font-weight:800;
+      text-transform:uppercase;
+      position:static;
+    }
+    .agenda-input {
+      width:100%;
+      min-width:80px;
+      padding:5px 6px;
+      border-radius:4px;
+      border:1px solid #cbd5e1;
+      font-size:10px;
+      box-sizing:border-box;
+    }
+    .agenda-valor {
+      min-width:58px;
+      text-align:center;
+    }
+    .agenda-topbar {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:8px;
+      margin-bottom:6px;
+      flex-wrap:wrap;
+    }
+    .agenda-rep-label {
+      font-size:11px;
+      color:#374151;
+      font-weight:700;
+    }
+    .agenda-save-btn {
+      background:#f97316;
+      padding:8px 12px;
+      border-radius:8px;
+      border:0;
+      color:#fff;
+      cursor:pointer;
+      font-weight:700;
+    }
 
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
@@ -1412,9 +1461,9 @@ LOGIN_BODY = """
 """
 
 
-# =========================================================
+# =========================
 # ROTAS
-# =========================================================
+# =========================
 @app.route("/", methods=["GET", "POST"])
 def login():
     if require_login():
@@ -1469,14 +1518,14 @@ def logout():
     return redirect(url_for("login"))
 
 
-@app.route("/salvar_agenda_semanal", methods=["POST"])
-def salvar_agenda_semanal():
+@app.route("/salvar_agenda", methods=["POST"])
+def salvar_agenda():
     if not require_login():
         flash("Sessão expirada. Faça login novamente.", "err")
         return redirect(url_for("login"))
 
     if not is_admin():
-        flash("Somente admin pode salvar a agenda semanal do dashboard.", "err")
+        flash("Somente admin pode salvar a agenda do dashboard.", "err")
         return redirect(url_for("dashboard"))
 
     rep_code = norm(request.form.get("rep_code_agenda", ""))
@@ -1485,27 +1534,22 @@ def salvar_agenda_semanal():
 
     if not rep_code:
         flash("Selecione um representante antes de salvar a agenda.", "err")
-        args = {}
-        if sup:
-            args["sup"] = sup
-        if rep:
-            args["rep"] = rep
-        return redirect(url_for("admin_dashboard", **args))
+        return redirect(url_for("admin_dashboard", sup=sup, rep=rep))
 
-    agenda = build_empty_week_agenda()
+    agenda_dict = _agenda_vazia()
 
-    for dia in AGENDA_DIAS:
-        for slot in AGENDA_SLOTS:
-            cliente = norm(request.form.get(f"{dia}_{slot}_cliente", ""))
-            valor = norm(request.form.get(f"{dia}_{slot}_valor", ""))
-            agenda[dia][slot]["cliente"] = cliente
-            agenda[dia][slot]["valor"] = valor
+    for dia in DIAS_SEMANA:
+        for at in ATENDIMENTOS:
+            cliente = norm(request.form.get(f"{dia}_{at}_cliente", ""))
+            valor = norm(request.form.get(f"{dia}_{at}_valor", ""))
+            agenda_dict[dia][at]["cliente"] = cliente
+            agenda_dict[dia][at]["valor"] = valor
 
     try:
-        save_week_agenda(rep_code, agenda)
-        flash(f"Agenda semanal do representante {rep_code} salva com sucesso.", "ok")
+        salvar_agenda_rep(rep_code, agenda_dict)
+        flash(f"Agenda do representante {rep_code} salva com sucesso em {AGENDA_FILE}.", "ok")
     except Exception as e:
-        flash(f"Erro ao salvar agenda semanal: {norm(str(e))}", "err")
+        flash(f"Erro ao salvar agenda: {norm(str(e))}", "err")
 
     args = {}
     if sup:
@@ -1717,7 +1761,7 @@ def admin_dashboard():
 
         agenda_rows.sort(key=agenda_sort_key)
 
-        agenda_html = ""
+        agenda_visitas_html = ""
         if agenda_rows:
             rows = []
             for item in agenda_rows[:18]:
@@ -1732,7 +1776,7 @@ def admin_dashboard():
                   <td>{h(item['status'])}</td>
                 </tr>
                 """)
-            agenda_html = f"""
+            agenda_visitas_html = f"""
             <table class="dash-table-big">
               <thead>
                 <tr>
@@ -1751,13 +1795,13 @@ def admin_dashboard():
             </table>
             """
         else:
-            agenda_html = """
+            agenda_visitas_html = """
             <div class="dash-summary-box">
               Nenhum registro de agenda encontrado para os filtros atuais.
             </div>
             """
 
-        agenda_semanal_html = render_week_agenda_html(
+        agenda_semanal_html = render_agenda_semana_html(
             rep_code=header_rep_code,
             sup_sel=sup_sel,
             rep_sel=rep_sel
@@ -2139,7 +2183,7 @@ def admin_dashboard():
                   <div class="dash-panel">
                     <div class="dash-panel-title">Agenda de Visitas</div>
                     <div class="dash-panel-body">
-                      {agenda_html}
+                      {agenda_visitas_html}
                     </div>
                   </div>
 
