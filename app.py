@@ -40,17 +40,6 @@ DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "s
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
 
-# =========================
-# CONFIG AGENDA
-# =========================
-if os.name == "nt":
-    AGENDA_TXT_PATH = r"D:\metodo\agenda_atendimentos.txt"
-else:
-    AGENDA_TXT_PATH = "/tmp/agenda_atendimentos.txt"
-
-AGENDA_DIAS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO"]
-AGENDA_QTD_ATEND = 4
-
 
 # =========================
 # LISTAS FIXAS (fallback)
@@ -453,227 +442,6 @@ def build_city_map_svg(city_points, width=650, height=360):
 
 
 # =========================
-# HELPERS AGENDA
-# =========================
-def ensure_agenda_dir():
-    pasta = os.path.dirname(AGENDA_TXT_PATH)
-    if pasta and not os.path.exists(pasta):
-        os.makedirs(pasta, exist_ok=True)
-
-
-def agenda_empty_data():
-    data = {}
-    for dia in AGENDA_DIAS:
-        for i in range(1, AGENDA_QTD_ATEND + 1):
-            data[f"{dia}_CLIENTE_{i}"] = ""
-            data[f"{dia}_VALOR_{i}"] = ""
-    return data
-
-
-def load_all_agendas():
-    ensure_agenda_dir()
-
-    if not os.path.exists(AGENDA_TXT_PATH):
-        save_all_agendas({})
-        return {}
-
-    try:
-        with open(AGENDA_TXT_PATH, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-
-        if not content:
-            save_all_agendas({})
-            return {}
-
-        loaded = json.loads(content)
-        if not isinstance(loaded, dict):
-            return {}
-        return loaded
-    except Exception:
-        return {}
-
-
-def save_all_agendas(all_data):
-    ensure_agenda_dir()
-    with open(AGENDA_TXT_PATH, "w", encoding="utf-8") as f:
-        json.dump(all_data, f, ensure_ascii=False, indent=2)
-
-
-def get_agenda_for_rep(rep_code):
-    rep_code = norm(rep_code)
-    base = agenda_empty_data()
-
-    if not rep_code:
-        return base
-
-    all_data = load_all_agendas()
-    rep_data = all_data.get(rep_code, {})
-
-    if not isinstance(rep_data, dict):
-        rep_data = {}
-
-    for k in base.keys():
-        base[k] = norm(rep_data.get(k, ""))
-
-    return base
-
-
-def save_agenda_for_rep(rep_code, data):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        raise RuntimeError("Código do representante não informado para gravar a agenda.")
-
-    all_data = load_all_agendas()
-    all_data[rep_code] = data
-    save_all_agendas(all_data)
-
-
-def build_agenda_from_form(form):
-    data = agenda_empty_data()
-    for dia in AGENDA_DIAS:
-        for i in range(1, AGENDA_QTD_ATEND + 1):
-            ck = f"{dia}_CLIENTE_{i}"
-            vk = f"{dia}_VALOR_{i}"
-            data[ck] = norm(form.get(ck, ""))
-            data[vk] = norm(form.get(vk, ""))
-    return data
-
-
-def resolve_rep_name_from_code(rep_code, base_rows=None, rep_col=None, nome_rep_col=None):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        return ""
-
-    if base_rows and rep_col and nome_rep_col:
-        for r in base_rows:
-            if norm(r.get(rep_col, "")) == rep_code:
-                return norm(r.get(nome_rep_col, ""))
-
-    return try_get_rep_name(rep_code)
-
-
-def render_agenda_table_html(data, rep_code="", rep_name=""):
-    head_top = []
-    head_sub = []
-
-    for i in range(1, AGENDA_QTD_ATEND + 1):
-        head_top.append(f"<th colspan='2'>ATENDIMENTO {i:02d}</th>")
-        head_sub.append("<th>CLIENTE</th><th>VALOR</th>")
-
-    body_rows = []
-    for dia in AGENDA_DIAS:
-        cells = [f"<td class='agenda-dia'>{h(dia)}</td>"]
-
-        for i in range(1, AGENDA_QTD_ATEND + 1):
-            ck = f"{dia}_CLIENTE_{i}"
-            vk = f"{dia}_VALOR_{i}"
-
-            cells.append(
-                f"<td><input type='text' name='{h(ck)}' value='{h(data.get(ck, ''))}' placeholder='Cliente'></td>"
-            )
-            cells.append(
-                f"<td><input type='text' name='{h(vk)}' value='{h(data.get(vk, ''))}' placeholder='Valor'></td>"
-            )
-
-        body_rows.append(f"<tr>{''.join(cells)}</tr>")
-
-    subtitulo_rep = ""
-    if rep_code:
-        subtitulo_rep = f"Representante: <b>{h(rep_name or ('Representante ' + rep_code))}</b> | Código: <b>{h(rep_code)}</b>"
-
-    return f"""
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
-        <div>
-          <div style="font-size:18px; font-weight:700;">Agenda de Atendimentos</div>
-          <div class="small">{subtitulo_rep}</div>
-          <div class="small">Gravação local em: {h(AGENDA_TXT_PATH)}</div>
-        </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <a href="{url_for('agenda_atendimentos', rep=rep_code)}" class="btn-link secondary">Recarregar</a>
-          <a href="{url_for('admin_dashboard', rep=rep_code)}" class="btn-link dark">Voltar ao dashboard</a>
-        </div>
-      </div>
-
-      <form method="post" action="{url_for('salvar_agenda_atendimentos')}">
-        <input type="hidden" name="rep_code" value="{h(rep_code)}">
-
-        <div style="overflow:auto;">
-          <table class="agenda-table">
-            <thead>
-              <tr>
-                <th rowspan="2" style="min-width:90px;">DIA</th>
-                {''.join(head_top)}
-              </tr>
-              <tr class="agenda-subhead">
-                {''.join(head_sub)}
-              </tr>
-            </thead>
-            <tbody>
-              {''.join(body_rows)}
-            </tbody>
-          </table>
-        </div>
-
-        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button type="submit">Salvar agenda</button>
-        </div>
-      </form>
-    </div>
-    """
-
-
-def render_agenda_compact_dashboard_html(data, rep_code="", rep_name=""):
-    if not rep_code:
-        return """
-        <div class="dash-map-placeholder" style="min-height:180px;">
-          Selecione um representante para visualizar a agenda.
-        </div>
-        """
-
-    if not data:
-        data = agenda_empty_data()
-
-    dias_html = []
-
-    for dia in AGENDA_DIAS:
-        atendimentos_html = []
-
-        for i in range(1, AGENDA_QTD_ATEND + 1):
-            cliente = norm(data.get(f"{dia}_CLIENTE_{i}", ""))
-            valor = norm(data.get(f"{dia}_VALOR_{i}", ""))
-
-            cliente_show = cliente if cliente else "-"
-            valor_show = valor if valor else "-"
-
-            atendimentos_html.append(f"""
-            <div class="agenda-mini-item">
-              <div class="agenda-mini-num">Atend. {i:02d}</div>
-              <div class="agenda-mini-line"><b>Cliente:</b> {h(cliente_show)}</div>
-              <div class="agenda-mini-line"><b>Valor:</b> {h(valor_show)}</div>
-            </div>
-            """)
-
-        dias_html.append(f"""
-        <div class="agenda-mini-day">
-          <div class="agenda-mini-day-title">{h(dia)}</div>
-          <div class="agenda-mini-grid">
-            {''.join(atendimentos_html)}
-          </div>
-        </div>
-        """)
-
-    return f"""
-    <div style="margin-bottom:6px; font-size:9px; color:#374151; text-align:center;">
-      <b>Representante:</b> {h(rep_name or ('Representante ' + rep_code))} | <b>Código:</b> {h(rep_code)}
-    </div>
-    <div class="agenda-mini-wrap">
-      {''.join(dias_html)}
-    </div>
-    """
-
-
-# =========================
 # GOOGLE SHEETS
 # =========================
 def _load_service_account_info():
@@ -931,7 +699,7 @@ BASE_HTML = """
   <style>
     body { font-family: Arial, sans-serif; margin: 0; background: #f5f6f8; color: #111827; }
     .topbar { background: #ffffff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d1d5db; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-    .topbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .topbar-right { display: flex; align-items: center; gap: 10px; }
     .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
 
     .container { padding: 12px; }
@@ -1022,12 +790,6 @@ BASE_HTML = """
       margin-bottom: 12px;
     }
 
-    :root{
-      --a3w: 420mm;
-      --a3h: 297mm;
-      --screen-scale: 0.78;
-    }
-
     .dash-page {
       display: flex;
       flex-direction: column;
@@ -1035,35 +797,20 @@ BASE_HTML = """
       align-items: center;
     }
 
-    .a3-stage {
-      width: 100%;
-      overflow: auto;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
-      padding: 6px 0 18px 0;
-      box-sizing: border-box;
-    }
-
     .a3-page {
-      width: var(--a3w);
-      height: var(--a3h);
+      width: min(100%, 1560px);
       background: #ffffff;
-      transform: scale(var(--screen-scale));
-      transform-origin: top center;
-      margin-bottom: calc((1 - var(--screen-scale)) * -297mm);
     }
 
     .dash-shell {
-      width: 100%;
-      height: 100%;
       background: #ffffff;
       border: 1px solid #cfd4dc;
       border-top: 3px solid #f97316;
       border-bottom: 3px solid #f97316;
-      padding: 8mm;
+      padding: 10px;
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+      width: 100%;
       box-sizing: border-box;
       overflow: hidden;
     }
@@ -1282,6 +1029,21 @@ BASE_HTML = """
       box-sizing: border-box;
     }
 
+    .dash-summary-box {
+      min-height: 130px;
+      background: #f8fafc;
+      border: 2px dashed #94a3b8;
+      color: #334155;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 11px;
+      border-radius: 6px;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+
     .print-toolbar {
       display: flex;
       gap: 8px;
@@ -1314,134 +1076,16 @@ BASE_HTML = """
 
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
-    .agenda-table {
-      width: 100%;
-      border-collapse: collapse;
-      background: #ffffff;
-      font-size: 13px;
-    }
-
-    .agenda-table th,
-    .agenda-table td {
-      border: 1px solid #4b5563;
-      padding: 0;
-      text-align: center;
-      vertical-align: middle;
-    }
-
-    .agenda-table thead th {
-      background: #d9d9d9;
-      color: #111827;
-      font-weight: 700;
-      padding: 8px 6px;
-      position: static;
-    }
-
-    .agenda-table .agenda-subhead th {
-      background: #efefef;
-      font-size: 12px;
-      padding: 6px 4px;
-    }
-
-    .agenda-table .agenda-dia {
-      background: #f3f4f6;
-      font-weight: 700;
-      padding: 8px 6px;
-      min-width: 90px;
-    }
-
-    .agenda-table input {
-      width: 100%;
-      border: none;
-      padding: 10px 8px;
-      box-sizing: border-box;
-      text-align: center;
-      background: #ffffff;
-      color: #111827;
-      font-size: 13px;
-      border-radius: 0;
-      box-shadow: none;
-    }
-
-    .agenda-table input:focus {
-      outline: none;
-      background: #fff7d6;
-      box-shadow: none;
-      border-color: transparent;
-    }
-
-    .agenda-mini-wrap {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 6px;
-      max-height: 100%;
-    }
-
-    .agenda-mini-day {
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      overflow: hidden;
-      background: #ffffff;
-    }
-
-    .agenda-mini-day-title {
-      background: #e5e7eb;
-      color: #111827;
-      font-size: 9px;
-      font-weight: 800;
-      text-transform: uppercase;
-      padding: 4px 6px;
-      text-align: center;
-      border-bottom: 1px solid #cbd5e1;
-    }
-
-    .agenda-mini-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px;
-      padding: 4px;
-    }
-
-    .agenda-mini-item {
-      border: 1px solid #d1d5db;
-      border-radius: 4px;
-      padding: 4px;
-      background: #fafafa;
-      min-height: 38px;
-      box-sizing: border-box;
-    }
-
-    .agenda-mini-num {
-      font-size: 8px;
-      font-weight: 800;
-      color: #374151;
-      margin-bottom: 2px;
-      text-transform: uppercase;
-    }
-
-    .agenda-mini-line {
-      font-size: 8px;
-      line-height: 1.2;
-      color: #111827;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
     @page {
       size: A3 landscape;
-      margin: 0;
+      margin: 4mm;
     }
 
     @media print {
       html, body {
         width: 420mm;
         height: 297mm;
-        margin: 0 !important;
-        padding: 0 !important;
         background: #ffffff !important;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
       }
 
       .topbar,
@@ -1453,43 +1097,57 @@ BASE_HTML = """
       .container {
         padding: 0 !important;
         margin: 0 !important;
-        width: 420mm !important;
-        height: 297mm !important;
-        overflow: hidden !important;
+        width: 100%;
       }
 
       .dash-page {
-        display: block !important;
-        width: 420mm !important;
-        height: 297mm !important;
-        margin: 0 !important;
-        padding: 0 !important;
-      }
-
-      .a3-stage {
-        width: 420mm !important;
-        height: 297mm !important;
-        overflow: hidden !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        display: block !important;
+        gap: 0 !important;
+        width: 100%;
       }
 
       .a3-page {
-        width: 420mm !important;
-        height: 297mm !important;
-        transform: none !important;
-        margin: 0 !important;
+        width: 412mm !important;
+        height: 288mm !important;
+        margin: 0 auto !important;
+        overflow: hidden !important;
       }
 
       .dash-shell {
-        width: 420mm !important;
-        height: 297mm !important;
-        padding: 8mm !important;
-        box-shadow: none !important;
+        width: 100% !important;
+        height: 100% !important;
+        padding: 6mm !important;
         border-radius: 0 !important;
+        box-shadow: none !important;
         overflow: hidden !important;
       }
+
+      .dash-header,
+      .dash-row-top,
+      .dash-row-bottom,
+      .dash-right-stack,
+      .dash-panel,
+      .dash-panel-body {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+      }
+
+      .dash-table-mini,
+      .dash-table-big {
+        font-size: 8px !important;
+      }
+
+      .dash-table-mini th, .dash-table-mini td,
+      .dash-table-big th, .dash-table-big td {
+        padding: 2px 3px !important;
+      }
+    }
+
+    @media (max-width: 1200px) {
+      .dash-header { grid-template-columns: 74px 1fr; }
+      .dash-meta-box { grid-column: 1 / -1; }
+      .dash-kidy-logo { justify-self: start; }
+      .dash-row-top { grid-template-columns: 1fr; }
+      .dash-row-bottom { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1500,7 +1158,6 @@ BASE_HTML = """
       {% if logged %}
         {% if user_type == 'admin' %}
           <a href="{{ url_for('admin_dashboard') }}" class="btn-link dark">Dashboard</a>
-        {% else %}
           <a href="{{ url_for('dashboard') }}" class="btn-link secondary">Carteira</a>
         {% endif %}
         {% if user_photo_url %}
@@ -1759,29 +1416,105 @@ def admin_dashboard():
                 reverse=True
             )
 
+        # =========================
+        # AGENDA DO DASHBOARD ADMIN
+        # =========================
+        agenda_rows = []
+
+        if key_col and grupo_col:
+            for r in filtered_rows:
+                data_ag = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
+                mes_ag = norm(r.get(mes_col, "")) if mes_col else ""
+                semana_ag = norm(r.get(semana_col, "")) if semana_col else ""
+                status_ag = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
+                obs_ag = norm(r.get(observacoes_col, "")) if observacoes_col else ""
+
+                tem_agenda = any([data_ag, mes_ag, semana_ag, status_ag, obs_ag])
+                if not tem_agenda:
+                    continue
+
+                status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                    r,
+                    status_cor_col=status_cor_col,
+                    cliente_novo_col=cliente_novo_col
+                )
+
+                agenda_rows.append({
+                    "codigo": norm(r.get(key_col, "")),
+                    "grupo": norm(r.get(grupo_col, "")),
+                    "cidade": norm(r.get(cidade_col, "")) if cidade_col else "",
+                    "representante": norm(r.get(nome_rep_col, "")) if nome_rep_col else "",
+                    "data": data_ag,
+                    "mes": mes_ag,
+                    "semana": semana_ag,
+                    "status": status_ag,
+                    "obs": obs_ag,
+                    "status_cor": status_cor_final,
+                    "row_class": row_class
+                })
+
+        def agenda_sort_key(x):
+            data_txt = x.get("data", "")
+            m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", data_txt)
+            if m:
+                dd, mm, yyyy = m.groups()
+                data_ord = f"{yyyy}{mm}{dd}"
+            else:
+                data_ord = "99999999"
+            return (
+                data_ord,
+                x.get("mes", ""),
+                x.get("semana", ""),
+                x.get("grupo", "")
+            )
+
+        agenda_rows.sort(key=agenda_sort_key)
+
+        agenda_html = ""
+        if agenda_rows:
+            rows = []
+            for item in agenda_rows[:18]:
+                rows.append(f"""
+                <tr class="{h(item['row_class'])}">
+                  <td>{h(item['data'])}</td>
+                  <td>{h(item['mes'])}</td>
+                  <td>{h(item['semana'])}</td>
+                  <td>{h(item['codigo'])}</td>
+                  <td>{h(item['grupo'])}</td>
+                  <td>{h(item['cidade'])}</td>
+                  <td>{h(item['status'])}</td>
+                </tr>
+                """)
+            agenda_html = f"""
+            <table class="dash-table-big">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Mês</th>
+                  <th>Semana</th>
+                  <th>Código</th>
+                  <th>Grupo</th>
+                  <th>Cidade</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {''.join(rows)}
+              </tbody>
+            </table>
+            """
+        else:
+            agenda_html = """
+            <div class="dash-summary-box">
+              Nenhum registro de agenda encontrado para os filtros atuais.
+            </div>
+            """
+
         total_gold = 0
         total_carteira = len(filtered_rows)
         total_sem_compra = len(clientes_sem_compra)
         total_com_compra = max(total_carteira - total_sem_compra, 0)
         cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
-
-        agenda_rep_code = header_rep_code
-        if not agenda_rep_code and len(rep_list) == 1:
-            agenda_rep_code = norm(rep_list[0])
-
-        agenda_rep_name = resolve_rep_name_from_code(
-            agenda_rep_code,
-            base_rows=base_rows,
-            rep_col=rep_col,
-            nome_rep_col=nome_rep_col
-        ) if agenda_rep_code else ""
-
-        agenda_data = get_agenda_for_rep(agenda_rep_code) if agenda_rep_code else {}
-        agenda_dashboard_html = render_agenda_compact_dashboard_html(
-            agenda_data,
-            rep_code=agenda_rep_code,
-            rep_name=agenda_rep_name
-        )
 
         def chip_class(status_cor):
             s = normalize_text_for_match(status_cor)
@@ -1932,8 +1665,12 @@ def admin_dashboard():
             cidade_muni_col = pick_col_flexible(headers_cidades, [
                 "cidade", "municipio", "município", "nome", "nome municipio", "nome município"
             ])
-            lat_col = pick_col_flexible(headers_cidades, ["latitude", "lat"])
-            lon_col = pick_col_flexible(headers_cidades, ["longitude", "long", "lon", "lng"])
+            lat_col = pick_col_flexible(headers_cidades, [
+                "latitude", "lat"
+            ])
+            lon_col = pick_col_flexible(headers_cidades, [
+                "longitude", "long", "lon", "lng"
+            ])
 
             map_debug["cidade_muni_col"] = cidade_muni_col or ""
             map_debug["lat_col"] = lat_col or ""
@@ -2014,7 +1751,7 @@ def admin_dashboard():
         body = f"""
         <div class="dash-page">
 
-          <div class="card no-print" style="width:min(100%, 1560px);">
+          <div class="card no-print a3-page">
             <form method="get">
               <div class="grid">
                 <div>
@@ -2036,133 +1773,126 @@ def admin_dashboard():
                 <div class="print-toolbar">
                   <button type="submit">Aplicar</button>
                   <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
-                  {
-                    f'<a href="{url_for("agenda_atendimentos", rep=agenda_rep_code)}" class="btn-link dark">Abrir agenda</a>'
-                    if agenda_rep_code else
-                    '<span class="small">Selecione um representante para editar a agenda</span>'
-                  }
                   <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
                 </div>
 
                 <div class="print-note">
-                  Impressão configurada para ser uma cópia fiel da tela.
+                  Ajustado para sair em uma única página A3 horizontal.
                 </div>
               </div>
             </form>
           </div>
 
-          <div class="a3-stage no-break">
-            <div class="a3-page">
-              <div class="dash-shell">
+          <div class="a3-page no-break">
+            <div class="dash-shell">
 
-                <div class="dash-header">
-                  <div>
-                    {
-                        f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
-                        if rep_photo else
-                        '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
-                    }
+              <div class="dash-header">
+                <div>
+                  {
+                      f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
+                      if rep_photo else
+                      '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
+                  }
+                </div>
+
+                <div class="dash-title-wrap">
+                  <div class="dash-main-title">Acompanhamento de Representante</div>
+                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                  <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
+                </div>
+
+                <div class="dash-meta-box">
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">Meta</div>
+                    <div class="dash-metric-value">{h(header_meta)}</div>
                   </div>
-
-                  <div class="dash-title-wrap">
-                    <div class="dash-main-title">Acompanhamento de Representante</div>
-                    <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                    <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
-                    <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">Realizado</div>
+                    <div class="dash-metric-value">{h(header_realizado)}</div>
                   </div>
-
-                  <div class="dash-meta-box">
-                    <div class="dash-metric">
-                      <div class="dash-metric-label">Meta</div>
-                      <div class="dash-metric-value">{h(header_meta)}</div>
-                    </div>
-                    <div class="dash-metric">
-                      <div class="dash-metric-label">Realizado</div>
-                      <div class="dash-metric-value">{h(header_realizado)}</div>
-                    </div>
-                    <div class="dash-metric">
-                      <div class="dash-metric-label">% Realizado</div>
-                      <div class="dash-metric-value">{h(header_percentual)}</div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">% Realizado</div>
+                    <div class="dash-metric-value">{h(header_percentual)}</div>
                   </div>
                 </div>
 
-                <div class="dash-row-top">
+                <div>
+                  <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
+                </div>
+              </div>
 
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">10 Maiores Clientes</div>
-                    <div class="dash-panel-body">
-                      {ranking_2026_html}
-                    </div>
+              <div class="dash-row-top">
+
+                <div class="dash-panel">
+                  <div class="dash-panel-title">10 Maiores Clientes</div>
+                  <div class="dash-panel-body">
+                    {ranking_2026_html}
                   </div>
-
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">10 Maiores Clientes 2025</div>
-                    <div class="dash-panel-body">
-                      {ranking_2025_html}
-                    </div>
-                  </div>
-
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Cidades da Região</div>
-                    <div class="dash-panel-body">
-                      {mapa_svg_html}
-                      <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
-                        Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
-                        {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
-                      </div>
-                    </div>
-                  </div>
-
                 </div>
 
-                <div class="dash-row-bottom">
-
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Clientes sem Compra</div>
-                    <div class="dash-panel-body">
-                      {clientes_sem_compra_html}
-                    </div>
+                <div class="dash-panel">
+                  <div class="dash-panel-title">10 Maiores Clientes 2025</div>
+                  <div class="dash-panel-body">
+                    {ranking_2025_html}
                   </div>
+                </div>
 
-                  <div class="dash-right-stack">
-
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">Clientes Gold</div>
-                      <div class="dash-panel-body">
-                        <div class="dash-gold-box">
-                          Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
-                        </div>
-                      </div>
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Cidades da Região</div>
+                  <div class="dash-panel-body">
+                    {mapa_svg_html}
+                    <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                      Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
+                      {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                     </div>
-
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">Cobertura da Carteira</div>
-                      <div class="dash-panel-body">
-                        <div class="dash-coverage-box">
-                          Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                          Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                          Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">Agenda do Representante</div>
-                      <div class="dash-panel-body">
-                        {agenda_dashboard_html}
-                      </div>
-                    </div>
-
                   </div>
                 </div>
 
               </div>
+
+              <div class="dash-row-bottom">
+
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Clientes sem Compra</div>
+                  <div class="dash-panel-body">
+                    {clientes_sem_compra_html}
+                  </div>
+                </div>
+
+                <div class="dash-right-stack">
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Clientes Gold</div>
+                    <div class="dash-panel-body">
+                      <div class="dash-gold-box">
+                        Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Cobertura da Carteira</div>
+                    <div class="dash-panel-body">
+                      <div class="dash-coverage-box">
+                        Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                        Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Agenda</div>
+                    <div class="dash-panel-body">
+                      {agenda_html}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
@@ -2171,7 +1901,7 @@ def admin_dashboard():
         if DEBUG_MODE:
             abas = ", ".join(debug_info.get("worksheets", []))
             body += f"""
-            <div class="card debug-card no-print" style="width:min(100%, 1560px);">
+            <div class="card debug-card no-print">
               <div class="title">DEBUG DASHBOARD ADMIN</div>
               <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
               <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
@@ -2180,6 +1910,7 @@ def admin_dashboard():
               <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
               <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
               <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
+              <div class="line"><b>AGENDA ROWS:</b> {h(len(agenda_rows))}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
               <div class="line"><b>MUNICIPIOS_SHEET_ID RESOLVIDO:</b> {h(map_debug['municipios_sheet_resolved'])}</div>
               <div class="line"><b>WS_CIDADES:</b> {h(map_debug['ws_cidades'])}</div>
@@ -2188,7 +1919,11 @@ def admin_dashboard():
               <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
               <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
-              <div class="line"><b>AGENDA REP:</b> {h(agenda_rep_code)}</div>
+              <div class="line"><b>DATA AGENDA COL:</b> {h(data_agenda_col)}</div>
+              <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
+              <div class="line"><b>SEMANA COL:</b> {h(semana_col)}</div>
+              <div class="line"><b>STATUS CLIENTE COL:</b> {h(status_cliente_col)}</div>
+              <div class="line"><b>OBS COL:</b> {h(observacoes_col)}</div>
             </div>
             """
 
@@ -2609,89 +2344,6 @@ def dashboard():
         user_photo_url=current_user_photo,
         body=body
     )
-
-
-@app.route("/agenda-atendimentos", methods=["GET"])
-def agenda_atendimentos():
-    if not require_login():
-        flash("Faça login para continuar.", "err")
-        return redirect(url_for("login"))
-
-    if not is_admin():
-        flash("A agenda está disponível somente no dashboard admin.", "err")
-        return redirect(url_for("dashboard"))
-
-    rep_code = norm(request.args.get("rep", ""))
-
-    if not rep_code:
-        flash("Selecione um representante no dashboard para abrir a agenda.", "err")
-        return redirect(url_for("admin_dashboard"))
-
-    try:
-        sh = connect_gs()
-        ws_base = sh.worksheet(WS_BASE)
-        headers, base_rows = get_base_structure(ws_base)
-
-        rep_col = pick_col_flexible(headers, [
-            "Codigo Representante", "Código Representante",
-            "CODIGO REPRESENTANTE", "COD_REP"
-        ])
-        nome_rep_col = pick_col_flexible(headers, [
-            "Representante", "Nome Representante", "REPRESENTANTE"
-        ])
-    except Exception:
-        base_rows = []
-        rep_col = None
-        nome_rep_col = None
-
-    rep_name = resolve_rep_name_from_code(
-        rep_code,
-        base_rows=base_rows,
-        rep_col=rep_col,
-        nome_rep_col=nome_rep_col
-    )
-
-    data = get_agenda_for_rep(rep_code)
-    agenda_html = render_agenda_table_html(data, rep_code=rep_code, rep_name=rep_name)
-
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle="Agenda de Atendimentos",
-        logged=True,
-        user_login=session.get("user_login"),
-        user_name=session.get("rep_name", ""),
-        user_type=session.get("user_type"),
-        user_photo_url="",
-        body=agenda_html
-    )
-
-
-@app.route("/agenda-atendimentos/salvar", methods=["POST"])
-def salvar_agenda_atendimentos():
-    if not require_login():
-        flash("Sessão expirada. Faça login novamente.", "err")
-        return redirect(url_for("login"))
-
-    if not is_admin():
-        flash("Somente admin pode salvar a agenda.", "err")
-        return redirect(url_for("dashboard"))
-
-    rep_code = norm(request.form.get("rep_code", ""))
-
-    if not rep_code:
-        flash("Código do representante não informado para salvar a agenda.", "err")
-        return redirect(url_for("admin_dashboard"))
-
-    try:
-        data = build_agenda_from_form(request.form)
-        save_agenda_for_rep(rep_code, data)
-        flash(f"Agenda do representante {rep_code} gravada com sucesso em {AGENDA_TXT_PATH}.", "ok")
-    except Exception as e:
-        app.logger.error("Erro ao salvar agenda:\n%s", traceback.format_exc())
-        flash(f"Erro ao salvar agenda: {norm(str(e))}", "err")
-
-    return redirect(url_for("agenda_atendimentos", rep=rep_code))
 
 
 @app.route("/salvar", methods=["POST"])
