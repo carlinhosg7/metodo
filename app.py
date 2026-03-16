@@ -1,23 +1,37 @@
+# =========================================================
+# app.py
+# Flask + Google Sheets + Cache + Retry 429
+# =========================================================
+
 import os
-import re
 import json
+import time
 import base64
 import traceback
 import html
+from functools import lru_cache
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse, parse_qs
 
-from flask import Flask, request, redirect, url_for, session, render_template_string, flash
+from flask import (
+    Flask,
+    request,
+    redirect,
+    url_for,
+    session,
+    render_template_string,
+    flash
+)
 
 import gspread
 from google.oauth2.service_account import Credentials
-from gspread.exceptions import WorksheetNotFound
-from gspread.utils import rowcol_to_a1
+from gspread.exceptions import WorksheetNotFound, APIError
 
 
 # =========================================================
 # CONFIG
 # =========================================================
+APP_TITLE = os.getenv("APP_TITLE", "Acompanhamento de clientes").strip()
+
 SHEET_ID = os.getenv("SHEET_ID", "").strip()
 
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
@@ -27,421 +41,140 @@ ADMIN_USER = os.getenv("ADMIN_USER", "admin").strip()
 ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123").strip()
 SECRET_KEY = os.getenv("SECRET_KEY", "troque-esta-chave").strip()
 
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").strip().lower() == "true"
+
+# Nomes das abas
 WS_BASE = os.getenv("WS_BASE", "BASE").strip()
-WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
-WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
+#WS_AGENDA = os.getenv("WS_AGENDA", "AGENDA").strip()
+WS_CARTEIRA = os.getenv("WS_CARTEIRA", "CARTEIRA").strip()
 
-MUNICIPIOS_SHEET_ID = os.getenv("MUNICIPIOS_SHEET_ID", "").strip()
-WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
+# TTL de cache em segundos
+CACHE_TTL = int(os.getenv("CACHE_TTL", "60").strip())
 
-PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
-DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
+# Timezone Brasil
+BR_TZ = timezone(timedelta(hours=-3))
 
-APP_TITLE = "Acompanhamento de clientes"
-LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
-
-# Arquivo da agenda semanal por representante
-AGENDA_FILE = r"D:\metodo\agenda_atendimentos.txt"
-
-# Agenda semanal fixa
-AGENDA_DIAS = ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA"]
-AGENDA_SLOTS = [1, 2, 3, 4]
-
-DEFAULT_MESES = [
-    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+# Scopes Google
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
 ]
 
-DEFAULT_SEMANAS = [
-    "Semana 01", "Semana 02", "Semana 03", "Semana 04", "sem Agenda"
-]
-
-DEFAULT_STATUS = [
-    "CLIENTE COM BAIXO GIRO",
-    "CLIENTE ESTOCADO KIDY",
-    "CLIENTE ESTOCADO OUTRAS MARCAS",
-    "CLIENTE JÁ COMPROU",
-    "CLIENTE NÃO ATENDEU",
-    "CLIENTE SEM VERBA",
-    "CLIENTE VAI MANDAR O PEDIDO",
-]
-
-
-# =========================================================
-# APP
-# =========================================================
-app = Flask(__name__, static_folder="static", static_url_path="/static")
+app = Flask(__name__)
 app.secret_key = SECRET_KEY
-app.permanent_session_lifetime = timedelta(days=7)
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 
 # =========================================================
-# HELPERS GERAIS
+# CACHE SIMPLES EM MEMÓRIA
 # =========================================================
-def norm(s):
-    if s is None:
+_MEM_CACHE = {}
+
+
+def cache_get(key):
+    item = _MEM_CACHE.get(key)
+    if not item:
+        return None
+
+    expires_at, value = item
+    if time.time() > expires_at:
+        _MEM_CACHE.pop(key, None)
+        return None
+
+    return value
+
+
+def cache_set(key, value, ttl=CACHE_TTL):
+    _MEM_CACHE[key] = (time.time() + ttl, value)
+
+
+def cache_delete(key):
+    _MEM_CACHE.pop(key, None)
+
+
+def cache_clear_all():
+    _MEM_CACHE.clear()
+
+
+# =========================================================
+# HELPERS
+# =========================================================
+def now_br():
+    return datetime.now(BR_TZ)
+
+
+def format_dt_br(dt):
+    if not dt:
         return ""
-    s = str(s).strip()
-    s = re.sub(r"\s+", " ", s)
+    try:
+        return dt.astimezone(BR_TZ).strftime("%d/%m/%Y %H:%M:%S")
+    except Exception:
+        return str(dt)
+
+
+def safe_str(v):
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def to_float(v, default=0.0):
+    try:
+        s = safe_str(v).replace(".", "").replace(",", ".")
+        return float(s) if s else default
+    except Exception:
+        return default
+
+
+def to_int(v, default=0):
+    try:
+        s = safe_str(v)
+        return int(float(s)) if s else default
+    except Exception:
+        return default
+
+
+def normalize_header(text):
+    s = safe_str(text).lower()
+    s = s.replace("á", "a").replace("à", "a").replace("ã", "a").replace("â", "a")
+    s = s.replace("é", "e").replace("ê", "e")
+    s = s.replace("í", "i")
+    s = s.replace("ó", "o").replace("ô", "o").replace("õ", "o")
+    s = s.replace("ú", "u")
+    s = s.replace("ç", "c")
+    s = " ".join(s.split())
     return s
 
 
-def h(s):
-    return html.escape(norm(s), quote=True)
+def find_col(row_headers, possible_names):
+    norm_map = {normalize_header(c): i for i, c in enumerate(row_headers)}
+    for name in possible_names:
+        key = normalize_header(name)
+        if key in norm_map:
+            return norm_map[key]
+    return None
 
 
-def unique_list(values):
-    out, seen = [], set()
-    for v in values:
-        v = norm(v)
-        if not v:
-            continue
-        if v not in seen:
-            seen.add(v)
-            out.append(v)
-    return out
+def rows_to_dicts(values):
+    if not values:
+        return []
 
+    headers = values[0]
+    data_rows = values[1:]
 
-def is_admin():
-    return session.get("user_type") == "admin"
+    records = []
+    for row in data_rows:
+        row = row + [""] * (len(headers) - len(row))
+        rec = {headers[i]: row[i] for i in range(len(headers))}
+        records.append(rec)
+    return records
 
 
 def require_login():
-    return "user_type" in session and "user_login" in session
+    return session.get("logged_in") is True
 
 
-def normalize_header(s):
-    s = norm(s).lower()
-    s = (
-        s.replace("á", "a")
-         .replace("à", "a")
-         .replace("ã", "a")
-         .replace("â", "a")
-         .replace("é", "e")
-         .replace("ê", "e")
-         .replace("í", "i")
-         .replace("ó", "o")
-         .replace("ô", "o")
-         .replace("õ", "o")
-         .replace("ú", "u")
-         .replace("ç", "c")
-    )
-    return s
-
-
-def normalize_text_for_match(v):
-    s = norm(v).upper()
-    s = (
-        s.replace("Á", "A")
-         .replace("À", "A")
-         .replace("Ã", "A")
-         .replace("Â", "A")
-         .replace("É", "E")
-         .replace("Ê", "E")
-         .replace("Í", "I")
-         .replace("Ó", "O")
-         .replace("Ô", "O")
-         .replace("Õ", "O")
-         .replace("Ú", "U")
-         .replace("Ç", "C")
-    )
-    return s
-
-
-def normalize_city_key(v):
-    s = normalize_text_for_match(v)
-    s = re.sub(r"[^A-Z0-9 ]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def pick_col_exact(headers, candidates):
-    hmap = {normalize_header(x): x for x in headers}
-    for cand in candidates:
-        key = normalize_header(cand)
-        if key in hmap:
-            return hmap[key]
-    return None
-
-
-def pick_col_flexible(headers, candidates):
-    hmap = {normalize_header(x): x for x in headers}
-
-    for cand in candidates:
-        key = normalize_header(cand)
-        if key in hmap:
-            return hmap[key]
-
-    for header in headers:
-        header_norm = normalize_header(header)
-        for cand in candidates:
-            if normalize_header(cand) in header_norm:
-                return header
-
-    return None
-
-
-def clean_color_text(v):
-    return norm(v)
-
-
-def is_truthy_novo(v):
-    s = normalize_text_for_match(v)
-    return s in {"SIM", "S", "YES", "Y", "1", "TRUE", "VERDADEIRO", "NOVO", "CLIENTE NOVO"}
-
-
-def get_row_class_from_color_text(status_cor_raw):
-    s = normalize_text_for_match(status_cor_raw)
-
-    if "VERMELH" in s:
-        return "row-red", 1
-    if "LARANJ" in s:
-        return "row-orange", 2
-    if "AMAREL" in s:
-        return "row-yellow", 3
-    if "VERDE" in s:
-        return "row-green", 4
-    if "AZUL" in s:
-        return "row-blue", 5
-    if "NOVO" in s or "NOVA" in s:
-        return "row-blue", 5
-
-    return "", 99
-
-
-def resolve_status_cor_from_base(row, status_cor_col=None, cliente_novo_col=None):
-    status_cor_raw = clean_color_text(row.get(status_cor_col, "")) if status_cor_col else ""
-
-    if status_cor_raw:
-        row_class, priority = get_row_class_from_color_text(status_cor_raw)
-        return status_cor_raw, row_class, priority
-
-    if cliente_novo_col:
-        novo_val = row.get(cliente_novo_col, "")
-        if is_truthy_novo(novo_val):
-            return "AZUL", "row-blue", 5
-
-    return "", "", 99
-
-
-def get_rep_photo_src(codigo_rep):
-    codigo = norm(codigo_rep)
-    if not codigo:
-        return ""
-
-    exts = ["png", "jpg", "jpeg", "webp"]
-    base_static_dir = os.path.join(app.root_path, "static", "representantes")
-
-    for ext in exts:
-        abs_path = os.path.join(base_static_dir, f"{codigo}.{ext}")
-        if os.path.exists(abs_path):
-            return f"/static/representantes/{codigo}.{ext}"
-
-    return ""
-
-
-def fmt_money(v):
-    return norm(v)
-
-
-def to_input_date(v):
-    v = norm(v)
-    if not v:
-        return ""
-
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
-        return v
-
-    m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", v)
-    if m:
-        dd, mm, yyyy = m.groups()
-        return f"{yyyy}-{mm}-{dd}"
-
-    return ""
-
-
-def from_input_date(v):
-    v = norm(v)
-    if not v:
-        return ""
-
-    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v)
-    if m:
-        yyyy, mm, dd = m.groups()
-        return f"{dd}/{mm}/{yyyy}"
-
-    return v
-
-
-def safe_cell(vals, idx_1_based):
-    pos = idx_1_based - 1
-    return norm(vals[pos]) if pos < len(vals) else ""
-
-
-def set_last_save_debug(payload):
-    session["last_save_debug"] = payload
-
-
-def get_last_save_debug():
-    return session.get("last_save_debug", {})
-
-
-def parse_number_br(value):
-    s = norm(value)
-    if not s:
-        return 0.0
-
-    s = s.replace("R$", "").replace(" ", "")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        s = s.replace(",", ".")
-
-    try:
-        return float(s)
-    except Exception:
-        return 0.0
-
-
-def parse_float_any(value):
-    s = norm(value)
-    if not s:
-        return None
-
-    s = s.replace(" ", "")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        s = s.replace(",", ".")
-
-    try:
-        return float(s)
-    except Exception:
-        return None
-
-
-def format_number_br(value):
-    try:
-        n = float(value)
-    except Exception:
-        n = 0.0
-    txt = f"{n:,.2f}"
-    txt = txt.replace(",", "X").replace(".", ",").replace("X", ".")
-    return txt
-
-
-def format_money_br(value):
-    return f"R$ {format_number_br(value)}"
-
-
-def render_status_badge_text(status_cor):
-    s = normalize_text_for_match(status_cor)
-    if "VERMELH" in s:
-        return "Vermelho"
-    if "LARANJ" in s:
-        return "Laranja"
-    if "AMAREL" in s:
-        return "Amarelo"
-    if "VERDE" in s:
-        return "Verde"
-    if "AZUL" in s or "NOVO" in s:
-        return "Azul"
-    return norm(status_cor)
-
-
-def extract_google_sheet_id(raw_value):
-    raw = norm(raw_value)
-    if not raw:
-        return ""
-
-    if "/spreadsheets/d/" in raw:
-        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw)
-        if m:
-            return m.group(1)
-
-    if raw.startswith("http://") or raw.startswith("https://"):
-        try:
-            parsed = urlparse(raw)
-            qs = parse_qs(parsed.query)
-            if "id" in qs and qs["id"]:
-                return qs["id"][0]
-        except Exception:
-            pass
-
-    return raw
-
-
-def build_city_map_svg(city_points, width=650, height=360):
-    if not city_points:
-        return """
-        <div class="dash-map-placeholder">
-          Não foi possível montar o mapa.<br><br>
-          Verifique a planilha de municípios, a aba <b>cidades</b> e as colunas de cidade, latitude e longitude.
-        </div>
-        """
-
-    valid_points = [
-        p for p in city_points
-        if p.get("lat") is not None and p.get("lon") is not None
-    ]
-
-    if not valid_points:
-        return """
-        <div class="dash-map-placeholder">
-          Nenhuma coordenada válida encontrada na aba <b>cidades</b>.
-        </div>
-        """
-
-    min_lon = min(p["lon"] for p in valid_points)
-    max_lon = max(p["lon"] for p in valid_points)
-    min_lat = min(p["lat"] for p in valid_points)
-    max_lat = max(p["lat"] for p in valid_points)
-
-    if min_lon == max_lon:
-        max_lon += 0.01
-    if min_lat == max_lat:
-        max_lat += 0.01
-
-    pad = 18
-
-    def project(lon, lat):
-        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
-        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
-        return x, y
-
-    circles = []
-    for p in valid_points:
-        x, y = project(p["lon"], p["lat"])
-        fill = p["fill"]
-        title = h(f"{p['cidade']} | {p['status_txt']} | Total 2026: {format_number_br(p['total_2026'])}")
-        circles.append(
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="4.8" fill="{fill}" stroke="#ffffff" stroke-width="1.2">'
-            f'<title>{title}</title></circle>'
-        )
-
-    svg = f"""
-    <div style="width:100%; height:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
-      <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
-        <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
-        <rect x="10" y="10" width="{width-20}" height="{height-20}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
-        {''.join(circles)}
-      </svg>
-
-      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
-          Com vendas
-        </span>
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
-          Sem vendas
-        </span>
-      </div>
-    </div>
-    """
-    return svg
+def current_user():
+    return session.get("username", "")
 
 
 # =========================================================
@@ -449,2323 +182,1001 @@ def build_city_map_svg(city_points, width=650, height=360):
 # =========================================================
 def _load_service_account_info():
     if GOOGLE_SERVICE_ACCOUNT_JSON:
-        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-    elif GOOGLE_SA_JSON_B64:
-        b64 = GOOGLE_SA_JSON_B64.strip()
-        b64 += "=" * (-len(b64) % 4)
-        info = json.loads(base64.b64decode(b64).decode("utf-8"))
-    else:
-        raise RuntimeError("Faltou GOOGLE_SERVICE_ACCOUNT_JSON (ou GOOGLE_SA_JSON_B64) nas variáveis de ambiente.")
+        return json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
 
-    if "private_key" in info and isinstance(info["private_key"], str):
-        info["private_key"] = info["private_key"].replace("\\n", "\n")
+    if GOOGLE_SA_JSON_B64:
+        decoded = base64.b64decode(GOOGLE_SA_JSON_B64).decode("utf-8")
+        return json.loads(decoded)
 
-    return info
+    raise RuntimeError(
+        "Credenciais do Google não configuradas. "
+        "Defina GOOGLE_SERVICE_ACCOUNT_JSON ou GOOGLE_SA_JSON_B64."
+    )
 
 
-def connect_gs_by_key(sheet_key_or_url):
-    resolved_key = extract_google_sheet_id(sheet_key_or_url)
-    if not resolved_key:
-        raise RuntimeError("Sheet ID não informado.")
+@lru_cache(maxsize=1)
+def get_gspread_client():
+    creds_info = _load_service_account_info()
+    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    return gspread.authorize(creds)
 
-    info = _load_service_account_info()
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    gc = gspread.authorize(creds)
-    return gc.open_by_key(resolved_key)
+
+def with_backoff(func, *args, **kwargs):
+    """
+    Retry inteligente para erro 429 / 5xx
+    """
+    delays = [1, 2, 4, 8, 16]
+    last_err = None
+
+    for delay in delays:
+        try:
+            return func(*args, **kwargs)
+        except APIError as e:
+            last_err = e
+            status = None
+            try:
+                status = e.response.status_code
+            except Exception:
+                pass
+
+            if status in (429, 500, 502, 503, 504):
+                time.sleep(delay)
+                continue
+            raise
+        except Exception as e:
+            last_err = e
+            raise
+
+    raise last_err
+
+
+@lru_cache(maxsize=1)
+def connect_gs_by_key(sheet_key):
+    gc = get_gspread_client()
+    return with_backoff(gc.open_by_key, sheet_key)
 
 
 def connect_gs():
     if not SHEET_ID:
-        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
+        raise RuntimeError("SHEET_ID não foi configurado.")
     return connect_gs_by_key(SHEET_ID)
 
 
-def connect_municipios_gs():
-    target_id = MUNICIPIOS_SHEET_ID or SHEET_ID
-    return connect_gs_by_key(target_id)
+def get_worksheet(ws_name):
+    cache_key = f"worksheet_obj::{ws_name}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
 
-
-def safe_get_all_records(ws):
-    try:
-        return ws.get_all_records()
-    except Exception:
-        return []
-
-
-def safe_get_raw_rows(ws):
-    try:
-        values = ws.get_all_values()
-    except Exception:
-        return [], []
-
-    if not values:
-        return [], []
-
-    headers = [norm(x) for x in values[0]]
-    rows = []
-
-    for raw in values[1:]:
-        if len(raw) < len(headers):
-            raw = raw + [""] * (len(headers) - len(raw))
-        elif len(raw) > len(headers):
-            raw = raw[:len(headers)]
-
-        row = {headers[i]: raw[i] for i in range(len(headers))}
-        rows.append(row)
-
-    return headers, rows
-
-
-def ensure_headers(ws, headers):
-    current = [norm(x) for x in ws.row_values(1)]
-    if not current:
-        ws.append_row(headers, value_input_option="USER_ENTERED")
-    elif current != headers:
-        ws.update("A1", [headers], value_input_option="USER_ENTERED")
-
-
-def ensure_edicoes_worksheet(sh):
-    headers = [
-        "timestamp",
-        "user_type",
-        "user_login",
-        "rep_code",
-        "client_key",
-        "Data Agenda Visita",
-        "Mês",
-        "Semana Atendimento",
-        "Status Cliente",
-        "Observações"
-    ]
-
-    try:
-        ws = sh.worksheet(WS_EDICOES)
-    except WorksheetNotFound:
-        try:
-            ws = sh.add_worksheet(title=WS_EDICOES, rows="5000", cols="30")
-        except Exception as e:
-            raise RuntimeError(
-                f"Não foi possível acessar/criar a aba '{WS_EDICOES}'. "
-                f"Crie essa aba manualmente na planilha ou conceda permissão de Editor à service account. "
-                f"Detalhe: {str(e)}"
-            )
-
-    ensure_headers(ws, headers)
+    sh = connect_gs()
+    ws = with_backoff(sh.worksheet, ws_name)
+    cache_set(cache_key, ws, ttl=CACHE_TTL)
     return ws
 
 
-def ensure_base_tracking_columns(ws_base):
-    headers = [norm(x) for x in ws_base.row_values(1)]
-    if not headers:
-        raise RuntimeError("A aba BASE está sem cabeçalho na linha 1.")
+def get_sheet_values(ws_name, force_refresh=False):
+    """
+    Lê todos os valores de uma aba com cache.
+    """
+    cache_key = f"sheet_values::{ws_name}"
 
-    required = [
-        "Data Agenda Visita",
-        "Mês",
-        "Semana Atendimento",
-        "Status Cliente",
-        "Observações"
-    ]
+    if not force_refresh:
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return cached
 
-    changed = False
-    for col in required:
-        if col not in headers:
-            headers.append(col)
-            changed = True
-
-    if changed:
-        ws_base.update("A1", [headers], value_input_option="USER_ENTERED")
-        headers = [norm(x) for x in ws_base.row_values(1)]
-
-    return headers
+    ws = get_worksheet(ws_name)
+    values = with_backoff(ws.get_all_values)
+    cache_set(cache_key, values, ttl=CACHE_TTL)
+    return values
 
 
-def get_base_structure(ws_base):
-    headers = ensure_base_tracking_columns(ws_base)
-    rows = ws_base.get_all_values()
-
-    if not rows:
-        return headers, []
-
-    final_headers = [norm(x) for x in rows[0]]
-    data_rows = []
-
-    for raw in rows[1:]:
-        if len(raw) < len(final_headers):
-            raw = raw + [""] * (len(final_headers) - len(raw))
-        elif len(raw) > len(final_headers):
-            raw = raw[:len(final_headers)]
-
-        data_rows.append({final_headers[i]: raw[i] for i in range(len(final_headers))})
-
-    return final_headers, data_rows
+def get_sheet_records(ws_name, force_refresh=False):
+    values = get_sheet_values(ws_name, force_refresh=force_refresh)
+    return rows_to_dicts(values)
 
 
-def try_get_rep_name(rep_code):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        return ""
-
-    try:
-        sh = connect_gs()
-        ws_base = sh.worksheet(WS_BASE)
-        headers, base_rows = safe_get_raw_rows(ws_base)
-
-        rep_col = pick_col_flexible(headers, [
-            "Codigo Representante", "Código Representante",
-            "CODIGO REPRESENTANTE", "COD_REP"
-        ])
-        nome_rep_col = pick_col_flexible(headers, [
-            "Representante", "Nome Representante", "REPRESENTANTE"
-        ])
-
-        if not rep_col or not nome_rep_col:
-            return ""
-
-        for row in base_rows:
-            if norm(row.get(rep_col, "")) == rep_code:
-                return norm(row.get(nome_rep_col, ""))
-
-        return ""
-    except Exception:
-        return ""
-
-
-def build_debug_sheet_info(sh=None):
-    try:
-        if sh is None:
-            sh = connect_gs()
-
-        abas = [ws.title for ws in sh.worksheets()]
-        return {
-            "sheet_id": extract_google_sheet_id(SHEET_ID),
-            "spreadsheet_title": norm(getattr(sh, "title", "")),
-            "worksheets": abas,
-            "ok": True,
-        }
-    except Exception as e:
-        return {
-            "sheet_id": extract_google_sheet_id(SHEET_ID),
-            "spreadsheet_title": "",
-            "worksheets": [],
-            "ok": False,
-            "error": str(e),
-        }
-
-
-# =========================================================
-# AGENDA SEMANAL POR REPRESENTANTE
-# =========================================================
-def ensure_agenda_file():
-    folder = os.path.dirname(AGENDA_FILE)
-    if folder:
-        os.makedirs(folder, exist_ok=True)
-
-    if not os.path.exists(AGENDA_FILE):
-        with open(AGENDA_FILE, "w", encoding="utf-8") as f:
-            f.write("")
-
-
-def build_empty_week_agenda():
-    agenda = {}
-    for dia in AGENDA_DIAS:
-        agenda[dia] = {}
-        for slot in AGENDA_SLOTS:
-            agenda[dia][slot] = {"cliente": "", "valor": ""}
-    return agenda
-
-
-def load_week_agenda(rep_code):
-    rep_code = norm(rep_code)
-    agenda = build_empty_week_agenda()
-
-    if not rep_code:
-        return agenda
-
-    ensure_agenda_file()
-
-    try:
-        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except Exception:
-        return agenda
-
-    current_rep = ""
-
-    for raw in lines:
-        line = norm(raw)
-        if not line:
-            continue
-
-        if line.startswith("REP="):
-            current_rep = norm(line.replace("REP=", ""))
-            continue
-
-        if current_rep != rep_code:
-            continue
-
-        parts = line.split("|")
-        if len(parts) != 4:
-            continue
-
-        dia, slot_txt, cliente, valor = parts
-        dia = normalize_text_for_match(dia)
-
+def clear_sheet_cache(ws_name=None):
+    if ws_name:
+        cache_delete(f"worksheet_obj::{ws_name}")
+        cache_delete(f"sheet_values::{ws_name}")
+    else:
+        cache_clear_all()
         try:
-            slot = int(norm(slot_txt))
+            connect_gs_by_key.cache_clear()
         except Exception:
-            continue
-
-        if dia in agenda and slot in agenda[dia]:
-            agenda[dia][slot]["cliente"] = norm(cliente)
-            agenda[dia][slot]["valor"] = norm(valor)
-
-    return agenda
+            pass
+        try:
+            get_gspread_client.cache_clear()
+        except Exception:
+            pass
 
 
-def save_week_agenda(rep_code, agenda):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        raise RuntimeError("Representante da agenda não informado.")
-
-    ensure_agenda_file()
-
-    old_lines = []
-    if os.path.exists(AGENDA_FILE):
-        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
-            old_lines = f.readlines()
-
-    new_lines = []
-    skipping = False
-
-    for raw in old_lines:
-        line = raw.rstrip("\n")
-
-        if line.startswith("REP="):
-            block_rep = norm(line.replace("REP=", ""))
-            if block_rep == rep_code:
-                skipping = True
-                continue
-            skipping = False
-
-        if not skipping:
-            new_lines.append(raw if raw.endswith("\n") else raw + "\n")
-
-    if new_lines and new_lines[-1].strip():
-        if not new_lines[-1].endswith("\n"):
-            new_lines[-1] += "\n"
-
-    new_lines.append(f"REP={rep_code}\n")
-
-    for dia in AGENDA_DIAS:
-        for slot in AGENDA_SLOTS:
-            cliente = norm(agenda.get(dia, {}).get(slot, {}).get("cliente", ""))
-            valor = norm(agenda.get(dia, {}).get(slot, {}).get("valor", ""))
-
-            if cliente or valor:
-                new_lines.append(f"{dia}|{slot}|{cliente}|{valor}\n")
-
-    with open(AGENDA_FILE, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-
-
-def render_week_agenda_html(rep_code, sup_sel="", rep_sel=""):
-    rep_code = norm(rep_code)
-
-    if not rep_code:
-        return """
-        <div class="dash-summary-box">
-          Selecione um representante para carregar a agenda semanal.
-        </div>
-        """
-
-    agenda = load_week_agenda(rep_code)
-
-    top_header = ['<tr><th style="width:90px;">DIA</th>']
-    sub_header = ['<tr><th></th>']
-
-    for slot in AGENDA_SLOTS:
-        top_header.append(f'<th colspan="2">ATENDIMENTO {slot:02d}</th>')
-        sub_header.append('<th>CLIENTE</th>')
-        sub_header.append('<th>VALOR</th>')
-
-    top_header.append("</tr>")
-    sub_header.append("</tr>")
-
-    rows = []
-
-    for dia in AGENDA_DIAS:
-        row = [f"<tr><td><b>{h(dia)}</b></td>"]
-
-        for slot in AGENDA_SLOTS:
-            cliente = agenda[dia][slot]["cliente"]
-            valor = agenda[dia][slot]["valor"]
-
-            row.append(
-                f'<td><input type="text" class="agenda-input" name="{h(dia)}_{slot}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
-            )
-            row.append(
-                f'<td><input type="text" class="agenda-input agenda-input-valor" name="{h(dia)}_{slot}_valor" value="{h(valor)}" placeholder="Valor"></td>'
-            )
-
-        row.append("</tr>")
-        rows.append("".join(row))
-
-    hidden_sup = f'<input type="hidden" name="sup" value="{h(sup_sel)}">' if sup_sel else ""
-    hidden_rep = f'<input type="hidden" name="rep" value="{h(rep_sel)}">' if rep_sel else ""
-
-    return f"""
-    <form method="post" action="{url_for('salvar_agenda_semanal')}">
-      <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
-      {hidden_sup}
-      {hidden_rep}
-
-      <div class="agenda-form-top">
-        <div class="agenda-form-label">
-          Agenda do representante <b>{h(rep_code)}</b>
-        </div>
-        <button type="submit" class="agenda-btn-save">Salvar Agenda</button>
-      </div>
-
-      <div class="agenda-wrap">
-        <table class="agenda-table">
-          <thead>
-            {''.join(top_header)}
-            {''.join(sub_header)}
-          </thead>
-          <tbody>
-            {''.join(rows)}
-          </tbody>
-        </table>
-      </div>
-    </form>
+# =========================================================
+# EXTRAÇÃO / LÓGICA DE NEGÓCIO
+# =========================================================
+def parse_base_data():
     """
-
-
-# =========================================================
-# ERROR HANDLER
-# =========================================================
-@app.errorhandler(Exception)
-def handle_any_exception(e):
-    app.logger.error("ERRO NÃO TRATADO:\n%s", traceback.format_exc())
-    msg = traceback.format_exc()
-
-    body = f"""
-    <div class='card'>
-      <b>Erro:</b><br>
-      <pre style='white-space:pre-wrap'>{h(msg)}</pre>
-    </div>
+    Espera uma aba BASE com colunas aproximadas como:
+    - Código Cliente / Codigo Cliente
+    - Cliente / Nome Cliente / Razao Social
+    - Código Representante
+    - Representante
+    - Código Supervisor
+    - Supervisor
+    - Cidade
+    - UF
+    - Data Última Compra
+    - Valor / Vlr Venda / Vlr Total
     """
+    values = get_sheet_values(WS_BASE)
+    if not values:
+        return {
+            "records": [],
+            "headers": [],
+            "kpis": {
+                "total_clientes": 0,
+                "total_representantes": 0,
+                "total_supervisores": 0,
+                "valor_total": 0.0,
+            }
+        }
 
-    current_user_photo = ""
-    if session.get("user_type") == "rep":
-        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+    headers = values[0]
+    rows = values[1:]
 
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle="Falha no servidor",
-        logged=require_login(),
-        user_login=session.get("user_login", ""),
-        user_name=session.get("rep_name", ""),
-        user_type=session.get("user_type", ""),
-        user_photo_url=current_user_photo,
-        body=body
-    ), 500
+    idx_cod_cliente = find_col(headers, [
+        "Código Cliente", "Codigo Cliente", "Cod Cliente", "Cliente ID"
+    ])
+    idx_cliente = find_col(headers, [
+        "Cliente", "Nome Cliente", "Razão Social", "Razao Social"
+    ])
+    idx_cod_rep = find_col(headers, [
+        "Código Representante", "Codigo Representante", "Cod Rep", "Representante Codigo"
+    ])
+    idx_rep = find_col(headers, [
+        "Representante", "Nome Representante"
+    ])
+    idx_cod_sup = find_col(headers, [
+        "Código Supervisor", "Codigo Supervisor", "Cod Supervisor"
+    ])
+    idx_sup = find_col(headers, [
+        "Supervisor", "Nome Supervisor"
+    ])
+    idx_cidade = find_col(headers, [
+        "Cidade"
+    ])
+    idx_uf = find_col(headers, [
+        "UF", "Estado"
+    ])
+    idx_ultima_compra = find_col(headers, [
+        "Data Última Compra", "Data Ultima Compra", "Última Compra", "Ultima Compra"
+    ])
+    idx_valor = find_col(headers, [
+        "Valor", "Vlr Venda", "Vlr Total", "Valor Total", "Vlr"
+    ])
+
+    records = []
+    clientes_set = set()
+    reps_set = set()
+    sups_set = set()
+    valor_total = 0.0
+
+    for row in rows:
+        row = row + [""] * (len(headers) - len(row))
+
+        cod_cliente = row[idx_cod_cliente] if idx_cod_cliente is not None else ""
+        cliente = row[idx_cliente] if idx_cliente is not None else ""
+        cod_rep = row[idx_cod_rep] if idx_cod_rep is not None else ""
+        rep = row[idx_rep] if idx_rep is not None else ""
+        cod_sup = row[idx_cod_sup] if idx_cod_sup is not None else ""
+        sup = row[idx_sup] if idx_sup is not None else ""
+        cidade = row[idx_cidade] if idx_cidade is not None else ""
+        uf = row[idx_uf] if idx_uf is not None else ""
+        ultima_compra = row[idx_ultima_compra] if idx_ultima_compra is not None else ""
+        valor = row[idx_valor] if idx_valor is not None else ""
+
+        valor_num = to_float(valor, 0.0)
+
+        rec = {
+            "cod_cliente": safe_str(cod_cliente),
+            "cliente": safe_str(cliente),
+            "cod_rep": safe_str(cod_rep),
+            "representante": safe_str(rep),
+            "cod_sup": safe_str(cod_sup),
+            "supervisor": safe_str(sup),
+            "cidade": safe_str(cidade),
+            "uf": safe_str(uf),
+            "ultima_compra": safe_str(ultima_compra),
+            "valor": valor_num,
+        }
+        records.append(rec)
+
+        if rec["cod_cliente"] or rec["cliente"]:
+            clientes_set.add((rec["cod_cliente"], rec["cliente"]))
+        if rec["cod_rep"] or rec["representante"]:
+            reps_set.add((rec["cod_rep"], rec["representante"]))
+        if rec["cod_sup"] or rec["supervisor"]:
+            sups_set.add((rec["cod_sup"], rec["supervisor"]))
+
+        valor_total += valor_num
+
+    return {
+        "records": records,
+        "headers": headers,
+        "kpis": {
+            "total_clientes": len(clientes_set),
+            "total_representantes": len(reps_set),
+            "total_supervisores": len(sups_set),
+            "valor_total": valor_total,
+        }
+    }
+
+def parse_carteira_data():
+    """
+    Espera uma aba CARTEIRA com colunas aproximadas como:
+    - Código Cliente
+    - Cliente
+    - Código Representante
+    - Representante
+    - Supervisor
+    - Cidade
+    - UF
+    - Situação
+    """
+    try:
+        values = get_sheet_values(WS_CARTEIRA)
+    except WorksheetNotFound:
+        # Se não existir aba CARTEIRA, usa BASE como fallback
+        base = parse_base_data()
+        return {
+            "records": base["records"],
+            "headers": base["headers"],
+            "total": len(base["records"])
+        }
+
+    if not values:
+        return {"records": [], "headers": [], "total": 0}
+
+    headers = values[0]
+    rows = values[1:]
+
+    idx_cod_cliente = find_col(headers, ["Código Cliente", "Codigo Cliente", "Cod Cliente"])
+    idx_cliente = find_col(headers, ["Cliente", "Nome Cliente", "Razão Social", "Razao Social"])
+    idx_cod_rep = find_col(headers, ["Código Representante", "Codigo Representante", "Cod Rep"])
+    idx_rep = find_col(headers, ["Representante"])
+    idx_sup = find_col(headers, ["Supervisor"])
+    idx_cidade = find_col(headers, ["Cidade"])
+    idx_uf = find_col(headers, ["UF", "Estado"])
+    idx_situacao = find_col(headers, ["Situação", "Situacao", "Status"])
+
+    records = []
+
+    for row in rows:
+        row = row + [""] * (len(headers) - len(row))
+        records.append({
+            "cod_cliente": safe_str(row[idx_cod_cliente]) if idx_cod_cliente is not None else "",
+            "cliente": safe_str(row[idx_cliente]) if idx_cliente is not None else "",
+            "cod_rep": safe_str(row[idx_cod_rep]) if idx_cod_rep is not None else "",
+            "representante": safe_str(row[idx_rep]) if idx_rep is not None else "",
+            "supervisor": safe_str(row[idx_sup]) if idx_sup is not None else "",
+            "cidade": safe_str(row[idx_cidade]) if idx_cidade is not None else "",
+            "uf": safe_str(row[idx_uf]) if idx_uf is not None else "",
+            "situacao": safe_str(row[idx_situacao]) if idx_situacao is not None else "",
+        })
+
+    return {
+        "records": records,
+        "headers": headers,
+        "total": len(records)
+    }
 
 
 # =========================================================
-# TEMPLATE BASE
+# HTML BASE
 # =========================================================
 BASE_HTML = """
 <!doctype html>
 <html lang="pt-br">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; background: #f5f6f8; color: #111827; }
-    .topbar { background: #ffffff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d1d5db; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-    .topbar-right { display: flex; align-items: center; gap: 10px; }
-    .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
-
-    .container { padding: 12px; }
-    .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-
-    .rep-card { display: flex; align-items: center; gap: 16px; }
-    .rep-photo { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 2px solid #d1d5db; background: #f8fafc; flex-shrink: 0; }
-    .rep-photo-placeholder { width: 88px; height: 88px; border-radius: 50%; border: 2px solid #d1d5db; background: #f8fafc; display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 12px; text-align: center; flex-shrink: 0; padding: 6px; box-sizing: border-box; }
-
-    label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
-    input, select {
-      width: 100%;
-      padding: 9px;
-      border-radius: 10px;
-      border: 1px solid #cbd5e1;
-      background: #ffffff;
-      color: #111827;
-      box-sizing: border-box;
-      font-family: Arial, sans-serif;
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f5f6fa;
+      color: #222;
     }
-
-    input:focus, select:focus {
-      outline: none;
-      border-color: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
-    }
-
-    button, .btn-link {
-      padding: 9px 13px;
-      border-radius: 10px;
-      border: 0;
-      background: #2563eb;
-      color: #fff;
-      cursor: pointer;
-      font-weight: 600;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-
-    button.secondary, .btn-link.secondary { background: #6b7280; }
-    button.danger, .btn-link.danger { background: #dc2626; }
-    .btn-link.dark { background: #111827; }
-    .btn-link.orange { background: #f97316; }
-
-    table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
-    th, td { border-bottom: 1px solid #e5e7eb; padding: 8px; vertical-align: top; }
-    th { position: sticky; top: 0; background: #f8fafc; color: #374151; text-align: left; z-index: 2; }
-
-    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-
-    .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
-    .ok { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
-    .err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
-
-    .pill { padding: 3px 8px; border-radius: 999px; font-size: 12px; background: #f3f4f6; border: 1px solid #d1d5db; display: inline-block; color: #111827; }
-    .small { color: #6b7280; font-size: 12px; }
-    .nowrap { white-space: nowrap; }
-    .money { font-variant-numeric: tabular-nums; }
-
-    .login-wrap { min-height: calc(100vh - 90px); display: flex; align-items: center; justify-content: center; padding: 24px; }
-    .login-card { width: 100%; max-width: 520px; text-align: center; }
-    .login-logo { max-width: 220px; width: 100%; height: auto; margin: 0 auto 18px auto; display: block; }
-    .login-title { margin-top: 0; margin-bottom: 6px; color: #111827; }
-    .login-subtitle { margin-top: 0; margin-bottom: 20px; color: #6b7280; font-size: 14px; }
-
-    .row-red { background: rgba(220,38,38,0.16); }
-    .row-orange { background: rgba(249,115,22,0.16); }
-    .row-yellow { background: rgba(234,179,8,0.18); }
-    .row-green { background: rgba(34,197,94,0.16); }
-    .row-blue { background: rgba(56,189,248,0.14); }
-
-    .debug-card {
+    .topbar {
       background: #0f172a;
-      color: #e2e8f0;
-      border: 1px solid #1e293b;
-    }
-    .debug-card .line {
-      margin-bottom: 6px;
-      word-break: break-word;
-    }
-    .debug-card .title {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 12px;
-    }
-
-    .dash-page {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      align-items: center;
-    }
-
-    .a3-page {
-      width: min(100%, 1560px);
-      background: #ffffff;
-    }
-
-    .dash-shell {
-      background: #ffffff;
-      border: 1px solid #cfd4dc;
-      border-top: 3px solid #f97316;
-      border-bottom: 3px solid #f97316;
-      padding: 10px;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-      width: 100%;
-      box-sizing: border-box;
-      overflow: hidden;
-    }
-
-    .dash-header {
-      display: grid;
-      grid-template-columns: 74px 1.35fr 1fr 64px;
-      gap: 8px;
-      align-items: center;
-      border-bottom: 2px solid #f97316;
-      padding-bottom: 6px;
-      margin-bottom: 8px;
-    }
-
-    .dash-avatar {
-      width: 62px;
-      height: 62px;
-      border-radius: 8px;
-      object-fit: cover;
-      border: 1px solid #d1d5db;
-      background: #f8fafc;
-    }
-
-    .dash-avatar-placeholder {
-      width: 62px;
-      height: 62px;
-      border-radius: 8px;
-      border: 1px solid #d1d5db;
-      background: #f8fafc;
+      color: #fff;
+      padding: 14px 20px;
       display: flex;
       align-items: center;
-      justify-content: center;
-      color: #6b7280;
-      font-size: 10px;
-      text-align: center;
-      padding: 6px;
-      box-sizing: border-box;
-    }
-
-    .dash-title-wrap { min-width: 0; }
-    .dash-main-title {
-      font-size: 17px;
-      font-weight: 800;
-      text-transform: uppercase;
-      text-align: center;
-      margin-bottom: 3px;
-    }
-
-    .dash-subline {
-      font-size: 10px;
-      color: #374151;
-      line-height: 1.35;
-    }
-
-    .dash-meta-box {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 6px;
-    }
-
-    .dash-metric {
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
-      padding: 5px;
-      background: #fafafa;
-    }
-
-    .dash-metric-label {
-      font-size: 9px;
-      color: #6b7280;
-      font-weight: 700;
-      text-transform: uppercase;
-      margin-bottom: 2px;
-    }
-
-    .dash-metric-value {
-      font-size: 15px;
-      font-weight: 800;
-      color: #111827;
-    }
-
-    .dash-kidy-logo {
-      max-width: 54px;
-      width: 100%;
-      height: auto;
-      justify-self: end;
-    }
-
-    .dash-row-top {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1.08fr;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-
-    .dash-row-bottom {
-      display: grid;
-      grid-template-columns: 1.22fr 0.92fr;
-      gap: 8px;
-      align-items: start;
-    }
-
-    .dash-right-stack {
-      display: grid;
-      grid-template-rows: auto auto auto;
-      gap: 8px;
-    }
-
-    .dash-panel {
-      border: 1px solid #9ca3af;
-      background: #ffffff;
-      overflow: hidden;
-    }
-
-    .dash-panel-title {
-      font-size: 11px;
-      font-weight: 800;
-      text-transform: uppercase;
-      color: #111827;
-      background: #f3f4f6;
-      border-bottom: 1px solid #d1d5db;
-      padding: 5px 8px;
-      text-align: center;
-    }
-
-    .dash-panel-body {
-      padding: 6px;
-      box-sizing: border-box;
-    }
-
-    .dash-table-mini {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 9px;
-    }
-
-    .dash-table-mini th,
-    .dash-table-mini td {
-      border: 1px solid #d1d5db;
-      padding: 2px 4px;
-      line-height: 1.15;
-    }
-
-    .dash-table-mini th {
-      background: #e5e7eb;
-      font-weight: 700;
-      text-transform: uppercase;
-      font-size: 8px;
-      position: static;
-    }
-
-    .dash-table-big {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 9px;
-    }
-
-    .dash-table-big th,
-    .dash-table-big td {
-      border: 1px solid #d1d5db;
-      padding: 3px 4px;
-      line-height: 1.12;
-      vertical-align: middle;
-    }
-
-    .dash-table-big th {
-      background: #e5e7eb;
-      font-weight: 700;
-      text-transform: uppercase;
-      font-size: 8px;
-      position: static;
-    }
-
-    .dash-map-placeholder {
-      min-height: 285px;
-      background: #ecfeff;
-      border: 2px dashed #06b6d4;
-      color: #155e75;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 12px;
-      border-radius: 6px;
-      padding: 10px;
-      box-sizing: border-box;
-    }
-
-    .dash-gold-box {
-      min-height: 58px;
-      background: #fef3c7;
-      border: 2px dashed #f59e0b;
-      color: #92400e;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 11px;
-      border-radius: 6px;
-      padding: 8px;
-      box-sizing: border-box;
-    }
-
-    .dash-coverage-box {
-      min-height: 82px;
-      background: #f8fafc;
-      border: 2px dashed #94a3b8;
-      color: #334155;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 11px;
-      border-radius: 6px;
-      padding: 8px;
-      box-sizing: border-box;
-    }
-
-    .dash-summary-box {
-      min-height: 130px;
-      background: #f8fafc;
-      border: 2px dashed #94a3b8;
-      color: #334155;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 11px;
-      border-radius: 6px;
-      padding: 8px;
-      box-sizing: border-box;
-    }
-
-    .print-toolbar {
-      display: flex;
-      gap: 8px;
-      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
       flex-wrap: wrap;
     }
-
-    .print-note {
-      font-size: 11px;
-      color: #6b7280;
+    .brand {
+      font-size: 18px;
+      font-weight: bold;
     }
-
-    .status-chip {
-      display: inline-block;
-      min-width: 64px;
-      padding: 2px 5px;
-      border-radius: 999px;
-      text-align: center;
-      font-size: 8px;
+    .nav {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .nav a, .nav span {
+      color: #fff;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.08);
+      font-size: 14px;
+    }
+    .nav a:hover {
+      background: rgba(255,255,255,0.16);
+    }
+    .container {
+      max-width: 1280px;
+      margin: 20px auto;
+      padding: 0 16px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+    .grid-4 {
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .kpi {
+      border-left: 6px solid #2563eb;
+      padding: 16px;
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+    }
+    .kpi-title {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 6px;
+    }
+    .kpi-value {
+      font-size: 28px;
       font-weight: 700;
-      border: 1px solid rgba(0,0,0,0.08);
+      color: #111827;
     }
-
-    .chip-red { background: rgba(220,38,38,0.18); color: #991b1b; }
-    .chip-orange { background: rgba(249,115,22,0.18); color: #9a3412; }
-    .chip-yellow { background: rgba(234,179,8,0.22); color: #854d0e; }
-    .chip-green { background: rgba(34,197,94,0.18); color: #166534; }
-    .chip-blue { background: rgba(56,189,248,0.18); color: #0c4a6e; }
-    .chip-gray { background: #e5e7eb; color: #374151; }
-
-    .agenda-wrap { overflow:auto; width:100%; }
-    .agenda-table { width:100%; border-collapse:collapse; font-size:10px; }
-    .agenda-table th, .agenda-table td { border:1px solid #9ca3af; padding:4px; vertical-align:middle; }
-    .agenda-table thead th { background:#e5e7eb; text-transform:uppercase; font-size:8px; font-weight:700; position:static; text-align:center; }
-    .agenda-input { width:100%; min-width:80px; padding:5px 6px; border:1px solid #cbd5e1; border-radius:4px; box-sizing:border-box; font-size:10px; }
-    .agenda-input-valor { min-width:60px; text-align:center; }
-    .agenda-form-top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
-    .agenda-form-label { font-size:11px; font-weight:700; color:#374151; }
-    .agenda-btn-save { background:#f97316; }
-
-    .no-break { page-break-inside: avoid; break-inside: avoid; }
-
-    @page {
-      size: A3 landscape;
-      margin: 4mm;
+    h1, h2, h3 {
+      margin-top: 0;
     }
-
-    @media print {
-      html, body {
-        width: 420mm;
-        height: 297mm;
-        background: #ffffff !important;
-      }
-
-      .topbar,
-      .no-print,
-      .msg {
-        display: none !important;
-      }
-
-      .container {
-        padding: 0 !important;
-        margin: 0 !important;
-        width: 100%;
-      }
-
-      .dash-page {
-        gap: 0 !important;
-        width: 100%;
-      }
-
-      .a3-page {
-        width: 412mm !important;
-        height: 288mm !important;
-        margin: 0 auto !important;
-        overflow: hidden !important;
-      }
-
-      .dash-shell {
-        width: 100% !important;
-        height: 100% !important;
-        padding: 6mm !important;
-        border-radius: 0 !important;
-        box-shadow: none !important;
-        overflow: hidden !important;
-      }
-
-      .dash-header,
-      .dash-row-top,
-      .dash-row-bottom,
-      .dash-right-stack,
-      .dash-panel,
-      .dash-panel-body {
-        break-inside: avoid !important;
-        page-break-inside: avoid !important;
-      }
-
-      .dash-table-mini,
-      .dash-table-big,
-      .agenda-table {
-        font-size: 8px !important;
-      }
-
-      .dash-table-mini th, .dash-table-mini td,
-      .dash-table-big th, .dash-table-big td,
-      .agenda-table th, .agenda-table td {
-        padding: 2px 3px !important;
-      }
+    form .row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
     }
-
-    @media (max-width: 1200px) {
-      .dash-header { grid-template-columns: 74px 1fr; }
-      .dash-meta-box { grid-column: 1 / -1; }
-      .dash-kidy-logo { justify-self: start; }
-      .dash-row-top { grid-template-columns: 1fr; }
-      .dash-row-bottom { grid-template-columns: 1fr; }
+    input, select, button {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #d1d5db;
+      font-size: 14px;
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    .btn-secondary {
+      background: #64748b;
+    }
+    .btn-secondary:hover {
+      background: #475569;
+    }
+    .table-wrap {
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 780px;
+    }
+    th, td {
+      border-bottom: 1px solid #e5e7eb;
+      text-align: left;
+      padding: 10px 8px;
+      font-size: 14px;
+      vertical-align: top;
+    }
+    th {
+      background: #f8fafc;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .flash {
+      padding: 12px 14px;
+      margin-bottom: 14px;
+      border-radius: 10px;
+      font-size: 14px;
+    }
+    .flash-success {
+      background: #dcfce7;
+      color: #166534;
+    }
+    .flash-error {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+    .muted {
+      color: #6b7280;
+      font-size: 13px;
+    }
+    .login-box {
+      max-width: 420px;
+      margin: 60px auto;
+    }
+    .error-box {
+      white-space: pre-wrap;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+      background: #111827;
+      color: #f8fafc;
+      border-radius: 12px;
+      padding: 16px;
+      overflow-x: auto;
+    }
+    .badge {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      font-size: 12px;
+      color: #334155;
     }
   </style>
 </head>
 <body>
+  {% if show_nav %}
   <div class="topbar">
-    <div><b>Acompanhamento de clientes</b> <span class="small">| {{ subtitle }}</span></div>
-    <div class="topbar-right">
-      {% if logged %}
-        {% if user_type == 'admin' %}
-          <a href="{{ url_for('admin_dashboard') }}" class="btn-link dark">Dashboard</a>
-          <a href="{{ url_for('dashboard') }}" class="btn-link secondary">Carteira</a>
-        {% endif %}
-        {% if user_photo_url %}
-          <img src="{{ user_photo_url }}" alt="Foto do usuário" class="topbar-avatar">
-        {% endif %}
-        <span class="pill">{{ user_name if user_name else user_login }} ({{ user_type }})</span>
-        <a href="{{ url_for('logout') }}"><button class="danger">Sair</button></a>
-      {% endif %}
+    <div class="brand">{{ app_title }}</div>
+    <div class="nav">
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('carteira') }}">Carteira</a>
+      <a href="{{ url_for('admin_dashboard') }}">Admin</a>
+      <span>{{ current_user }}{% if session_role %} ({{ session_role }}){% endif %}</span>
+      <a href="{{ url_for('logout') }}">Sair</a>
     </div>
   </div>
+  {% endif %}
 
   <div class="container">
     {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for cat, msg in messages %}
-        <div class="msg {{ 'ok' if cat == 'ok' else 'err' }}">{{ msg }}</div>
-      {% endfor %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash {{ 'flash-error' if category == 'error' else 'flash-success' }}">
+            {{ message }}
+          </div>
+        {% endfor %}
+      {% endif %}
     {% endwith %}
-    {{ body|safe }}
+
+    {{ content|safe }}
   </div>
 </body>
 </html>
 """
 
-LOGIN_BODY = """
-<div class="login-wrap">
-  <div class="card login-card">
-    <img src="{{ logo_url }}" alt="Logo Kidy" class="login-logo">
-    <h2 class="login-title">Acompanhamento de clientes</h2>
-    <p class="login-subtitle">Faça login para acessar a carteira comercial</p>
 
-    <form method="post">
-      <div class="grid-2">
-        <div>
-          <label>Usuário</label>
-          <input name="user" placeholder="admin ou código do representante" required>
-        </div>
-        <div>
-          <label>Senha</label>
-          <input name="pass" type="password" placeholder="admin123 ou o mesmo código" required>
-        </div>
-      </div>
-      <div style="margin-top:12px;">
-        <button type="submit">Entrar</button>
-      </div>
-    </form>
-  </div>
-</div>
-"""
+def render_page(title, content, show_nav=True):
+    return render_template_string(
+        BASE_HTML,
+        title=title,
+        app_title=APP_TITLE,
+        content=content,
+        show_nav=show_nav,
+        current_user=current_user(),
+        session_role=session.get("role", "")
+    )
 
 
 # =========================================================
 # ROTAS
 # =========================================================
-@app.route("/", methods=["GET", "POST"])
-def login():
+@app.route("/")
+def home():
     if require_login():
         return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
 
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
     if request.method == "POST":
-        u = norm(request.form.get("user"))
-        p = norm(request.form.get("pass"))
+        user = safe_str(request.form.get("username"))
+        pwd = safe_str(request.form.get("password"))
 
-        if not u or not p:
-            flash("Informe usuário e senha.", "err")
-        elif u == ADMIN_USER and p == ADMIN_PASS:
-            session.clear()
-            session.permanent = True
-            session["user_type"] = "admin"
-            session["user_login"] = u
-            session["rep_name"] = ""
-            session["rep_code"] = ""
-            flash("Logado como ADMIN.", "ok")
+        if user == ADMIN_USER and pwd == ADMIN_PASS:
+            session["logged_in"] = True
+            session["username"] = user
+            session["role"] = "admin"
+            flash("Login realizado com sucesso.", "success")
             return redirect(url_for("dashboard"))
-        elif u.isdigit() and p.isdigit() and u == p:
-            rep_nome = try_get_rep_name(u)
-            session.clear()
-            session.permanent = True
-            session["user_type"] = "rep"
-            session["user_login"] = u
-            session["rep_code"] = u
-            session["rep_name"] = rep_nome or f"Representante {u}"
-            flash(f"Logado como {session['rep_name']}.", "ok")
-            return redirect(url_for("dashboard"))
-        else:
-            flash("Login inválido.", "err")
 
-    body = render_template_string(LOGIN_BODY, logo_url=LOGO_URL)
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle="Acesso",
-        logged=False,
-        user_login="",
-        user_name="",
-        user_type="",
-        user_photo_url="",
-        body=body
-    )
+        flash("Usuário ou senha inválidos.", "error")
+        return redirect(url_for("login"))
+
+    content = f"""
+    <div class="login-box">
+      <div class="card">
+        <h2>{html.escape(APP_TITLE)}</h2>
+        <p class="muted">Entre com suas credenciais para acessar o sistema.</p>
+
+        <form method="post">
+          <div class="row">
+            <div>
+              <label>Usuário</label>
+              <input type="text" name="username" placeholder="Digite o usuário" required>
+            </div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label>Senha</label>
+              <input type="password" name="password" placeholder="Digite a senha" required>
+            </div>
+          </div>
+
+          <button type="submit">Entrar</button>
+        </form>
+      </div>
+    </div>
+    """
+    return render_page("Login", content, show_nav=False)
 
 
 @app.route("/logout")
 def logout():
     session.clear()
-    flash("Sessão encerrada.", "ok")
+    flash("Sessão encerrada com sucesso.", "success")
     return redirect(url_for("login"))
 
 
-@app.route("/salvar_agenda_semanal", methods=["POST"])
-def salvar_agenda_semanal():
-    if not require_login():
-        flash("Sessão expirada. Faça login novamente.", "err")
-        return redirect(url_for("login"))
-
-    if not is_admin():
-        flash("Somente admin pode salvar a agenda semanal do dashboard.", "err")
-        return redirect(url_for("dashboard"))
-
-    rep_code = norm(request.form.get("rep_code_agenda", ""))
-    sup = norm(request.form.get("sup", ""))
-    rep = norm(request.form.get("rep", ""))
-
-    if not rep_code:
-        flash("Selecione um representante antes de salvar a agenda.", "err")
-        args = {}
-        if sup:
-            args["sup"] = sup
-        if rep:
-            args["rep"] = rep
-        return redirect(url_for("admin_dashboard", **args))
-
-    agenda = build_empty_week_agenda()
-
-    for dia in AGENDA_DIAS:
-        for slot in AGENDA_SLOTS:
-            cliente = norm(request.form.get(f"{dia}_{slot}_cliente", ""))
-            valor = norm(request.form.get(f"{dia}_{slot}_valor", ""))
-            agenda[dia][slot]["cliente"] = cliente
-            agenda[dia][slot]["valor"] = valor
-
-    try:
-        save_week_agenda(rep_code, agenda)
-        flash(f"Agenda semanal do representante {rep_code} salva com sucesso.", "ok")
-    except Exception as e:
-        flash(f"Erro ao salvar agenda semanal: {norm(str(e))}", "err")
-
-    args = {}
-    if sup:
-        args["sup"] = sup
-    if rep:
-        args["rep"] = rep
-    return redirect(url_for("admin_dashboard", **args))
-
-
-@app.route("/admin-dashboard", methods=["GET"])
-def admin_dashboard():
-    if not require_login():
-        flash("Faça login para continuar.", "err")
-        return redirect(url_for("login"))
-
-    if not is_admin():
-        flash("Acesso permitido somente para admin.", "err")
-        return redirect(url_for("dashboard"))
-
-    try:
-        sh = connect_gs()
-        debug_info = build_debug_sheet_info(sh)
-
-        try:
-            ws_base = sh.worksheet(WS_BASE)
-            headers, base_rows = get_base_structure(ws_base)
-        except Exception:
-            headers, base_rows = [], []
-
-        key_col = pick_col_flexible(headers, [
-            "Codigo Grupo Cliente", "Código Grupo Cliente",
-            "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
-        ])
-        grupo_col = pick_col_flexible(headers, [
-            "Grupo Cliente", "Nome Cliente", "Cliente",
-            "Razao Social", "Razão Social", "Fantasia", "Nome"
-        ])
-        rep_col = pick_col_flexible(headers, [
-            "Codigo Representante", "Código Representante",
-            "CODIGO REPRESENTANTE", "COD_REP"
-        ])
-        nome_rep_col = pick_col_flexible(headers, [
-            "Representante", "Nome Representante", "REPRESENTANTE"
-        ])
-        sup_col = pick_col_flexible(headers, [
-            "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
-        ])
-        cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
-
-        t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
-        t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
-        t2026_col = pick_col_exact(headers, ["Total 2026 (PERIODO)"])
-
-        status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor", "STATUSCOR", "StatusCor"])
-        cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
-
-        data_agenda_col = pick_col_exact(headers, ["Data Agenda Visita"])
-        mes_col = pick_col_exact(headers, ["Mês"])
-        semana_col = pick_col_exact(headers, ["Semana Atendimento"])
-        status_cliente_col = pick_col_exact(headers, ["Status Cliente"])
-        observacoes_col = pick_col_exact(headers, ["Observações", "Observacao", "Observacoes"])
-
-        sup_sel = norm(request.args.get("sup", ""))
-        rep_sel = norm(request.args.get("rep", ""))
-
-        sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if sup_col else []
-        rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if rep_col else []
-
-        filtered_rows = []
-        for r in base_rows:
-            if sup_sel and sup_col and norm(r.get(sup_col, "")) != sup_sel:
-                continue
-            if rep_sel and rep_col and norm(r.get(rep_col, "")) != rep_sel:
-                continue
-            filtered_rows.append(r)
-
-        header_rep_code = rep_sel
-        header_rep_name = ""
-        header_sup = sup_sel
-        header_region = "REGIÃO / ÁREA"
-        header_meta = "R$ 0,00"
-        header_realizado = "R$ 0,00"
-        header_percentual = "0,00%"
-
-        if header_rep_code and rep_col:
-            for r in filtered_rows:
-                if norm(r.get(rep_col, "")) == header_rep_code:
-                    header_rep_name = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-                    if not header_sup and sup_col:
-                        header_sup = norm(r.get(sup_col, ""))
-                    break
-
-        total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
-        header_realizado = format_money_br(total_realizado_2026)
-
-        rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
-
-        ranking_2026 = []
-        if grupo_col and t2026_col:
-            for r in filtered_rows:
-                nome = norm(r.get(grupo_col, ""))
-                valor = parse_number_br(r.get(t2026_col, ""))
-                if nome and valor > 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
-                    ranking_2026.append({
-                        "grupo": nome,
-                        "valor": valor,
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
-                    })
-            ranking_2026.sort(key=lambda x: x["valor"], reverse=True)
-            ranking_2026 = ranking_2026[:10]
-
-        ranking_2025 = []
-        if grupo_col and t2025_col:
-            for r in filtered_rows:
-                nome = norm(r.get(grupo_col, ""))
-                valor = parse_number_br(r.get(t2025_col, ""))
-                if nome and valor > 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
-                    ranking_2025.append({
-                        "grupo": nome,
-                        "valor": valor,
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
-                    })
-            ranking_2025.sort(key=lambda x: x["valor"], reverse=True)
-            ranking_2025 = ranking_2025[:10]
-
-        clientes_sem_compra = []
-        if key_col and grupo_col and t2026_col:
-            for r in filtered_rows:
-                v2026 = parse_number_br(r.get(t2026_col, ""))
-                if v2026 == 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
-                    clientes_sem_compra.append({
-                        "codigo": norm(r.get(key_col, "")),
-                        "grupo": norm(r.get(grupo_col, "")),
-                        "t2024": parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0,
-                        "t2025": parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0,
-                        "t2026": parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0,
-                        "data": norm(r.get(data_agenda_col, "")) if data_agenda_col else "",
-                        "mes": norm(r.get(mes_col, "")) if mes_col else "",
-                        "semana": norm(r.get(semana_col, "")) if semana_col else "",
-                        "status": norm(r.get(status_cliente_col, "")) if status_cliente_col else "",
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
-                    })
-
-            clientes_sem_compra.sort(
-                key=lambda x: (x["t2025"], x["t2024"], x["grupo"]),
-                reverse=True
-            )
-
-        agenda_rows = []
-
-        if key_col and grupo_col:
-            for r in filtered_rows:
-                data_ag = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
-                mes_ag = norm(r.get(mes_col, "")) if mes_col else ""
-                semana_ag = norm(r.get(semana_col, "")) if semana_col else ""
-                status_ag = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
-                obs_ag = norm(r.get(observacoes_col, "")) if observacoes_col else ""
-
-                tem_agenda = any([data_ag, mes_ag, semana_ag, status_ag, obs_ag])
-                if not tem_agenda:
-                    continue
-
-                status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                    r,
-                    status_cor_col=status_cor_col,
-                    cliente_novo_col=cliente_novo_col
-                )
-
-                agenda_rows.append({
-                    "codigo": norm(r.get(key_col, "")),
-                    "grupo": norm(r.get(grupo_col, "")),
-                    "cidade": norm(r.get(cidade_col, "")) if cidade_col else "",
-                    "representante": norm(r.get(nome_rep_col, "")) if nome_rep_col else "",
-                    "data": data_ag,
-                    "mes": mes_ag,
-                    "semana": semana_ag,
-                    "status": status_ag,
-                    "obs": obs_ag,
-                    "status_cor": status_cor_final,
-                    "row_class": row_class
-                })
-
-        def agenda_sort_key(x):
-            data_txt = x.get("data", "")
-            m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", data_txt)
-            if m:
-                dd, mm, yyyy = m.groups()
-                data_ord = f"{yyyy}{mm}{dd}"
-            else:
-                data_ord = "99999999"
-            return (
-                data_ord,
-                x.get("mes", ""),
-                x.get("semana", ""),
-                x.get("grupo", "")
-            )
-
-        agenda_rows.sort(key=agenda_sort_key)
-
-        agenda_html = ""
-        if agenda_rows:
-            rows = []
-            for item in agenda_rows[:18]:
-                rows.append(f"""
-                <tr class="{h(item['row_class'])}">
-                  <td>{h(item['data'])}</td>
-                  <td>{h(item['mes'])}</td>
-                  <td>{h(item['semana'])}</td>
-                  <td>{h(item['codigo'])}</td>
-                  <td>{h(item['grupo'])}</td>
-                  <td>{h(item['cidade'])}</td>
-                  <td>{h(item['status'])}</td>
-                </tr>
-                """)
-            agenda_html = f"""
-            <table class="dash-table-big">
-              <thead>
-                <tr>
-                  <th>Data</th>
-                  <th>Mês</th>
-                  <th>Semana</th>
-                  <th>Código</th>
-                  <th>Grupo</th>
-                  <th>Cidade</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {''.join(rows)}
-              </tbody>
-            </table>
-            """
-        else:
-            agenda_html = """
-            <div class="dash-summary-box">
-              Nenhum registro de agenda encontrado para os filtros atuais.
-            </div>
-            """
-
-        agenda_semanal_html = render_week_agenda_html(
-            rep_code=header_rep_code,
-            sup_sel=sup_sel,
-            rep_sel=rep_sel
-        )
-
-        total_gold = 0
-        total_carteira = len(filtered_rows)
-        total_sem_compra = len(clientes_sem_compra)
-        total_com_compra = max(total_carteira - total_sem_compra, 0)
-        cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
-
-        def chip_class(status_cor):
-            s = normalize_text_for_match(status_cor)
-            if "VERMELH" in s:
-                return "chip-red"
-            if "LARANJ" in s:
-                return "chip-orange"
-            if "AMAREL" in s:
-                return "chip-yellow"
-            if "VERDE" in s:
-                return "chip-green"
-            if "AZUL" in s or "NOVO" in s:
-                return "chip-blue"
-            return "chip-gray"
-
-        ranking_2026_html = ""
-        if ranking_2026:
-            rows = []
-            for i, item in enumerate(ranking_2026, start=1):
-                rows.append(f"""
-                <tr class="{h(item['row_class'])}">
-                  <td style="width:22px; text-align:center;">{i}</td>
-                  <td>{h(item['grupo'])}</td>
-                  <td style="width:90px; text-align:right;">{h(format_number_br(item['valor']))}</td>
-                  <td style="width:70px; text-align:center;">
-                    <span class="status-chip {chip_class(item['status_cor'])}">{h(render_status_badge_text(item['status_cor']))}</span>
-                  </td>
-                </tr>
-                """)
-            ranking_2026_html = f"""
-            <table class="dash-table-mini">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Grupo</th>
-                  <th>Total 2026</th>
-                  <th>Cor</th>
-                </tr>
-              </thead>
-              <tbody>
-                {''.join(rows)}
-              </tbody>
-            </table>
-            """
-        else:
-            ranking_2026_html = """
-            <div class="dash-map-placeholder" style="min-height:120px;">
-              Sem dados para o Top 10 de 2026
-            </div>
-            """
-
-        ranking_2025_html = ""
-        if ranking_2025:
-            rows = []
-            for i, item in enumerate(ranking_2025, start=1):
-                rows.append(f"""
-                <tr class="{h(item['row_class'])}">
-                  <td style="width:22px; text-align:center;">{i}</td>
-                  <td>{h(item['grupo'])}</td>
-                  <td style="width:90px; text-align:right;">{h(format_number_br(item['valor']))}</td>
-                  <td style="width:70px; text-align:center;">
-                    <span class="status-chip {chip_class(item['status_cor'])}">{h(render_status_badge_text(item['status_cor']))}</span>
-                  </td>
-                </tr>
-                """)
-            ranking_2025_html = f"""
-            <table class="dash-table-mini">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Grupo</th>
-                  <th>Total 2025</th>
-                  <th>Cor</th>
-                </tr>
-              </thead>
-              <tbody>
-                {''.join(rows)}
-              </tbody>
-            </table>
-            """
-        else:
-            ranking_2025_html = """
-            <div class="dash-map-placeholder" style="min-height:120px;">
-              Sem dados para o Top 10 de 2025
-            </div>
-            """
-
-        clientes_sem_compra_html = ""
-        if clientes_sem_compra:
-            rows = []
-            for item in clientes_sem_compra[:24]:
-                rows.append(f"""
-                <tr class="{h(item['row_class'])}">
-                  <td>{h(item['codigo'])}</td>
-                  <td>{h(item['grupo'])}</td>
-                  <td style="text-align:right;">{h(format_number_br(item['t2024']))}</td>
-                  <td style="text-align:right;">{h(format_number_br(item['t2025']))}</td>
-                  <td style="text-align:right;">{h(format_number_br(item['t2026']))}</td>
-                  <td>{h(item['data'])}</td>
-                  <td>{h(item['mes'])}</td>
-                  <td>{h(item['semana'])}</td>
-                  <td>{h(item['status'])}</td>
-                </tr>
-                """)
-            clientes_sem_compra_html = f"""
-            <table class="dash-table-big">
-              <thead>
-                <tr>
-                  <th>Código Grupo</th>
-                  <th>Grupo</th>
-                  <th>Total 2024</th>
-                  <th>Total 2025</th>
-                  <th>Total 2026</th>
-                  <th>Data</th>
-                  <th>Mês</th>
-                  <th>Semana</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {''.join(rows)}
-              </tbody>
-            </table>
-            """
-        else:
-            clientes_sem_compra_html = """
-            <div class="dash-map-placeholder" style="min-height:220px;">
-              Nenhum cliente sem compra encontrado pela regra atual (Total 2026 = 0)
-            </div>
-            """
-
-        mapa_svg_html = ""
-        mapa_info_msg = ""
-        cidades_mapa_qtd = 0
-        map_debug = {
-            "municipios_sheet_resolved": extract_google_sheet_id(MUNICIPIOS_SHEET_ID or SHEET_ID),
-            "ws_cidades": WS_CIDADES,
-            "cidade_muni_col": "",
-            "lat_col": "",
-            "lon_col": "",
-        }
-
-        try:
-            sh_muni = connect_municipios_gs()
-            ws_cidades = sh_muni.worksheet(WS_CIDADES)
-            headers_cidades, rows_cidades = safe_get_raw_rows(ws_cidades)
-
-            cidade_muni_col = pick_col_flexible(headers_cidades, [
-                "cidade", "municipio", "município", "nome", "nome municipio", "nome município"
-            ])
-            lat_col = pick_col_flexible(headers_cidades, [
-                "latitude", "lat"
-            ])
-            lon_col = pick_col_flexible(headers_cidades, [
-                "longitude", "long", "lon", "lng"
-            ])
-
-            map_debug["cidade_muni_col"] = cidade_muni_col or ""
-            map_debug["lat_col"] = lat_col or ""
-            map_debug["lon_col"] = lon_col or ""
-
-            if not cidade_col:
-                raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
-
-            if not cidade_muni_col:
-                raise RuntimeError("A coluna de cidade não foi encontrada na aba 'cidades'.")
-
-            if not lat_col or not lon_col:
-                raise RuntimeError("As colunas de latitude/longitude não foram encontradas na aba 'cidades'.")
-
-            vendas_por_cidade = {}
-            for r in filtered_rows:
-                cidade_base = normalize_city_key(r.get(cidade_col, ""))
-                if not cidade_base:
-                    continue
-
-                total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
-                if cidade_base not in vendas_por_cidade:
-                    vendas_por_cidade[cidade_base] = {
-                        "cidade_original": norm(r.get(cidade_col, "")),
-                        "total_2026": 0.0
-                    }
-                vendas_por_cidade[cidade_base]["total_2026"] += total_2026
-
-            city_points = []
-            for r in rows_cidades:
-                cidade_sheet = normalize_city_key(r.get(cidade_muni_col, ""))
-                if not cidade_sheet:
-                    continue
-
-                if cidade_sheet not in vendas_por_cidade:
-                    continue
-
-                lat = parse_float_any(r.get(lat_col, ""))
-                lon = parse_float_any(r.get(lon_col, ""))
-                total_2026 = vendas_por_cidade[cidade_sheet]["total_2026"]
-
-                city_points.append({
-                    "cidade": vendas_por_cidade[cidade_sheet]["cidade_original"] or norm(r.get(cidade_muni_col, "")),
-                    "lat": lat,
-                    "lon": lon,
-                    "total_2026": total_2026,
-                    "fill": "#16a34a" if total_2026 > 0 else "#dc2626",
-                    "status_txt": "Com vendas" if total_2026 > 0 else "Sem vendas"
-                })
-
-            cidades_mapa_qtd = len(city_points)
-            mapa_svg_html = build_city_map_svg(city_points)
-
-            if not city_points:
-                mapa_info_msg = "Nenhuma cidade cruzou entre a carteira e a planilha de municípios."
-
-        except WorksheetNotFound:
-            mapa_svg_html = f"""
-            <div class="dash-map-placeholder">
-              Aba <b>{h(WS_CIDADES)}</b> não encontrada na planilha de municípios.
-            </div>
-            """
-        except Exception as e:
-            erro_txt = norm(str(e))
-            if "This operation is not supported for this document" in erro_txt:
-                erro_txt = (
-                    "O arquivo informado em MUNICIPIOS_SHEET_ID não é uma planilha Google Sheets válida. "
-                    "Converta o arquivo para Google Sheets e use o ID da planilha convertida."
-                )
-
-            mapa_svg_html = f"""
-            <div class="dash-map-placeholder">
-              Erro ao montar mapa.<br><br>
-              {h(erro_txt)}
-            </div>
-            """
-
-        body = f"""
-        <div class="dash-page">
-
-          <div class="card no-print a3-page">
-            <form method="get">
-              <div class="grid">
-                <div>
-                  <label>Supervisor</label>
-                  <select name="sup">
-                    <option value="">(Todos)</option>
-                    {''.join([f"<option value='{h(s)}' {'selected' if norm(s) == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
-                  </select>
-                </div>
-
-                <div>
-                  <label>Representante</label>
-                  <select name="rep">
-                    <option value="">(Todos)</option>
-                    {''.join([f"<option value='{h(r)}' {'selected' if norm(r) == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
-                  </select>
-                </div>
-
-                <div class="print-toolbar">
-                  <button type="submit">Aplicar</button>
-                  <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
-                  <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
-                </div>
-
-                <div class="print-note">
-                  Ajustado para sair em uma única página A3 horizontal.
-                </div>
-              </div>
-            </form>
-          </div>
-
-          <div class="a3-page no-break">
-            <div class="dash-shell">
-
-              <div class="dash-header">
-                <div>
-                  {
-                      f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
-                      if rep_photo else
-                      '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
-                  }
-                </div>
-
-                <div class="dash-title-wrap">
-                  <div class="dash-main-title">Acompanhamento de Representante</div>
-                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
-                  <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
-                </div>
-
-                <div class="dash-meta-box">
-                  <div class="dash-metric">
-                    <div class="dash-metric-label">Meta</div>
-                    <div class="dash-metric-value">{h(header_meta)}</div>
-                  </div>
-                  <div class="dash-metric">
-                    <div class="dash-metric-label">Realizado</div>
-                    <div class="dash-metric-value">{h(header_realizado)}</div>
-                  </div>
-                  <div class="dash-metric">
-                    <div class="dash-metric-label">% Realizado</div>
-                    <div class="dash-metric-value">{h(header_percentual)}</div>
-                  </div>
-                </div>
-
-                <div>
-                  <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
-                </div>
-              </div>
-
-              <div class="dash-row-top">
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">10 Maiores Clientes</div>
-                  <div class="dash-panel-body">
-                    {ranking_2026_html}
-                  </div>
-                </div>
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">10 Maiores Clientes 2025</div>
-                  <div class="dash-panel-body">
-                    {ranking_2025_html}
-                  </div>
-                </div>
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">Cidades da Região</div>
-                  <div class="dash-panel-body">
-                    {mapa_svg_html}
-                    <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
-                      Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
-                      {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-
-              <div class="dash-row-bottom">
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">Clientes sem Compra</div>
-                  <div class="dash-panel-body">
-                    {clientes_sem_compra_html}
-                  </div>
-                </div>
-
-                <div class="dash-right-stack">
-
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Clientes Gold</div>
-                    <div class="dash-panel-body">
-                      <div class="dash-gold-box">
-                        Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Cobertura da Carteira</div>
-                    <div class="dash-panel-body">
-                      <div class="dash-coverage-box">
-                        Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                        Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Agenda de Visitas</div>
-                    <div class="dash-panel-body">
-                      {agenda_html}
-                    </div>
-                  </div>
-
-                </div>
-              </div>
-
-              <div style="margin-top:8px;">
-                <div class="dash-panel">
-                  <div class="dash-panel-title">Agenda Semanal do Representante</div>
-                  <div class="dash-panel-body">
-                    {agenda_semanal_html}
-                  </div>
-                </div>
-              </div>
-
-            </div>
-          </div>
-        </div>
-        """
-
-        if DEBUG_MODE:
-            abas = ", ".join(debug_info.get("worksheets", []))
-            body += f"""
-            <div class="card debug-card no-print">
-              <div class="title">DEBUG DASHBOARD ADMIN</div>
-              <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
-              <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
-              <div class="line"><b>ABAS:</b> {h(abas)}</div>
-              <div class="line"><b>ROWS FILTRADAS:</b> {h(len(filtered_rows))}</div>
-              <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
-              <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
-              <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
-              <div class="line"><b>AGENDA ROWS:</b> {h(len(agenda_rows))}</div>
-              <div class="line"><b>AGENDA FILE:</b> {h(AGENDA_FILE)}</div>
-              <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
-              <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
-              <div class="line"><b>MUNICIPIOS_SHEET_ID RESOLVIDO:</b> {h(map_debug['municipios_sheet_resolved'])}</div>
-              <div class="line"><b>WS_CIDADES:</b> {h(map_debug['ws_cidades'])}</div>
-              <div class="line"><b>COLUNA CIDADE BASE:</b> {h(cidade_col)}</div>
-              <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
-              <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
-              <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
-              <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
-              <div class="line"><b>DATA AGENDA COL:</b> {h(data_agenda_col)}</div>
-              <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
-              <div class="line"><b>SEMANA COL:</b> {h(semana_col)}</div>
-              <div class="line"><b>STATUS CLIENTE COL:</b> {h(status_cliente_col)}</div>
-              <div class="line"><b>OBS COL:</b> {h(observacoes_col)}</div>
-            </div>
-            """
-
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Dashboard Admin",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url="",
-            body=body
-        )
-
-    except Exception as e:
-        flash(f"Erro ao abrir dashboard admin: {norm(str(e))}", "err")
-        return redirect(url_for("dashboard"))
-
-
-@app.route("/dashboard", methods=["GET"])
+@app.route("/dashboard")
 def dashboard():
     if not require_login():
-        flash("Faça login para continuar.", "err")
         return redirect(url_for("login"))
 
-    sh = connect_gs()
-    debug_info = build_debug_sheet_info(sh)
-    last_save = get_last_save_debug()
-
     try:
-        ws_base = sh.worksheet(WS_BASE)
-    except WorksheetNotFound:
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_BASE)}</div>"
-        )
+        base = parse_base_data()
 
-    try:
-        ws_listas = sh.worksheet(WS_LISTAS)
-    except WorksheetNotFound:
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_LISTAS)}</div>"
-        )
+        kpis = base["kpis"]
+        base_records = base["records"]
 
-    try:
-        ensure_edicoes_worksheet(sh)
-    except Exception as e:
-        flash(str(e), "err")
+        # filtros
+        filtro_rep = safe_str(request.args.get("rep"))
+        filtro_sup = safe_str(request.args.get("sup"))
+        filtro_cliente = safe_str(request.args.get("cliente"))
 
-    headers, base_rows = get_base_structure(ws_base)
-    lista_rows = safe_get_all_records(ws_listas)
+        filtrados = []
 
-    key_col = pick_col_flexible(headers, [
-        "Codigo Grupo Cliente", "Código Grupo Cliente",
-        "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
-    ])
-    grupo_col = pick_col_flexible(headers, [
-        "Grupo Cliente", "Nome Cliente", "Cliente",
-        "Razao Social", "Razão Social", "Fantasia", "Nome"
-    ])
-    rep_col = pick_col_flexible(headers, [
-        "Codigo Representante", "Código Representante",
-        "CODIGO REPRESENTANTE", "COD_REP"
-    ])
-    nome_rep_col = pick_col_flexible(headers, [
-        "Representante", "Nome Representante", "REPRESENTANTE"
-    ])
-    sup_col = pick_col_flexible(headers, [
-        "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
-    ])
-    cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
+        for r in base_records:
+            ok = True
 
-    t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
-    t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
-    t2026_col = pick_col_exact(headers, ["Total 2026 (PERIODO)"])
+            if filtro_rep and filtro_rep.lower() not in (r["representante"] + " " + r["cod_rep"]).lower():
+                ok = False
 
-    status_cor_col = pick_col_exact(headers, ["STATUS COR", "Status Cor", "STATUSCOR", "StatusCor"])
-    cliente_novo_col = pick_col_flexible(headers, ["Cliente Novo", "CLIENTE NOVO", "Novo", "NOVO"])
+            if filtro_sup and filtro_sup.lower() not in (r["supervisor"] + " " + r["cod_sup"]).lower():
+                ok = False
 
-    data_agenda_col = pick_col_exact(headers, ["Data Agenda Visita"])
-    mes_col = pick_col_exact(headers, ["Mês"])
-    semana_col = pick_col_exact(headers, ["Semana Atendimento"])
-    status_cliente_col = pick_col_exact(headers, ["Status Cliente"])
-    observacoes_col = pick_col_exact(headers, ["Observações", "Observacao", "Observacoes"])
+            if filtro_cliente and filtro_cliente.lower() not in (r["cliente"] + " " + r["cod_cliente"]).lower():
+                ok = False
 
-    meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
-    semanas = unique_list([r.get("Semana Atendimento", "") for r in lista_rows]) or DEFAULT_SEMANAS
-    status_list = unique_list([r.get("Status Cliente", "") for r in lista_rows]) or DEFAULT_STATUS
+            if ok:
+                filtrados.append(r)
 
-    sup_sel = norm(request.args.get("sup", ""))
-    rep_sel = norm(request.args.get("rep", ""))
-    q = norm(request.args.get("q", ""))
+        # -------------------------------
+        # LINHAS DA TABELA DE CLIENTES
+        # -------------------------------
 
-    sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if (is_admin() and sup_col) else []
-    rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if is_admin() else []
+        linhas_clientes = []
 
-    prepared_rows = []
+        for r in filtrados[:200]:
 
-    for idx_base, r in enumerate(base_rows, start=2):
-        ck = norm(r.get(key_col, "")) if key_col else ""
-        repc = norm(r.get(rep_col, "")) if rep_col else ""
+            linhas_clientes.append(f"""
+            <tr>
+              <td>{html.escape(r["cod_cliente"])}</td>
+              <td>{html.escape(r["cliente"])}</td>
+              <td>{html.escape(r["cod_rep"])}</td>
+              <td>{html.escape(r["representante"])}</td>
+              <td>{html.escape(r["cod_sup"])}</td>
+              <td>{html.escape(r["supervisor"])}</td>
+              <td>{html.escape(r["cidade"])}</td>
+              <td>{html.escape(r["uf"])}</td>
+              <td>{html.escape(r["ultima_compra"])}</td>
+              <td>R$ {r["valor"]:,.2f}</td>
+            </tr>
+            """)
 
-        if not is_admin() and repc != norm(session.get("rep_code", "")):
-            continue
-        if is_admin() and sup_col and sup_sel and norm(r.get(sup_col, "")) != sup_sel:
-            continue
-        if is_admin() and rep_sel and repc != rep_sel:
-            continue
-        if q:
-            hay = " ".join([norm(v) for v in r.values()])
-            if q.lower() not in hay.lower():
-                continue
-
-        row_copy = dict(r)
-        row_copy["Data Agenda Visita"] = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
-        row_copy["Mês"] = norm(r.get(mes_col, "")) if mes_col else ""
-        row_copy["Semana Atendimento"] = norm(r.get(semana_col, "")) if semana_col else ""
-        row_copy["Status Cliente"] = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
-        row_copy["Observações"] = norm(r.get(observacoes_col, "")) if observacoes_col else ""
-
-        row_copy["_base_row_number"] = idx_base
-
-        status_cor_final, row_class, priority = resolve_status_cor_from_base(
-            row_copy,
-            status_cor_col=status_cor_col,
-            cliente_novo_col=cliente_novo_col
-        )
-
-        row_copy["_status_cor"] = status_cor_final
-        row_copy["_row_class"] = row_class
-        row_copy["_sort_priority"] = priority
-
-        prepared_rows.append(row_copy)
-
-    prepared_rows.sort(
-        key=lambda r: (
-            r.get("_sort_priority", 99),
-            norm(r.get(grupo_col, "")) if grupo_col else "",
-            norm(r.get(key_col, "")) if key_col else ""
-        )
-    )
-
-    out_rows = prepared_rows[:PAGE_SIZE]
-
-    current_user_photo = ""
-    if session.get("user_type") == "rep":
-        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
-
-    rep_card_html = ""
-
-    selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
-
-    if selected_rep_code and rep_col:
-        rep_name_base = ""
-        rep_sup_base = ""
-        rep_reg_base = ""
-
-        for r in base_rows:
-            if norm(r.get(rep_col, "")) == selected_rep_code:
-                rep_name_base = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-                rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
-                rep_reg_base = ""
-                if rep_name_base:
-                    break
-
-        foto_url = get_rep_photo_src(selected_rep_code)
-        nome_card = rep_name_base or f"Representante {selected_rep_code}"
-        sup_card = rep_sup_base
-        regiao_card = rep_reg_base
-
-        foto_html = (
-            f'<img src="{h(foto_url)}" alt="Foto do representante" class="rep-photo">'
-            if foto_url else
-            '<div class="rep-photo-placeholder">Sem foto</div>'
-        )
-
-        infos = []
-        infos.append(f"<div><b>Código:</b> {h(selected_rep_code)}</div>")
-        if nome_card:
-            infos.append(f"<div><b>Representante:</b> {h(nome_card)}</div>")
-        if sup_card:
-            infos.append(f"<div><b>Supervisor:</b> {h(sup_card)}</div>")
-        if regiao_card:
-            infos.append(f"<div><b>Região:</b> {h(regiao_card)}</div>")
-
-        rep_card_html = f"""
+        content = f"""
         <div class="card">
-          <div class="rep-card">
-            {foto_html}
-            <div>
-              <div style="font-size:18px; font-weight:700; margin-bottom:6px;">Representante selecionado</div>
-              {''.join(infos)}
+          <h1>Dashboard</h1>
+
+          <p class="muted">
+            Última atualização: {format_dt_br(now_br())}
+            &nbsp;|&nbsp;
+            Cache: {CACHE_TTL}s
+          </p>
+
+          <form method="get">
+            <div class="row">
+
+              <div>
+                <label>Representante</label>
+                <input type="text" name="rep" value="{html.escape(filtro_rep)}">
+              </div>
+
+              <div>
+                <label>Supervisor</label>
+                <input type="text" name="sup" value="{html.escape(filtro_sup)}">
+              </div>
+
+              <div>
+                <label>Cliente</label>
+                <input type="text" name="cliente" value="{html.escape(filtro_cliente)}">
+              </div>
+
             </div>
+
+            <div class="row">
+              <div><button type="submit">Filtrar</button></div>
+              <div>
+                <a href="{url_for('dashboard')}" class="btn-secondary" style="padding:10px 12px;display:inline-block;text-align:center;">
+                    Limpar
+                </a>
+              </div>
+            </div>
+
+          </form>
+        </div>
+
+        <div class="grid grid-4">
+
+          <div class="kpi">
+            <div class="kpi-title">Total de clientes</div>
+            <div class="kpi-value">{kpis["total_clientes"]}</div>
+          </div>
+
+          <div class="kpi">
+            <div class="kpi-title">Representantes</div>
+            <div class="kpi-value">{kpis["total_representantes"]}</div>
+          </div>
+
+          <div class="kpi">
+            <div class="kpi-title">Supervisores</div>
+            <div class="kpi-value">{kpis["total_supervisores"]}</div>
+          </div>
+
+          <div class="kpi">
+            <div class="kpi-title">Valor total</div>
+            <div class="kpi-value">R$ {kpis["valor_total"]:,.2f}</div>
+          </div>
+
+        </div>
+
+        <div class="card">
+
+          <h2>Clientes</h2>
+
+          <p class="muted">Mostrando até 200 registros filtrados.</p>
+
+          <div class="table-wrap">
+
+            <table>
+
+              <thead>
+                <tr>
+                  <th>Cód. Cliente</th>
+                  <th>Cliente</th>
+                  <th>Cód. Rep</th>
+                  <th>Representante</th>
+                  <th>Cód. Sup</th>
+                  <th>Supervisor</th>
+                  <th>Cidade</th>
+                  <th>UF</th>
+                  <th>Última compra</th>
+                  <th>Valor</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {''.join(linhas_clientes) if linhas_clientes else '<tr><td colspan="10">Nenhum registro encontrado.</td></tr>'}
+              </tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+        """
+
+        return render_page("Dashboard", content)
+
+    except Exception:
+
+        err = traceback.format_exc()
+
+        content = f"""
+        <div class="card">
+          <h1>Dashboard</h1>
+          <p>Erro ao carregar o dashboard.</p>
+          <div class="error-box">{html.escape(err)}</div>
+        </div>
+        """
+
+        return render_page("Falha no servidor", content), 500
+
+@app.route("/carteira")
+def carteira():
+    if not require_login():
+        return redirect(url_for("login"))
+
+    try:
+        data = parse_carteira_data()
+        records = data["records"]
+
+        filtro_rep = safe_str(request.args.get("rep"))
+        filtro_sup = safe_str(request.args.get("sup"))
+        filtro_cliente = safe_str(request.args.get("cliente"))
+        filtro_situacao = safe_str(request.args.get("situacao"))
+
+        filtrados = []
+        for r in records:
+            ok = True
+
+            if filtro_rep and filtro_rep.lower() not in (r["representante"] + " " + r["cod_rep"]).lower():
+                ok = False
+            if filtro_sup and filtro_sup.lower() not in r["supervisor"].lower():
+                ok = False
+            if filtro_cliente and filtro_cliente.lower() not in (r["cliente"] + " " + r["cod_cliente"]).lower():
+                ok = False
+            if filtro_situacao and filtro_situacao.lower() not in r["situacao"].lower():
+                ok = False
+
+            if ok:
+                filtrados.append(r)
+
+        linhas = []
+        for r in filtrados[:300]:
+            linhas.append(f"""
+            <tr>
+              <td>{html.escape(r["cod_cliente"])}</td>
+              <td>{html.escape(r["cliente"])}</td>
+              <td>{html.escape(r["cod_rep"])}</td>
+              <td>{html.escape(r["representante"])}</td>
+              <td>{html.escape(r["supervisor"])}</td>
+              <td>{html.escape(r["cidade"])}</td>
+              <td>{html.escape(r["uf"])}</td>
+              <td><span class="badge">{html.escape(r["situacao"])}</span></td>
+            </tr>
+            """)
+
+        content = f"""
+        <div class="card">
+          <h1>Carteira</h1>
+          <p class="muted">Total de registros: {len(records)}</p>
+
+          <form method="get">
+            <div class="row">
+              <div>
+                <label>Representante</label>
+                <input type="text" name="rep" value="{html.escape(filtro_rep)}" placeholder="Nome ou código do representante">
+              </div>
+              <div>
+                <label>Supervisor</label>
+                <input type="text" name="sup" value="{html.escape(filtro_sup)}" placeholder="Supervisor">
+              </div>
+              <div>
+                <label>Cliente</label>
+                <input type="text" name="cliente" value="{html.escape(filtro_cliente)}" placeholder="Cliente">
+              </div>
+              <div>
+                <label>Situação</label>
+                <input type="text" name="situacao" value="{html.escape(filtro_situacao)}" placeholder="Situação / status">
+              </div>
+            </div>
+
+            <div class="row">
+              <div><button type="submit">Filtrar</button></div>
+              <div><a href="{url_for('carteira')}" style="text-decoration:none;"><button type="button" class="btn-secondary">Limpar</button></a></div>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cód. Cliente</th>
+                  <th>Cliente</th>
+                  <th>Cód. Rep</th>
+                  <th>Representante</th>
+                  <th>Supervisor</th>
+                  <th>Cidade</th>
+                  <th>UF</th>
+                  <th>Situação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {''.join(linhas) if linhas else '<tr><td colspan="8">Nenhum registro encontrado.</td></tr>'}
+              </tbody>
+            </table>
           </div>
         </div>
         """
+        return render_page("Carteira", content)
 
-    debug_html = ""
-    if DEBUG_MODE:
-        abas = ", ".join(debug_info.get("worksheets", []))
-        last_row = h(last_save.get("row_num", ""))
-        last_ck = h(last_save.get("client_key", ""))
-        last_data = h(last_save.get("data_agenda", ""))
-        last_mes = h(last_save.get("mes", ""))
-        last_semana = h(last_save.get("semana", ""))
-        last_status = h(last_save.get("status_cliente", ""))
-        last_obs = h(last_save.get("observacoes", ""))
-        last_result = h(last_save.get("result", ""))
-
-        debug_html = f"""
-        <div class="card debug-card">
-          <div class="title">DEBUG CONEXÃO / GRAVAÇÃO</div>
-          <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
-          <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
-          <div class="line"><b>ABAS:</b> {h(abas)}</div>
-          <div class="line"><b>USUÁRIO:</b> {h(session.get("user_login", ""))} ({h(session.get("user_type", ""))})</div>
-          <div class="line"><b>REPRESENTANTE LOGADO:</b> {h(session.get("rep_code", ""))}</div>
-          <div class="line"><b>REPRESENTANTE FILTRADO:</b> {h(selected_rep_code)}</div>
-          <hr style="border-color:#334155;">
-          <div class="line"><b>ÚLTIMA LINHA GRAVADA:</b> {last_row}</div>
-          <div class="line"><b>ÚLTIMO CLIENT_KEY:</b> {last_ck}</div>
-          <div class="line"><b>ÚLTIMA DATA:</b> {last_data}</div>
-          <div class="line"><b>ÚLTIMO MÊS:</b> {last_mes}</div>
-          <div class="line"><b>ÚLTIMA SEMANA:</b> {last_semana}</div>
-          <div class="line"><b>ÚLTIMO STATUS:</b> {last_status}</div>
-          <div class="line"><b>ÚLTIMA OBS:</b> {last_obs}</div>
-          <div class="line"><b>RESULTADO:</b> {last_result}</div>
+    except Exception:
+        err = traceback.format_exc()
+        content = f"""
+        <div class="card">
+          <h1>Carteira</h1>
+          <p>Erro ao carregar a carteira.</p>
+          <div class="error-box">{html.escape(err)}</div>
         </div>
         """
+        return render_page("Falha no servidor", content), 500
 
-    def opt_html(options, selected):
-        out = ["<option value=''></option>"]
-        for o in options:
-            sel = "selected" if norm(o) == norm(selected) else ""
-            out.append(f"<option value='{h(o)}' {sel}>{h(o)}</option>")
-        return "\n".join(out)
 
-    table_rows = []
+@app.route("/admin-dashboard")
+def admin_dashboard():
+    if not require_login():
+        return redirect(url_for("login"))
 
-    for idx, r in enumerate(out_rows, start=1):
-        ck = norm(r.get(key_col, "")) if key_col else ""
-        grupo = norm(r.get(grupo_col, "")) if grupo_col else ""
-        repc = norm(r.get(rep_col, "")) if rep_col else ""
-        nome_rep = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-        supv = norm(r.get(sup_col, "")) if sup_col else ""
-        cidade = norm(r.get(cidade_col, "")) if cidade_col else ""
+    try:
+        content = f"""
+        <div class="card">
+          <h1>Admin</h1>
+          <p class="muted">Painel administrativo do sistema.</p>
 
-        t24 = fmt_money(r.get(t2024_col, "")) if t2024_col else ""
-        t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
-        t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
-
-        dav = norm(r.get("Data Agenda Visita", ""))
-        mes = norm(r.get("Mês", ""))
-        sem = norm(r.get("Semana Atendimento", ""))
-        stc = norm(r.get("Status Cliente", ""))
-        obs = norm(r.get("Observações", ""))
-
-        status_cor = r.get("_status_cor", "")
-        klass = r.get("_row_class", "")
-        base_row_number = r.get("_base_row_number", "")
-        form_id = f"form_row_{idx}"
-
-        hidden_filters = ""
-        if sup_sel:
-            hidden_filters += f'<input type="hidden" name="sup" value="{h(sup_sel)}">'
-        if rep_sel:
-            hidden_filters += f'<input type="hidden" name="rep" value="{h(rep_sel)}">'
-        if q:
-            hidden_filters += f'<input type="hidden" name="q" value="{h(q)}">'
-
-        row_html = f"""
-        <tr class="{h(klass)}">
-          <td class="nowrap">{h(ck)}</td>
-          <td>{h(grupo)}</td>
-          <td class="nowrap">{h(repc)}</td>
-          <td>{h(nome_rep)}</td>
-          <td class="nowrap">{h(supv)}</td>
-          <td>{h(cidade)}</td>
-          <td class="money nowrap">{h(t24)}</td>
-          <td class="money nowrap">{h(t25)}</td>
-          <td class="money nowrap">{h(t26)}</td>
-          <td class="nowrap"><b>{h(status_cor)}</b></td>
-
-          <td>
-            <form id="{form_id}" method="post" action="{url_for('salvar')}">
-              <input type="hidden" name="client_key" value="{h(ck)}">
-              <input type="hidden" name="rep_code" value="{h(repc)}">
-              <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
-              {hidden_filters}
-            </form>
-            <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
-          </td>
-
-          <td>
-            <select name="Mês" form="{form_id}" style="min-width:140px;">
-              {opt_html(meses, mes)}
-            </select>
-          </td>
-
-          <td>
-            <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
-              {opt_html(semanas, sem)}
-            </select>
-          </td>
-
-          <td>
-            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
-              {opt_html(status_list, stc)}
-            </select>
-          </td>
-
-          <td style="min-width:420px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <input type="text"
-                     name="Observações"
-                     form="{form_id}"
-                     placeholder="Digite observações..."
-                     value="{h(obs)}"
-                     style="flex:1; min-width:260px;">
-              <button type="submit" form="{form_id}" style="white-space:nowrap;">Gravar</button>
+          <div class="grid grid-4">
+            <div class="kpi">
+              <div class="kpi-title">Usuário logado</div>
+              <div class="kpi-value">{html.escape(current_user())}</div>
             </div>
-          </td>
-        </tr>
-        """
-        table_rows.append(row_html)
-
-    filtros_html = ""
-    if is_admin():
-        filtros_html = f"""
-        <div>
-          <label>Filtro Supervisor</label>
-          <select name="sup">
-            <option value="">(Todos)</option>
-            {''.join([f"<option value='{h(s)}' {'selected' if norm(s) == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
-          </select>
+            <div class="kpi">
+              <div class="kpi-title">Aba BASE</div>
+              <div class="kpi-value">{html.escape(WS_BASE)}</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-title">Aba AGENDA</div>
+              <div class="kpi-value">{html.escape(WS_AGENDA)}</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-title">Aba CARTEIRA</div>
+              <div class="kpi-value">{html.escape(WS_CARTEIRA)}</div>
+            </div>
+          </div>
         </div>
-        <div>
-          <label>Filtro Representante</label>
-          <select name="rep">
-            <option value="">(Todos)</option>
-            {''.join([f"<option value='{h(r)}' {'selected' if norm(r) == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
-          </select>
+
+        <div class="card">
+          <h2>Ações</h2>
+          <form method="post" action="{url_for('admin_refresh_cache')}">
+            <div class="row">
+              <div><button type="submit">Limpar cache do sistema</button></div>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Configurações</h2>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><th>SHEET_ID</th><td>{html.escape(SHEET_ID[:8] + '...' if SHEET_ID else '')}</td></tr>
+                <tr><th>CACHE_TTL</th><td>{CACHE_TTL}s</td></tr>
+                <tr><th>DEBUG_MODE</th><td>{DEBUG_MODE}</td></tr>
+                <tr><th>Agora</th><td>{format_dt_br(now_br())}</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
         """
+        return render_page("Admin", content)
 
-    body = f"""
-    {debug_html}
-    {rep_card_html}
+    except Exception:
+        err = traceback.format_exc()
+        content = f"""
+        <div class="card">
+          <h1>Admin</h1>
+          <p>Erro ao carregar o painel administrativo.</p>
+          <div class="error-box">{html.escape(err)}</div>
+        </div>
+        """
+        return render_page("Falha no servidor", content), 500
 
+
+@app.route("/admin/refresh-cache", methods=["POST"])
+def admin_refresh_cache():
+    if not require_login():
+        return redirect(url_for("login"))
+
+    clear_sheet_cache()
+    flash("Cache limpo com sucesso.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/health")
+def health():
+    return {
+        "status": "ok",
+        "app": APP_TITLE,
+        "time": now_br().isoformat(),
+        "cache_items": len(_MEM_CACHE)
+    }, 200
+
+
+# =========================================================
+# ERROR HANDLERS
+# =========================================================
+@app.errorhandler(429)
+def too_many_requests(_e):
+    content = """
     <div class="card">
-      <form method="get">
-        <div class="grid">
-          {filtros_html}
-          <div>
-            <label>Buscar</label>
-            <input name="q" value="{h(q)}" placeholder="cliente/grupo/cidade...">
-          </div>
-          <div style="display:flex;align-items:flex-end;gap:8px;">
-            <button type="submit">Aplicar</button>
-            <a href="{url_for('dashboard')}"><button type="button" class="secondary">Limpar</button></a>
-          </div>
-        </div>
-      </form>
-    </div>
-
-    <div class="card" style="overflow:auto; max-height:72vh;">
-      <table>
-        <thead>
-          <tr>
-            <th>Codigo Grupo Cliente</th>
-            <th>Grupo Cliente</th>
-            <th>Codigo Representante</th>
-            <th>Representante</th>
-            <th>Supervisor</th>
-            <th>Cidade</th>
-            <th>Total 2024</th>
-            <th>Total 2025</th>
-            <th>Total 2026</th>
-            <th>Status Cor</th>
-            <th>Data Agenda Visita</th>
-            <th>Mês</th>
-            <th>Semana Atendimento</th>
-            <th>Status Cliente</th>
-            <th>Observações</th>
-          </tr>
-        </thead>
-        <tbody>
-          {''.join(table_rows)}
-        </tbody>
-      </table>
+      <h1>Muitas requisições</h1>
+      <p>O sistema recebeu muitas chamadas em sequência. Aguarde alguns segundos e tente novamente.</p>
     </div>
     """
-
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle=f"Planilha: {WS_BASE}",
-        logged=True,
-        user_login=session.get("user_login"),
-        user_name=session.get("rep_name", ""),
-        user_type=session.get("user_type"),
-        user_photo_url=current_user_photo,
-        body=body
-    )
+    return render_page("429", content), 429
 
 
-@app.route("/salvar", methods=["POST"])
-def salvar():
-    if not require_login():
-        flash("Sessão expirada. Faça login novamente.", "err")
-        return redirect(url_for("login"))
+@app.errorhandler(Exception)
+def handle_global_exception(e):
+    err = traceback.format_exc()
 
-    user_type = session.get("user_type")
-    user_login = session.get("user_login")
+    # Identifica erro de quota da Google Sheets
+    quota_msg = ""
+    if "Quota exceeded" in err or "429" in err:
+        quota_msg = """
+        <div class="flash flash-error">
+          A API do Google Sheets atingiu o limite temporário de leitura.
+          O sistema possui retry e cache, mas no momento a quota foi excedida.
+          Aguarde alguns segundos e atualize a página.
+        </div>
+        """
 
-    client_key = norm(request.form.get("client_key", ""))
-    rep_code_form = norm(request.form.get("rep_code", ""))
-    base_row_number = norm(request.form.get("base_row_number", ""))
-
-    sup = norm(request.form.get("sup", ""))
-    rep = norm(request.form.get("rep", ""))
-    q = norm(request.form.get("q", ""))
-
-    redirect_args = {k: v for k, v in {"sup": sup, "rep": rep, "q": q}.items() if v}
-
-    if not client_key:
-        flash("client_key vazio.", "err")
-        return redirect(url_for("dashboard", **redirect_args))
-
-    if not base_row_number.isdigit():
-        flash("Linha da BASE inválida para gravação.", "err")
-        return redirect(url_for("dashboard", **redirect_args))
-
-    if user_type == "rep" and rep_code_form != norm(session.get("rep_code", "")):
-        flash("Você não pode gravar alterações em clientes de outro representante.", "err")
-        return redirect(url_for("dashboard", **redirect_args))
-
-    try:
-        sh = connect_gs()
-        ws_base = sh.worksheet(WS_BASE)
-
-        try:
-            ws_ed = ensure_edicoes_worksheet(sh)
-            edicoes_ok = True
-        except Exception:
-            ws_ed = None
-            edicoes_ok = False
-
-        headers = ensure_base_tracking_columns(ws_base)
-        headers_norm = [norm(x) for x in headers]
-
-        data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
-        mes = norm(request.form.get("Mês", ""))
-        semana = norm(request.form.get("Semana Atendimento", ""))
-        status_cliente = norm(request.form.get("Status Cliente", ""))
-        observacoes = norm(request.form.get("Observações", ""))
-
-        row_num = int(base_row_number)
-
-        col_data = headers_norm.index("Data Agenda Visita") + 1
-        col_mes = headers_norm.index("Mês") + 1
-        col_semana = headers_norm.index("Semana Atendimento") + 1
-        col_status = headers_norm.index("Status Cliente") + 1
-        col_obs = headers_norm.index("Observações") + 1
-
-        ws_base.batch_update(
-            [
-                {"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]},
-                {"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]},
-                {"range": rowcol_to_a1(row_num, col_semana), "values": [[semana]]},
-                {"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]},
-                {"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]},
-            ],
-            value_input_option="USER_ENTERED"
-        )
-
-        row_values = ws_base.row_values(row_num)
-
-        gravado_data = safe_cell(row_values, col_data)
-        gravado_mes = safe_cell(row_values, col_mes)
-        gravado_semana = safe_cell(row_values, col_semana)
-        gravado_status = safe_cell(row_values, col_status)
-        gravado_obs = safe_cell(row_values, col_obs)
-
-        conferiu = (
-            gravado_data == norm(data_agenda) and
-            gravado_mes == norm(mes) and
-            gravado_semana == norm(semana) and
-            gravado_status == norm(status_cliente) and
-            gravado_obs == norm(observacoes)
-        )
-
-        if not conferiu:
-            set_last_save_debug({
-                "row_num": row_num,
-                "client_key": client_key,
-                "data_agenda": gravado_data,
-                "mes": gravado_mes,
-                "semana": gravado_semana,
-                "status_cliente": gravado_status,
-                "observacoes": gravado_obs,
-                "result": "FALHA NA CONFIRMAÇÃO",
-            })
-            raise RuntimeError(
-                "A gravação não foi confirmada na BASE. "
-                f"Linha={row_num} | "
-                f"Data='{gravado_data}' | "
-                f"Mês='{gravado_mes}' | "
-                f"Semana='{gravado_semana}' | "
-                f"Status='{gravado_status}' | "
-                f"Obs='{gravado_obs}'"
-            )
-
-        if edicoes_ok and ws_ed is not None:
-            row_log = [
-                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                user_type,
-                user_login,
-                rep_code_form,
-                client_key,
-                data_agenda,
-                mes,
-                semana,
-                status_cliente,
-                observacoes
-            ]
-            ws_ed.append_row(row_log, value_input_option="USER_ENTERED")
-            result_txt = "BASE OK / EDICOES OK"
-        else:
-            result_txt = "BASE OK / EDICOES NÃO DISPONÍVEL"
-
-        set_last_save_debug({
-            "row_num": row_num,
-            "client_key": client_key,
-            "data_agenda": gravado_data,
-            "mes": gravado_mes,
-            "semana": gravado_semana,
-            "status_cliente": gravado_status,
-            "observacoes": gravado_obs,
-            "result": result_txt,
-        })
-
-        flash(f"Gravado com sucesso na BASE na linha {row_num}.", "ok")
-        if not edicoes_ok:
-            flash("A BASE foi gravada, mas a aba EDICOES não pôde ser usada. Crie a aba manualmente ou ajuste a permissão da service account.", "err")
-
-    except Exception as e:
-        app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
-        set_last_save_debug({
-            "row_num": base_row_number,
-            "client_key": client_key,
-            "data_agenda": request.form.get("Data Agenda Visita", ""),
-            "mes": request.form.get("Mês", ""),
-            "semana": request.form.get("Semana Atendimento", ""),
-            "status_cliente": request.form.get("Status Cliente", ""),
-            "observacoes": request.form.get("Observações", ""),
-            "result": f"ERRO: {str(e)}",
-        })
-        flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
-
-    return redirect(url_for("dashboard", **redirect_args))
+    content = f"""
+    <div class="card">
+      <h1>Falha no servidor</h1>
+      {quota_msg}
+      <p>Ocorreu um erro inesperado ao processar a requisição.</p>
+      <div class="error-box">{html.escape(err if DEBUG_MODE else str(e))}</div>
+    </div>
+    """
+    return render_page("Falha no servidor", content), 500
 
 
+# =========================================================
+# MAIN
+# =========================================================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=DEBUG_MODE)
