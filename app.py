@@ -40,6 +40,13 @@ DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "s
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
 
+# =========================
+# CONFIG AGENDA
+# =========================
+AGENDA_TXT_PATH = r"D:\metodo\agenda_atendimentos.txt"
+AGENDA_DIAS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA"]
+AGENDA_QTD_ATEND = 4
+
 
 # =========================
 # LISTAS FIXAS (fallback)
@@ -442,6 +449,135 @@ def build_city_map_svg(city_points, width=650, height=360):
 
 
 # =========================
+# HELPERS AGENDA
+# =========================
+def ensure_agenda_dir():
+    pasta = os.path.dirname(AGENDA_TXT_PATH)
+    if pasta and not os.path.exists(pasta):
+        os.makedirs(pasta, exist_ok=True)
+
+
+def agenda_empty_data():
+    data = {}
+    for dia in AGENDA_DIAS:
+        for i in range(1, AGENDA_QTD_ATEND + 1):
+            data[f"{dia}_CLIENTE_{i}"] = ""
+            data[f"{dia}_VALOR_{i}"] = ""
+    return data
+
+
+def load_agenda_data():
+    ensure_agenda_dir()
+
+    if not os.path.exists(AGENDA_TXT_PATH):
+        data = agenda_empty_data()
+        save_agenda_data(data)
+        return data
+
+    try:
+        with open(AGENDA_TXT_PATH, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+
+        if not content:
+            data = agenda_empty_data()
+            save_agenda_data(data)
+            return data
+
+        loaded = json.loads(content)
+        if not isinstance(loaded, dict):
+            loaded = {}
+    except Exception:
+        loaded = {}
+
+    data = agenda_empty_data()
+    for k in data.keys():
+        data[k] = norm(loaded.get(k, ""))
+
+    return data
+
+
+def save_agenda_data(data):
+    ensure_agenda_dir()
+    with open(AGENDA_TXT_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def build_agenda_from_form(form):
+    data = agenda_empty_data()
+    for dia in AGENDA_DIAS:
+        for i in range(1, AGENDA_QTD_ATEND + 1):
+            ck = f"{dia}_CLIENTE_{i}"
+            vk = f"{dia}_VALOR_{i}"
+            data[ck] = norm(form.get(ck, ""))
+            data[vk] = norm(form.get(vk, ""))
+    return data
+
+
+def render_agenda_table_html(data):
+    head_top = []
+    head_sub = []
+
+    for i in range(1, AGENDA_QTD_ATEND + 1):
+        head_top.append(f"<th colspan='2'>ATENDIMENTO {i:02d}</th>")
+        head_sub.append("<th>CLIENTE</th><th>VALOR</th>")
+
+    body_rows = []
+    for dia in AGENDA_DIAS:
+        cells = [f"<td class='agenda-dia'>{h(dia)}</td>"]
+
+        for i in range(1, AGENDA_QTD_ATEND + 1):
+            ck = f"{dia}_CLIENTE_{i}"
+            vk = f"{dia}_VALOR_{i}"
+
+            cells.append(
+                f"<td><input type='text' name='{h(ck)}' value='{h(data.get(ck, ''))}' placeholder='Cliente'></td>"
+            )
+            cells.append(
+                f"<td><input type='text' name='{h(vk)}' value='{h(data.get(vk, ''))}' placeholder='Valor'></td>"
+            )
+
+        body_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    return f"""
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+        <div>
+          <div style="font-size:18px; font-weight:700;">Agenda de Atendimentos</div>
+          <div class="small">Gravação local em: {h(AGENDA_TXT_PATH)}</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <a href="{url_for('agenda_atendimentos')}" class="btn-link secondary">Recarregar</a>
+          <a href="{url_for('dashboard')}" class="btn-link dark">Voltar</a>
+        </div>
+      </div>
+
+      <form method="post" action="{url_for('salvar_agenda_atendimentos')}">
+        <div style="overflow:auto;">
+          <table class="agenda-table">
+            <thead>
+              <tr>
+                <th rowspan="2" style="min-width:90px;">DIA</th>
+                {''.join(head_top)}
+              </tr>
+              <tr class="agenda-subhead">
+                {''.join(head_sub)}
+              </tr>
+            </thead>
+            <tbody>
+              {''.join(body_rows)}
+            </tbody>
+          </table>
+        </div>
+
+        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="submit">Salvar agenda</button>
+        </div>
+      </form>
+    </div>
+    """
+
+
+# =========================
 # GOOGLE SHEETS
 # =========================
 def _load_service_account_info():
@@ -699,7 +835,7 @@ BASE_HTML = """
   <style>
     body { font-family: Arial, sans-serif; margin: 0; background: #f5f6f8; color: #111827; }
     .topbar { background: #ffffff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d1d5db; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .topbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
 
     .container { padding: 12px; }
@@ -790,6 +926,12 @@ BASE_HTML = """
       margin-bottom: 12px;
     }
 
+    :root{
+      --a3w: 420mm;
+      --a3h: 297mm;
+      --screen-scale: 0.78;
+    }
+
     .dash-page {
       display: flex;
       flex-direction: column;
@@ -797,20 +939,35 @@ BASE_HTML = """
       align-items: center;
     }
 
+    .a3-stage {
+      width: 100%;
+      overflow: auto;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 6px 0 18px 0;
+      box-sizing: border-box;
+    }
+
     .a3-page {
-      width: min(100%, 1560px);
+      width: var(--a3w);
+      height: var(--a3h);
       background: #ffffff;
+      transform: scale(var(--screen-scale));
+      transform-origin: top center;
+      margin-bottom: calc((1 - var(--screen-scale)) * -297mm);
     }
 
     .dash-shell {
+      width: 100%;
+      height: 100%;
       background: #ffffff;
       border: 1px solid #cfd4dc;
       border-top: 3px solid #f97316;
       border-bottom: 3px solid #f97316;
-      padding: 10px;
+      padding: 8mm;
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-      width: 100%;
       box-sizing: border-box;
       overflow: hidden;
     }
@@ -1076,16 +1233,76 @@ BASE_HTML = """
 
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
+    .agenda-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #ffffff;
+      font-size: 13px;
+    }
+
+    .agenda-table th,
+    .agenda-table td {
+      border: 1px solid #4b5563;
+      padding: 0;
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    .agenda-table thead th {
+      background: #d9d9d9;
+      color: #111827;
+      font-weight: 700;
+      padding: 8px 6px;
+      position: static;
+    }
+
+    .agenda-table .agenda-subhead th {
+      background: #efefef;
+      font-size: 12px;
+      padding: 6px 4px;
+    }
+
+    .agenda-table .agenda-dia {
+      background: #f3f4f6;
+      font-weight: 700;
+      padding: 8px 6px;
+      min-width: 90px;
+    }
+
+    .agenda-table input {
+      width: 100%;
+      border: none;
+      padding: 10px 8px;
+      box-sizing: border-box;
+      text-align: center;
+      background: #ffffff;
+      color: #111827;
+      font-size: 13px;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .agenda-table input:focus {
+      outline: none;
+      background: #fff7d6;
+      box-shadow: none;
+      border-color: transparent;
+    }
+
     @page {
       size: A3 landscape;
-      margin: 4mm;
+      margin: 0;
     }
 
     @media print {
       html, body {
         width: 420mm;
         height: 297mm;
+        margin: 0 !important;
+        padding: 0 !important;
         background: #ffffff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
       }
 
       .topbar,
@@ -1097,57 +1314,43 @@ BASE_HTML = """
       .container {
         padding: 0 !important;
         margin: 0 !important;
-        width: 100%;
+        width: 420mm !important;
+        height: 297mm !important;
+        overflow: hidden !important;
       }
 
       .dash-page {
-        gap: 0 !important;
-        width: 100%;
+        display: block !important;
+        width: 420mm !important;
+        height: 297mm !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      .a3-stage {
+        width: 420mm !important;
+        height: 297mm !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        display: block !important;
       }
 
       .a3-page {
-        width: 412mm !important;
-        height: 288mm !important;
-        margin: 0 auto !important;
-        overflow: hidden !important;
+        width: 420mm !important;
+        height: 297mm !important;
+        transform: none !important;
+        margin: 0 !important;
       }
 
       .dash-shell {
-        width: 100% !important;
-        height: 100% !important;
-        padding: 6mm !important;
-        border-radius: 0 !important;
+        width: 420mm !important;
+        height: 297mm !important;
+        padding: 8mm !important;
         box-shadow: none !important;
+        border-radius: 0 !important;
         overflow: hidden !important;
       }
-
-      .dash-header,
-      .dash-row-top,
-      .dash-row-bottom,
-      .dash-right-stack,
-      .dash-panel,
-      .dash-panel-body {
-        break-inside: avoid !important;
-        page-break-inside: avoid !important;
-      }
-
-      .dash-table-mini,
-      .dash-table-big {
-        font-size: 8px !important;
-      }
-
-      .dash-table-mini th, .dash-table-mini td,
-      .dash-table-big th, .dash-table-big td {
-        padding: 2px 3px !important;
-      }
-    }
-
-    @media (max-width: 1200px) {
-      .dash-header { grid-template-columns: 74px 1fr; }
-      .dash-meta-box { grid-column: 1 / -1; }
-      .dash-kidy-logo { justify-self: start; }
-      .dash-row-top { grid-template-columns: 1fr; }
-      .dash-row-bottom { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1159,7 +1362,10 @@ BASE_HTML = """
         {% if user_type == 'admin' %}
           <a href="{{ url_for('admin_dashboard') }}" class="btn-link dark">Dashboard</a>
           <a href="{{ url_for('dashboard') }}" class="btn-link secondary">Carteira</a>
+        {% else %}
+          <a href="{{ url_for('dashboard') }}" class="btn-link secondary">Carteira</a>
         {% endif %}
+        <a href="{{ url_for('agenda_atendimentos') }}" class="btn-link orange">Agenda</a>
         {% if user_photo_url %}
           <img src="{{ user_photo_url }}" alt="Foto do usuário" class="topbar-avatar">
         {% endif %}
@@ -1657,7 +1863,7 @@ def admin_dashboard():
         body = f"""
         <div class="dash-page">
 
-          <div class="card no-print a3-page">
+          <div class="card no-print" style="width:min(100%, 1560px);">
             <form method="get">
               <div class="grid">
                 <div>
@@ -1683,125 +1889,127 @@ def admin_dashboard():
                 </div>
 
                 <div class="print-note">
-                  Ajustado para sair em uma única página A3 horizontal.
+                  Impressão configurada para ser uma cópia fiel da tela.
                 </div>
               </div>
             </form>
           </div>
 
-          <div class="a3-page no-break">
-            <div class="dash-shell">
+          <div class="a3-stage no-break">
+            <div class="a3-page">
+              <div class="dash-shell">
 
-              <div class="dash-header">
-                <div>
-                  {
-                      f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
-                      if rep_photo else
-                      '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
-                  }
-                </div>
-
-                <div class="dash-title-wrap">
-                  <div class="dash-main-title">Acompanhamento de Representante</div>
-                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
-                  <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
-                </div>
-
-                <div class="dash-meta-box">
-                  <div class="dash-metric">
-                    <div class="dash-metric-label">Meta</div>
-                    <div class="dash-metric-value">{h(header_meta)}</div>
+                <div class="dash-header">
+                  <div>
+                    {
+                        f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
+                        if rep_photo else
+                        '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
+                    }
                   </div>
-                  <div class="dash-metric">
-                    <div class="dash-metric-label">Realizado</div>
-                    <div class="dash-metric-value">{h(header_realizado)}</div>
+
+                  <div class="dash-title-wrap">
+                    <div class="dash-main-title">Acompanhamento de Representante</div>
+                    <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                    <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                    <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
                   </div>
-                  <div class="dash-metric">
-                    <div class="dash-metric-label">% Realizado</div>
-                    <div class="dash-metric-value">{h(header_percentual)}</div>
-                  </div>
-                </div>
 
-                <div>
-                  <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
-                </div>
-              </div>
-
-              <div class="dash-row-top">
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">10 Maiores Clientes</div>
-                  <div class="dash-panel-body">
-                    {ranking_2026_html}
-                  </div>
-                </div>
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">10 Maiores Clientes 2025</div>
-                  <div class="dash-panel-body">
-                    {ranking_2025_html}
-                  </div>
-                </div>
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">Cidades da Região</div>
-                  <div class="dash-panel-body">
-                    {mapa_svg_html}
-                    <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
-                      Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
-                      {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
+                  <div class="dash-meta-box">
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">Meta</div>
+                      <div class="dash-metric-value">{h(header_meta)}</div>
+                    </div>
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">Realizado</div>
+                      <div class="dash-metric-value">{h(header_realizado)}</div>
+                    </div>
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">% Realizado</div>
+                      <div class="dash-metric-value">{h(header_percentual)}</div>
                     </div>
                   </div>
-                </div>
 
-              </div>
-
-              <div class="dash-row-bottom">
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">Clientes sem Compra</div>
-                  <div class="dash-panel-body">
-                    {clientes_sem_compra_html}
+                  <div>
+                    <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
                   </div>
                 </div>
 
-                <div class="dash-right-stack">
+                <div class="dash-row-top">
 
                   <div class="dash-panel">
-                    <div class="dash-panel-title">Clientes Gold</div>
+                    <div class="dash-panel-title">10 Maiores Clientes</div>
                     <div class="dash-panel-body">
-                      <div class="dash-gold-box">
-                        Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
-                      </div>
+                      {ranking_2026_html}
                     </div>
                   </div>
 
                   <div class="dash-panel">
-                    <div class="dash-panel-title">Cobertura da Carteira</div>
+                    <div class="dash-panel-title">10 Maiores Clientes 2025</div>
                     <div class="dash-panel-body">
-                      <div class="dash-coverage-box">
-                        Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                        Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
-                      </div>
+                      {ranking_2025_html}
                     </div>
                   </div>
 
                   <div class="dash-panel">
-                    <div class="dash-panel-title">Tabela / Resumo Operacional</div>
+                    <div class="dash-panel-title">Cidades da Região</div>
                     <div class="dash-panel-body">
-                      <div class="dash-summary-box">
-                        Estrutura pronta para entrar depois com resumo operacional,
-                        metas, visitas, pedidos, saldo e KPIs adicionais.
+                      {mapa_svg_html}
+                      <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                        Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
+                        {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                       </div>
                     </div>
                   </div>
 
                 </div>
-              </div>
 
+                <div class="dash-row-bottom">
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Clientes sem Compra</div>
+                    <div class="dash-panel-body">
+                      {clientes_sem_compra_html}
+                    </div>
+                  </div>
+
+                  <div class="dash-right-stack">
+
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Clientes Gold</div>
+                      <div class="dash-panel-body">
+                        <div class="dash-gold-box">
+                          Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Cobertura da Carteira</div>
+                      <div class="dash-panel-body">
+                        <div class="dash-coverage-box">
+                          Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                          Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                          Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Tabela / Resumo Operacional</div>
+                      <div class="dash-panel-body">
+                        <div class="dash-summary-box">
+                          Estrutura pronta para entrar depois com resumo operacional,
+                          metas, visitas, pedidos, saldo e KPIs adicionais.
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
+              </div>
             </div>
           </div>
         </div>
@@ -1810,7 +2018,7 @@ def admin_dashboard():
         if DEBUG_MODE:
             abas = ", ".join(debug_info.get("worksheets", []))
             body += f"""
-            <div class="card debug-card no-print">
+            <div class="card debug-card no-print" style="width:min(100%, 1560px);">
               <div class="title">DEBUG DASHBOARD ADMIN</div>
               <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
               <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
@@ -2247,6 +2455,49 @@ def dashboard():
         user_photo_url=current_user_photo,
         body=body
     )
+
+
+@app.route("/agenda-atendimentos", methods=["GET"])
+def agenda_atendimentos():
+    if not require_login():
+        flash("Faça login para continuar.", "err")
+        return redirect(url_for("login"))
+
+    data = load_agenda_data()
+    agenda_html = render_agenda_table_html(data)
+
+    current_user_photo = ""
+    if session.get("user_type") == "rep":
+        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
+    return render_template_string(
+        BASE_HTML,
+        title=APP_TITLE,
+        subtitle="Agenda de Atendimentos",
+        logged=True,
+        user_login=session.get("user_login"),
+        user_name=session.get("rep_name", ""),
+        user_type=session.get("user_type"),
+        user_photo_url=current_user_photo,
+        body=agenda_html
+    )
+
+
+@app.route("/agenda-atendimentos/salvar", methods=["POST"])
+def salvar_agenda_atendimentos():
+    if not require_login():
+        flash("Sessão expirada. Faça login novamente.", "err")
+        return redirect(url_for("login"))
+
+    try:
+        data = build_agenda_from_form(request.form)
+        save_agenda_data(data)
+        flash(f"Agenda gravada com sucesso em {AGENDA_TXT_PATH}.", "ok")
+    except Exception as e:
+        app.logger.error("Erro ao salvar agenda:\n%s", traceback.format_exc())
+        flash(f"Erro ao salvar agenda: {norm(str(e))}", "err")
+
+    return redirect(url_for("agenda_atendimentos"))
 
 
 @app.route("/salvar", methods=["POST"])
