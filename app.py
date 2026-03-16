@@ -577,6 +577,46 @@ def render_agenda_table_html(data):
     """
 
 
+def render_agenda_compact_dashboard_html(data):
+    if not data:
+        data = agenda_empty_data()
+
+    dias_html = []
+
+    for dia in AGENDA_DIAS:
+        atendimentos_html = []
+
+        for i in range(1, AGENDA_QTD_ATEND + 1):
+            cliente = norm(data.get(f"{dia}_CLIENTE_{i}", ""))
+            valor = norm(data.get(f"{dia}_VALOR_{i}", ""))
+
+            cliente_show = cliente if cliente else "-"
+            valor_show = valor if valor else "-"
+
+            atendimentos_html.append(f"""
+            <div class="agenda-mini-item">
+              <div class="agenda-mini-num">Atend. {i:02d}</div>
+              <div class="agenda-mini-line"><b>Cliente:</b> {h(cliente_show)}</div>
+              <div class="agenda-mini-line"><b>Valor:</b> {h(valor_show)}</div>
+            </div>
+            """)
+
+        dias_html.append(f"""
+        <div class="agenda-mini-day">
+          <div class="agenda-mini-day-title">{h(dia)}</div>
+          <div class="agenda-mini-grid">
+            {''.join(atendimentos_html)}
+          </div>
+        </div>
+        """)
+
+    return f"""
+    <div class="agenda-mini-wrap">
+      {''.join(dias_html)}
+    </div>
+    """
+
+
 # =========================
 # GOOGLE SHEETS
 # =========================
@@ -1289,6 +1329,63 @@ BASE_HTML = """
       border-color: transparent;
     }
 
+    .agenda-mini-wrap {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+
+    .agenda-mini-day {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #ffffff;
+    }
+
+    .agenda-mini-day-title {
+      background: #e5e7eb;
+      color: #111827;
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      padding: 4px 6px;
+      text-align: center;
+      border-bottom: 1px solid #cbd5e1;
+    }
+
+    .agenda-mini-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+    }
+
+    .agenda-mini-item {
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      padding: 4px;
+      background: #fafafa;
+      min-height: 44px;
+      box-sizing: border-box;
+    }
+
+    .agenda-mini-num {
+      font-size: 8px;
+      font-weight: 800;
+      color: #374151;
+      margin-bottom: 2px;
+      text-transform: uppercase;
+    }
+
+    .agenda-mini-line {
+      font-size: 8px;
+      line-height: 1.2;
+      color: #111827;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     @page {
       size: A3 landscape;
       margin: 0;
@@ -1627,6 +1724,9 @@ def admin_dashboard():
         total_sem_compra = len(clientes_sem_compra)
         total_com_compra = max(total_carteira - total_sem_compra, 0)
         cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
+
+        agenda_data = load_agenda_data()
+        agenda_dashboard_html = render_agenda_compact_dashboard_html(agenda_data)
 
         def chip_class(status_cor):
             s = normalize_text_for_match(status_cor)
@@ -1997,12 +2097,9 @@ def admin_dashboard():
                     </div>
 
                     <div class="dash-panel">
-                      <div class="dash-panel-title">Tabela / Resumo Operacional</div>
+                      <div class="dash-panel-title">Agenda de Atendimentos</div>
                       <div class="dash-panel-body">
-                        <div class="dash-summary-box">
-                          Estrutura pronta para entrar depois com resumo operacional,
-                          metas, visitas, pedidos, saldo e KPIs adicionais.
-                        </div>
+                        {agenda_dashboard_html}
                       </div>
                     </div>
 
@@ -2396,9 +2493,22 @@ def dashboard():
         </div>
         """
 
+    agenda_data = load_agenda_data()
+    agenda_dashboard_html = render_agenda_compact_dashboard_html(agenda_data)
+
     body = f"""
     {debug_html}
     {rep_card_html}
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+        <div style="font-size:18px; font-weight:700;">Agenda de Atendimentos</div>
+        <div>
+          <a href="{url_for('agenda_atendimentos')}" class="btn-link orange">Abrir agenda completa</a>
+        </div>
+      </div>
+      {agenda_dashboard_html}
+    </div>
 
     <div class="card">
       <form method="get">
