@@ -1114,7 +1114,7 @@ BASE_HTML = """
 
     .dash-right-stack {
       display: grid;
-      grid-template-rows: auto auto auto;
+      grid-template-rows: auto auto;
       gap: 8px;
     }
 
@@ -1710,97 +1710,6 @@ def admin_dashboard():
                 reverse=True
             )
 
-        agenda_rows = []
-
-        if key_col and grupo_col:
-            for r in filtered_rows:
-                data_ag = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
-                mes_ag = norm(r.get(mes_col, "")) if mes_col else ""
-                semana_ag = norm(r.get(semana_col, "")) if semana_col else ""
-                status_ag = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
-                obs_ag = norm(r.get(observacoes_col, "")) if observacoes_col else ""
-
-                tem_agenda = any([data_ag, mes_ag, semana_ag, status_ag, obs_ag])
-                if not tem_agenda:
-                    continue
-
-                status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                    r,
-                    status_cor_col=status_cor_col,
-                    cliente_novo_col=cliente_novo_col
-                )
-
-                agenda_rows.append({
-                    "codigo": norm(r.get(key_col, "")),
-                    "grupo": norm(r.get(grupo_col, "")),
-                    "cidade": norm(r.get(cidade_col, "")) if cidade_col else "",
-                    "representante": norm(r.get(nome_rep_col, "")) if nome_rep_col else "",
-                    "data": data_ag,
-                    "mes": mes_ag,
-                    "semana": semana_ag,
-                    "status": status_ag,
-                    "obs": obs_ag,
-                    "status_cor": status_cor_final,
-                    "row_class": row_class
-                })
-
-        def agenda_sort_key(x):
-            data_txt = x.get("data", "")
-            m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", data_txt)
-            if m:
-                dd, mm, yyyy = m.groups()
-                data_ord = f"{yyyy}{mm}{dd}"
-            else:
-                data_ord = "99999999"
-            return (
-                data_ord,
-                x.get("mes", ""),
-                x.get("semana", ""),
-                x.get("grupo", "")
-            )
-
-        agenda_rows.sort(key=agenda_sort_key)
-
-        agenda_visitas_html = ""
-        if agenda_rows:
-            rows = []
-            for item in agenda_rows[:18]:
-                rows.append(f"""
-                <tr class="{h(item['row_class'])}">
-                  <td>{h(item['data'])}</td>
-                  <td>{h(item['mes'])}</td>
-                  <td>{h(item['semana'])}</td>
-                  <td>{h(item['codigo'])}</td>
-                  <td>{h(item['grupo'])}</td>
-                  <td>{h(item['cidade'])}</td>
-                  <td>{h(item['status'])}</td>
-                </tr>
-                """)
-            agenda_visitas_html = f"""
-            <table class="dash-table-big">
-              <thead>
-                <tr>
-                  <th>Data</th>
-                  <th>Mês</th>
-                  <th>Semana</th>
-                  <th>Código</th>
-                  <th>Grupo</th>
-                  <th>Cidade</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {''.join(rows)}
-              </tbody>
-            </table>
-            """
-        else:
-            agenda_visitas_html = """
-            <div class="dash-summary-box">
-              Nenhum registro de agenda encontrado para os filtros atuais.
-            </div>
-            """
-
         agenda_semanal_html = render_agenda_semana_html(
             rep_code=header_rep_code,
             sup_sel=sup_sel,
@@ -2180,13 +2089,6 @@ def admin_dashboard():
                     </div>
                   </div>
 
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Agenda de Visitas</div>
-                    <div class="dash-panel-body">
-                      {agenda_visitas_html}
-                    </div>
-                  </div>
-
                 </div>
               </div>
 
@@ -2216,7 +2118,6 @@ def admin_dashboard():
               <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
               <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
               <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
-              <div class="line"><b>AGENDA ROWS:</b> {h(len(agenda_rows))}</div>
               <div class="line"><b>AGENDA FILE:</b> {h(AGENDA_FILE)}</div>
               <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
