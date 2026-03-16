@@ -43,8 +43,12 @@ LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.
 # =========================
 # CONFIG AGENDA
 # =========================
-AGENDA_TXT_PATH = r"D:\metodo\agenda_atendimentos.txt"
-AGENDA_DIAS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA"]
+if os.name == "nt":
+    AGENDA_TXT_PATH = r"D:\metodo\agenda_atendimentos.txt"
+else:
+    AGENDA_TXT_PATH = "/tmp/agenda_atendimentos.txt"
+
+AGENDA_DIAS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO"]
 AGENDA_QTD_ATEND = 4
 
 
@@ -466,40 +470,62 @@ def agenda_empty_data():
     return data
 
 
-def load_agenda_data():
+def load_all_agendas():
     ensure_agenda_dir()
 
     if not os.path.exists(AGENDA_TXT_PATH):
-        data = agenda_empty_data()
-        save_agenda_data(data)
-        return data
+        save_all_agendas({})
+        return {}
 
     try:
         with open(AGENDA_TXT_PATH, "r", encoding="utf-8") as f:
             content = f.read().strip()
 
         if not content:
-            data = agenda_empty_data()
-            save_agenda_data(data)
-            return data
+            save_all_agendas({})
+            return {}
 
         loaded = json.loads(content)
         if not isinstance(loaded, dict):
-            loaded = {}
+            return {}
+        return loaded
     except Exception:
-        loaded = {}
-
-    data = agenda_empty_data()
-    for k in data.keys():
-        data[k] = norm(loaded.get(k, ""))
-
-    return data
+        return {}
 
 
-def save_agenda_data(data):
+def save_all_agendas(all_data):
     ensure_agenda_dir()
     with open(AGENDA_TXT_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(all_data, f, ensure_ascii=False, indent=2)
+
+
+def get_agenda_for_rep(rep_code):
+    rep_code = norm(rep_code)
+    base = agenda_empty_data()
+
+    if not rep_code:
+        return base
+
+    all_data = load_all_agendas()
+    rep_data = all_data.get(rep_code, {})
+
+    if not isinstance(rep_data, dict):
+        rep_data = {}
+
+    for k in base.keys():
+        base[k] = norm(rep_data.get(k, ""))
+
+    return base
+
+
+def save_agenda_for_rep(rep_code, data):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        raise RuntimeError("Código do representante não informado para gravar a agenda.")
+
+    all_data = load_all_agendas()
+    all_data[rep_code] = data
+    save_all_agendas(all_data)
 
 
 def build_agenda_from_form(form):
@@ -513,7 +539,20 @@ def build_agenda_from_form(form):
     return data
 
 
-def render_agenda_table_html(data):
+def resolve_rep_name_from_code(rep_code, base_rows=None, rep_col=None, nome_rep_col=None):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        return ""
+
+    if base_rows and rep_col and nome_rep_col:
+        for r in base_rows:
+            if norm(r.get(rep_col, "")) == rep_code:
+                return norm(r.get(nome_rep_col, ""))
+
+    return try_get_rep_name(rep_code)
+
+
+def render_agenda_table_html(data, rep_code="", rep_name=""):
     head_top = []
     head_sub = []
 
@@ -538,20 +577,27 @@ def render_agenda_table_html(data):
 
         body_rows.append(f"<tr>{''.join(cells)}</tr>")
 
+    subtitulo_rep = ""
+    if rep_code:
+        subtitulo_rep = f"Representante: <b>{h(rep_name or ('Representante ' + rep_code))}</b> | Código: <b>{h(rep_code)}</b>"
+
     return f"""
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
         <div>
           <div style="font-size:18px; font-weight:700;">Agenda de Atendimentos</div>
+          <div class="small">{subtitulo_rep}</div>
           <div class="small">Gravação local em: {h(AGENDA_TXT_PATH)}</div>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <a href="{url_for('agenda_atendimentos')}" class="btn-link secondary">Recarregar</a>
-          <a href="{url_for('dashboard')}" class="btn-link dark">Voltar</a>
+          <a href="{url_for('agenda_atendimentos', rep=rep_code)}" class="btn-link secondary">Recarregar</a>
+          <a href="{url_for('admin_dashboard', rep=rep_code)}" class="btn-link dark">Voltar ao dashboard</a>
         </div>
       </div>
 
       <form method="post" action="{url_for('salvar_agenda_atendimentos')}">
+        <input type="hidden" name="rep_code" value="{h(rep_code)}">
+
         <div style="overflow:auto;">
           <table class="agenda-table">
             <thead>
@@ -577,7 +623,14 @@ def render_agenda_table_html(data):
     """
 
 
-def render_agenda_compact_dashboard_html(data):
+def render_agenda_compact_dashboard_html(data, rep_code="", rep_name=""):
+    if not rep_code:
+        return """
+        <div class="dash-map-placeholder" style="min-height:180px;">
+          Selecione um representante para visualizar a agenda.
+        </div>
+        """
+
     if not data:
         data = agenda_empty_data()
 
@@ -611,6 +664,9 @@ def render_agenda_compact_dashboard_html(data):
         """)
 
     return f"""
+    <div style="margin-bottom:6px; font-size:9px; color:#374151; text-align:center;">
+      <b>Representante:</b> {h(rep_name or ('Representante ' + rep_code))} | <b>Código:</b> {h(rep_code)}
+    </div>
     <div class="agenda-mini-wrap">
       {''.join(dias_html)}
     </div>
@@ -1226,21 +1282,6 @@ BASE_HTML = """
       box-sizing: border-box;
     }
 
-    .dash-summary-box {
-      min-height: 130px;
-      background: #f8fafc;
-      border: 2px dashed #94a3b8;
-      color: #334155;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 11px;
-      border-radius: 6px;
-      padding: 8px;
-      box-sizing: border-box;
-    }
-
     .print-toolbar {
       display: flex;
       gap: 8px;
@@ -1333,6 +1374,7 @@ BASE_HTML = """
       display: grid;
       grid-template-columns: 1fr;
       gap: 6px;
+      max-height: 100%;
     }
 
     .agenda-mini-day {
@@ -1365,7 +1407,7 @@ BASE_HTML = """
       border-radius: 4px;
       padding: 4px;
       background: #fafafa;
-      min-height: 44px;
+      min-height: 38px;
       box-sizing: border-box;
     }
 
@@ -1458,11 +1500,9 @@ BASE_HTML = """
       {% if logged %}
         {% if user_type == 'admin' %}
           <a href="{{ url_for('admin_dashboard') }}" class="btn-link dark">Dashboard</a>
-          <a href="{{ url_for('dashboard') }}" class="btn-link secondary">Carteira</a>
         {% else %}
           <a href="{{ url_for('dashboard') }}" class="btn-link secondary">Carteira</a>
         {% endif %}
-        <a href="{{ url_for('agenda_atendimentos') }}" class="btn-link orange">Agenda</a>
         {% if user_photo_url %}
           <img src="{{ user_photo_url }}" alt="Foto do usuário" class="topbar-avatar">
         {% endif %}
@@ -1725,8 +1765,23 @@ def admin_dashboard():
         total_com_compra = max(total_carteira - total_sem_compra, 0)
         cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
 
-        agenda_data = load_agenda_data()
-        agenda_dashboard_html = render_agenda_compact_dashboard_html(agenda_data)
+        agenda_rep_code = header_rep_code
+        if not agenda_rep_code and len(rep_list) == 1:
+            agenda_rep_code = norm(rep_list[0])
+
+        agenda_rep_name = resolve_rep_name_from_code(
+            agenda_rep_code,
+            base_rows=base_rows,
+            rep_col=rep_col,
+            nome_rep_col=nome_rep_col
+        ) if agenda_rep_code else ""
+
+        agenda_data = get_agenda_for_rep(agenda_rep_code) if agenda_rep_code else {}
+        agenda_dashboard_html = render_agenda_compact_dashboard_html(
+            agenda_data,
+            rep_code=agenda_rep_code,
+            rep_name=agenda_rep_name
+        )
 
         def chip_class(status_cor):
             s = normalize_text_for_match(status_cor)
@@ -1877,12 +1932,8 @@ def admin_dashboard():
             cidade_muni_col = pick_col_flexible(headers_cidades, [
                 "cidade", "municipio", "município", "nome", "nome municipio", "nome município"
             ])
-            lat_col = pick_col_flexible(headers_cidades, [
-                "latitude", "lat"
-            ])
-            lon_col = pick_col_flexible(headers_cidades, [
-                "longitude", "long", "lon", "lng"
-            ])
+            lat_col = pick_col_flexible(headers_cidades, ["latitude", "lat"])
+            lon_col = pick_col_flexible(headers_cidades, ["longitude", "long", "lon", "lng"])
 
             map_debug["cidade_muni_col"] = cidade_muni_col or ""
             map_debug["lat_col"] = lat_col or ""
@@ -1985,6 +2036,11 @@ def admin_dashboard():
                 <div class="print-toolbar">
                   <button type="submit">Aplicar</button>
                   <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
+                  {
+                    f'<a href="{url_for("agenda_atendimentos", rep=agenda_rep_code)}" class="btn-link dark">Abrir agenda</a>'
+                    if agenda_rep_code else
+                    '<span class="small">Selecione um representante para editar a agenda</span>'
+                  }
                   <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
                 </div>
 
@@ -2097,7 +2153,7 @@ def admin_dashboard():
                     </div>
 
                     <div class="dash-panel">
-                      <div class="dash-panel-title">Agenda de Atendimentos</div>
+                      <div class="dash-panel-title">Agenda do Representante</div>
                       <div class="dash-panel-body">
                         {agenda_dashboard_html}
                       </div>
@@ -2132,6 +2188,7 @@ def admin_dashboard():
               <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
               <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
+              <div class="line"><b>AGENDA REP:</b> {h(agenda_rep_code)}</div>
             </div>
             """
 
@@ -2493,22 +2550,9 @@ def dashboard():
         </div>
         """
 
-    agenda_data = load_agenda_data()
-    agenda_dashboard_html = render_agenda_compact_dashboard_html(agenda_data)
-
     body = f"""
     {debug_html}
     {rep_card_html}
-
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
-        <div style="font-size:18px; font-weight:700;">Agenda de Atendimentos</div>
-        <div>
-          <a href="{url_for('agenda_atendimentos')}" class="btn-link orange">Abrir agenda completa</a>
-        </div>
-      </div>
-      {agenda_dashboard_html}
-    </div>
 
     <div class="card">
       <form method="get">
@@ -2573,12 +2617,42 @@ def agenda_atendimentos():
         flash("Faça login para continuar.", "err")
         return redirect(url_for("login"))
 
-    data = load_agenda_data()
-    agenda_html = render_agenda_table_html(data)
+    if not is_admin():
+        flash("A agenda está disponível somente no dashboard admin.", "err")
+        return redirect(url_for("dashboard"))
 
-    current_user_photo = ""
-    if session.get("user_type") == "rep":
-        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+    rep_code = norm(request.args.get("rep", ""))
+
+    if not rep_code:
+        flash("Selecione um representante no dashboard para abrir a agenda.", "err")
+        return redirect(url_for("admin_dashboard"))
+
+    try:
+        sh = connect_gs()
+        ws_base = sh.worksheet(WS_BASE)
+        headers, base_rows = get_base_structure(ws_base)
+
+        rep_col = pick_col_flexible(headers, [
+            "Codigo Representante", "Código Representante",
+            "CODIGO REPRESENTANTE", "COD_REP"
+        ])
+        nome_rep_col = pick_col_flexible(headers, [
+            "Representante", "Nome Representante", "REPRESENTANTE"
+        ])
+    except Exception:
+        base_rows = []
+        rep_col = None
+        nome_rep_col = None
+
+    rep_name = resolve_rep_name_from_code(
+        rep_code,
+        base_rows=base_rows,
+        rep_col=rep_col,
+        nome_rep_col=nome_rep_col
+    )
+
+    data = get_agenda_for_rep(rep_code)
+    agenda_html = render_agenda_table_html(data, rep_code=rep_code, rep_name=rep_name)
 
     return render_template_string(
         BASE_HTML,
@@ -2588,7 +2662,7 @@ def agenda_atendimentos():
         user_login=session.get("user_login"),
         user_name=session.get("rep_name", ""),
         user_type=session.get("user_type"),
-        user_photo_url=current_user_photo,
+        user_photo_url="",
         body=agenda_html
     )
 
@@ -2599,15 +2673,25 @@ def salvar_agenda_atendimentos():
         flash("Sessão expirada. Faça login novamente.", "err")
         return redirect(url_for("login"))
 
+    if not is_admin():
+        flash("Somente admin pode salvar a agenda.", "err")
+        return redirect(url_for("dashboard"))
+
+    rep_code = norm(request.form.get("rep_code", ""))
+
+    if not rep_code:
+        flash("Código do representante não informado para salvar a agenda.", "err")
+        return redirect(url_for("admin_dashboard"))
+
     try:
         data = build_agenda_from_form(request.form)
-        save_agenda_data(data)
-        flash(f"Agenda gravada com sucesso em {AGENDA_TXT_PATH}.", "ok")
+        save_agenda_for_rep(rep_code, data)
+        flash(f"Agenda do representante {rep_code} gravada com sucesso em {AGENDA_TXT_PATH}.", "ok")
     except Exception as e:
         app.logger.error("Erro ao salvar agenda:\n%s", traceback.format_exc())
         flash(f"Erro ao salvar agenda: {norm(str(e))}", "err")
 
-    return redirect(url_for("agenda_atendimentos"))
+    return redirect(url_for("agenda_atendimentos", rep=rep_code))
 
 
 @app.route("/salvar", methods=["POST"])
