@@ -1,1270 +1,3 @@
-import os
-import re
-import json
-import base64
-import traceback
-import html
-from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse, parse_qs
-
-from flask import Flask, request, redirect, url_for, session, render_template_string, flash
-
-import gspread
-from google.oauth2.service_account import Credentials
-from gspread.exceptions import WorksheetNotFound
-from gspread.utils import rowcol_to_a1
-
-
-# =========================
-# CONFIG ENV
-# =========================
-SHEET_ID = os.getenv("SHEET_ID", "").strip()
-
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-GOOGLE_SA_JSON_B64 = os.getenv("GOOGLE_SA_JSON_B64", "").strip()
-
-ADMIN_USER = os.getenv("ADMIN_USER", "admin").strip()
-ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123").strip()
-SECRET_KEY = os.getenv("SECRET_KEY", "troque-esta-chave").strip()
-
-WS_BASE = os.getenv("WS_BASE", "BASE").strip()
-WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
-WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
-
-MUNICIPIOS_SHEET_ID = os.getenv("MUNICIPIOS_SHEET_ID", "").strip()
-WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
-
-PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
-DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
-
-APP_TITLE = "Acompanhamento de clientes"
-LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
-
-
-# =========================
-# LISTAS FIXAS (fallback)
-# =========================
-DEFAULT_MESES = [
-    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
-]
-
-DEFAULT_SEMANAS = [
-    "Semana 01", "Semana 02", "Semana 03", "Semana 04", "sem Agenda"
-]
-
-DEFAULT_STATUS = [
-    "CLIENTE COM BAIXO GIRO",
-    "CLIENTE ESTOCADO KIDY",
-    "CLIENTE ESTOCADO OUTRAS MARCAS",
-    "CLIENTE JÁ COMPROU",
-    "CLIENTE NÃO ATENDEU",
-    "CLIENTE SEM VERBA",
-    "CLIENTE VAI MANDAR O PEDIDO",
-]
-
-
-# =========================
-# APP
-# =========================
-app = Flask(__name__, static_folder="static", static_url_path="/static")
-app.secret_key = SECRET_KEY
-app.permanent_session_lifetime = timedelta(days=7)
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-
-
-# =========================
-# HELPERS
-# =========================
-def norm(s):
-    if s is None:
-        return ""
-    s = str(s).strip()
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-
-def h(s):
-    return html.escape(norm(s), quote=True)
-
-
-def unique_list(values):
-    out, seen = [], set()
-    for v in values:
-        v = norm(v)
-        if not v:
-            continue
-        if v not in seen:
-            seen.add(v)
-            out.append(v)
-    return out
-
-
-def is_admin():
-    return session.get("user_type") == "admin"
-
-
-def require_login():
-    return "user_type" in session and "user_login" in session
-
-
-def normalize_header(s):
-    s = norm(s).lower()
-    s = (
-        s.replace("á", "a")
-         .replace("à", "a")
-         .replace("ã", "a")
-         .replace("â", "a")
-         .replace("é", "e")
-         .replace("ê", "e")
-         .replace("í", "i")
-         .replace("ó", "o")
-         .replace("ô", "o")
-         .replace("õ", "o")
-         .replace("ú", "u")
-         .replace("ç", "c")
-    )
-    return s
-
-
-def normalize_text_for_match(v):
-    s = norm(v).upper()
-    s = (
-        s.replace("Á", "A")
-         .replace("À", "A")
-         .replace("Ã", "A")
-         .replace("Â", "A")
-         .replace("É", "E")
-         .replace("Ê", "E")
-         .replace("Í", "I")
-         .replace("Ó", "O")
-         .replace("Ô", "O")
-         .replace("Õ", "O")
-         .replace("Ú", "U")
-         .replace("Ç", "C")
-    )
-    return s
-
-
-def normalize_city_key(v):
-    s = normalize_text_for_match(v)
-    s = re.sub(r"[^A-Z0-9 ]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def pick_col_exact(headers, candidates):
-    hmap = {normalize_header(x): x for x in headers}
-    for cand in candidates:
-        key = normalize_header(cand)
-        if key in hmap:
-            return hmap[key]
-    return None
-
-
-def pick_col_flexible(headers, candidates):
-    hmap = {normalize_header(x): x for x in headers}
-
-    for cand in candidates:
-        key = normalize_header(cand)
-        if key in hmap:
-            return hmap[key]
-
-    for header in headers:
-        header_norm = normalize_header(header)
-        for cand in candidates:
-            if normalize_header(cand) in header_norm:
-                return header
-
-    return None
-
-
-def clean_color_text(v):
-    return norm(v)
-
-
-def is_truthy_novo(v):
-    s = normalize_text_for_match(v)
-    return s in {"SIM", "S", "YES", "Y", "1", "TRUE", "VERDADEIRO", "NOVO", "CLIENTE NOVO"}
-
-
-def get_row_class_from_color_text(status_cor_raw):
-    s = normalize_text_for_match(status_cor_raw)
-
-    if "VERMELH" in s:
-        return "row-red", 1
-    if "LARANJ" in s:
-        return "row-orange", 2
-    if "AMAREL" in s:
-        return "row-yellow", 3
-    if "VERDE" in s:
-        return "row-green", 4
-    if "AZUL" in s:
-        return "row-blue", 5
-    if "NOVO" in s or "NOVA" in s:
-        return "row-blue", 5
-
-    return "", 99
-
-
-def resolve_status_cor_from_base(row, status_cor_col=None, cliente_novo_col=None):
-    status_cor_raw = clean_color_text(row.get(status_cor_col, "")) if status_cor_col else ""
-
-    if status_cor_raw:
-        row_class, priority = get_row_class_from_color_text(status_cor_raw)
-        return status_cor_raw, row_class, priority
-
-    if cliente_novo_col:
-        novo_val = row.get(cliente_novo_col, "")
-        if is_truthy_novo(novo_val):
-            return "AZUL", "row-blue", 5
-
-    return "", "", 99
-
-
-def get_rep_photo_src(codigo_rep):
-    codigo = norm(codigo_rep)
-    if not codigo:
-        return ""
-
-    exts = ["png", "jpg", "jpeg", "webp"]
-    base_static_dir = os.path.join(app.root_path, "static", "representantes")
-
-    for ext in exts:
-        abs_path = os.path.join(base_static_dir, f"{codigo}.{ext}")
-        if os.path.exists(abs_path):
-            return f"/static/representantes/{codigo}.{ext}"
-
-    return ""
-
-
-def fmt_money(v):
-    return norm(v)
-
-
-def to_input_date(v):
-    v = norm(v)
-    if not v:
-        return ""
-
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
-        return v
-
-    m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", v)
-    if m:
-        dd, mm, yyyy = m.groups()
-        return f"{yyyy}-{mm}-{dd}"
-
-    return ""
-
-
-def from_input_date(v):
-    v = norm(v)
-    if not v:
-        return ""
-
-    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v)
-    if m:
-        yyyy, mm, dd = m.groups()
-        return f"{dd}/{mm}/{yyyy}"
-
-    return v
-
-
-def safe_cell(vals, idx_1_based):
-    pos = idx_1_based - 1
-    return norm(vals[pos]) if pos < len(vals) else ""
-
-
-def set_last_save_debug(payload):
-    session["last_save_debug"] = payload
-
-
-def get_last_save_debug():
-    return session.get("last_save_debug", {})
-
-
-def parse_number_br(value):
-    s = norm(value)
-    if not s:
-        return 0.0
-
-    s = s.replace("R$", "").replace(" ", "")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        s = s.replace(",", ".")
-
-    try:
-        return float(s)
-    except Exception:
-        return 0.0
-
-
-def parse_float_any(value):
-    s = norm(value)
-    if not s:
-        return None
-
-    s = s.replace(" ", "")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        s = s.replace(",", ".")
-
-    try:
-        return float(s)
-    except Exception:
-        return None
-
-
-def format_number_br(value):
-    try:
-        n = float(value)
-    except Exception:
-        n = 0.0
-    txt = f"{n:,.2f}"
-    txt = txt.replace(",", "X").replace(".", ",").replace("X", ".")
-    return txt
-
-
-def format_money_br(value):
-    return f"R$ {format_number_br(value)}"
-
-
-def render_status_badge_text(status_cor):
-    s = normalize_text_for_match(status_cor)
-    if "VERMELH" in s:
-        return "Vermelho"
-    if "LARANJ" in s:
-        return "Laranja"
-    if "AMAREL" in s:
-        return "Amarelo"
-    if "VERDE" in s:
-        return "Verde"
-    if "AZUL" in s or "NOVO" in s:
-        return "Azul"
-    return norm(status_cor)
-
-
-def extract_google_sheet_id(raw_value):
-    raw = norm(raw_value)
-    if not raw:
-        return ""
-
-    if "/spreadsheets/d/" in raw:
-        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw)
-        if m:
-            return m.group(1)
-
-    if raw.startswith("http://") or raw.startswith("https://"):
-        try:
-            parsed = urlparse(raw)
-            qs = parse_qs(parsed.query)
-            if "id" in qs and qs["id"]:
-                return qs["id"][0]
-        except Exception:
-            pass
-
-    return raw
-
-
-def build_city_map_svg(city_points, width=650, height=360):
-    if not city_points:
-        return """
-        <div class="dash-map-placeholder">
-          Não foi possível montar o mapa.<br><br>
-          Verifique a planilha de municípios, a aba <b>cidades</b> e as colunas de cidade, latitude e longitude.
-        </div>
-        """
-
-    valid_points = [
-        p for p in city_points
-        if p.get("lat") is not None and p.get("lon") is not None
-    ]
-
-    if not valid_points:
-        return """
-        <div class="dash-map-placeholder">
-          Nenhuma coordenada válida encontrada na aba <b>cidades</b>.
-        </div>
-        """
-
-    min_lon = min(p["lon"] for p in valid_points)
-    max_lon = max(p["lon"] for p in valid_points)
-    min_lat = min(p["lat"] for p in valid_points)
-    max_lat = max(p["lat"] for p in valid_points)
-
-    if min_lon == max_lon:
-        max_lon += 0.01
-    if min_lat == max_lat:
-        max_lat += 0.01
-
-    pad = 18
-
-    def project(lon, lat):
-        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
-        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
-        return x, y
-
-    circles = []
-    for p in valid_points:
-        x, y = project(p["lon"], p["lat"])
-        fill = p["fill"]
-        title = h(f"{p['cidade']} | {p['status_txt']} | Total 2026: {format_number_br(p['total_2026'])}")
-        circles.append(
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="4.8" fill="{fill}" stroke="#ffffff" stroke-width="1.2">'
-            f'<title>{title}</title></circle>'
-        )
-
-    svg = f"""
-    <div style="width:100%; height:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
-      <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
-        <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
-        <rect x="10" y="10" width="{width-20}" height="{height-20}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
-        {''.join(circles)}
-      </svg>
-
-      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
-          Com vendas
-        </span>
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
-          Sem vendas
-        </span>
-      </div>
-    </div>
-    """
-    return svg
-
-
-# =========================
-# GOOGLE SHEETS
-# =========================
-def _load_service_account_info():
-    if GOOGLE_SERVICE_ACCOUNT_JSON:
-        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-    elif GOOGLE_SA_JSON_B64:
-        b64 = GOOGLE_SA_JSON_B64.strip()
-        b64 += "=" * (-len(b64) % 4)
-        info = json.loads(base64.b64decode(b64).decode("utf-8"))
-    else:
-        raise RuntimeError("Faltou GOOGLE_SERVICE_ACCOUNT_JSON (ou GOOGLE_SA_JSON_B64) nas variáveis de ambiente.")
-
-    if "private_key" in info and isinstance(info["private_key"], str):
-        info["private_key"] = info["private_key"].replace("\\n", "\n")
-
-    return info
-
-
-def connect_gs_by_key(sheet_key_or_url):
-    resolved_key = extract_google_sheet_id(sheet_key_or_url)
-    if not resolved_key:
-        raise RuntimeError("Sheet ID não informado.")
-
-    info = _load_service_account_info()
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    gc = gspread.authorize(creds)
-    return gc.open_by_key(resolved_key)
-
-
-def connect_gs():
-    if not SHEET_ID:
-        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
-    return connect_gs_by_key(SHEET_ID)
-
-
-def connect_municipios_gs():
-    target_id = MUNICIPIOS_SHEET_ID or SHEET_ID
-    return connect_gs_by_key(target_id)
-
-
-def safe_get_all_records(ws):
-    try:
-        return ws.get_all_records()
-    except Exception:
-        return []
-
-
-def safe_get_raw_rows(ws):
-    try:
-        values = ws.get_all_values()
-    except Exception:
-        return [], []
-
-    if not values:
-        return [], []
-
-    headers = [norm(x) for x in values[0]]
-    rows = []
-
-    for raw in values[1:]:
-        if len(raw) < len(headers):
-            raw = raw + [""] * (len(headers) - len(raw))
-        elif len(raw) > len(headers):
-            raw = raw[:len(headers)]
-
-        row = {headers[i]: raw[i] for i in range(len(headers))}
-        rows.append(row)
-
-    return headers, rows
-
-
-def ensure_headers(ws, headers):
-    current = [norm(x) for x in ws.row_values(1)]
-    if not current:
-        ws.append_row(headers, value_input_option="USER_ENTERED")
-    elif current != headers:
-        ws.update("A1", [headers], value_input_option="USER_ENTERED")
-
-
-def ensure_edicoes_worksheet(sh):
-    headers = [
-        "timestamp",
-        "user_type",
-        "user_login",
-        "rep_code",
-        "client_key",
-        "Data Agenda Visita",
-        "Mês",
-        "Semana Atendimento",
-        "Status Cliente",
-        "Observações"
-    ]
-
-    try:
-        ws = sh.worksheet(WS_EDICOES)
-    except WorksheetNotFound:
-        try:
-            ws = sh.add_worksheet(title=WS_EDICOES, rows="5000", cols="30")
-        except Exception as e:
-            raise RuntimeError(
-                f"Não foi possível acessar/criar a aba '{WS_EDICOES}'. "
-                f"Crie essa aba manualmente na planilha ou conceda permissão de Editor à service account. "
-                f"Detalhe: {str(e)}"
-            )
-
-    ensure_headers(ws, headers)
-    return ws
-
-
-def ensure_base_tracking_columns(ws_base):
-    headers = [norm(x) for x in ws_base.row_values(1)]
-    if not headers:
-        raise RuntimeError("A aba BASE está sem cabeçalho na linha 1.")
-
-    required = [
-        "Data Agenda Visita",
-        "Mês",
-        "Semana Atendimento",
-        "Status Cliente",
-        "Observações"
-    ]
-
-    changed = False
-    for col in required:
-        if col not in headers:
-            headers.append(col)
-            changed = True
-
-    if changed:
-        ws_base.update("A1", [headers], value_input_option="USER_ENTERED")
-        headers = [norm(x) for x in ws_base.row_values(1)]
-
-    return headers
-
-
-def get_base_structure(ws_base):
-    headers = ensure_base_tracking_columns(ws_base)
-    rows = ws_base.get_all_values()
-
-    if not rows:
-        return headers, []
-
-    final_headers = [norm(x) for x in rows[0]]
-    data_rows = []
-
-    for raw in rows[1:]:
-        if len(raw) < len(final_headers):
-            raw = raw + [""] * (len(final_headers) - len(raw))
-        elif len(raw) > len(final_headers):
-            raw = raw[:len(final_headers)]
-
-        data_rows.append({final_headers[i]: raw[i] for i in range(len(final_headers))})
-
-    return final_headers, data_rows
-
-
-def try_get_rep_name(rep_code):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        return ""
-
-    try:
-        sh = connect_gs()
-        ws_base = sh.worksheet(WS_BASE)
-        headers, base_rows = safe_get_raw_rows(ws_base)
-
-        rep_col = pick_col_flexible(headers, [
-            "Codigo Representante", "Código Representante",
-            "CODIGO REPRESENTANTE", "COD_REP"
-        ])
-        nome_rep_col = pick_col_flexible(headers, [
-            "Representante", "Nome Representante", "REPRESENTANTE"
-        ])
-
-        if not rep_col or not nome_rep_col:
-            return ""
-
-        for row in base_rows:
-            if norm(row.get(rep_col, "")) == rep_code:
-                return norm(row.get(nome_rep_col, ""))
-
-        return ""
-    except Exception:
-        return ""
-
-
-def build_debug_sheet_info(sh=None):
-    try:
-        if sh is None:
-            sh = connect_gs()
-
-        abas = [ws.title for ws in sh.worksheets()]
-        return {
-            "sheet_id": extract_google_sheet_id(SHEET_ID),
-            "spreadsheet_title": norm(getattr(sh, "title", "")),
-            "worksheets": abas,
-            "ok": True,
-        }
-    except Exception as e:
-        return {
-            "sheet_id": extract_google_sheet_id(SHEET_ID),
-            "spreadsheet_title": "",
-            "worksheets": [],
-            "ok": False,
-            "error": str(e),
-        }
-
-
-# =========================
-# ERROR HANDLER
-# =========================
-@app.errorhandler(Exception)
-def handle_any_exception(e):
-    app.logger.error("ERRO NÃO TRATADO:\n%s", traceback.format_exc())
-    msg = traceback.format_exc()
-
-    body = f"""
-    <div class='card'>
-      <b>Erro:</b><br>
-      <pre style='white-space:pre-wrap'>{h(msg)}</pre>
-    </div>
-    """
-
-    current_user_photo = ""
-    if session.get("user_type") == "rep":
-        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
-
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle="Falha no servidor",
-        logged=require_login(),
-        user_login=session.get("user_login", ""),
-        user_name=session.get("rep_name", ""),
-        user_type=session.get("user_type", ""),
-        user_photo_url=current_user_photo,
-        body=body
-    ), 500
-
-
-# =========================
-# TEMPLATES
-# =========================
-BASE_HTML = """
-<!doctype html>
-<html lang="pt-br">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title }}</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 0; background: #f5f6f8; color: #111827; }
-    .topbar { background: #ffffff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d1d5db; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-    .topbar-right { display: flex; align-items: center; gap: 10px; }
-    .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
-
-    .container { padding: 12px; }
-    .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-
-    .rep-card { display: flex; align-items: center; gap: 16px; }
-    .rep-photo { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 2px solid #d1d5db; background: #f8fafc; flex-shrink: 0; }
-    .rep-photo-placeholder { width: 88px; height: 88px; border-radius: 50%; border: 2px solid #d1d5db; background: #f8fafc; display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 12px; text-align: center; flex-shrink: 0; padding: 6px; box-sizing: border-box; }
-
-    label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
-    input, select {
-      width: 100%;
-      padding: 9px;
-      border-radius: 10px;
-      border: 1px solid #cbd5e1;
-      background: #ffffff;
-      color: #111827;
-      box-sizing: border-box;
-      font-family: Arial, sans-serif;
-    }
-
-    input:focus, select:focus {
-      outline: none;
-      border-color: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
-    }
-
-    button, .btn-link {
-      padding: 9px 13px;
-      border-radius: 10px;
-      border: 0;
-      background: #2563eb;
-      color: #fff;
-      cursor: pointer;
-      font-weight: 600;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-
-    button.secondary, .btn-link.secondary { background: #6b7280; }
-    button.danger, .btn-link.danger { background: #dc2626; }
-    .btn-link.dark { background: #111827; }
-    .btn-link.orange { background: #f97316; }
-
-    table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
-    th, td { border-bottom: 1px solid #e5e7eb; padding: 8px; vertical-align: top; }
-    th { position: sticky; top: 0; background: #f8fafc; color: #374151; text-align: left; z-index: 2; }
-
-    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-
-    .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
-    .ok { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
-    .err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
-
-    .pill { padding: 3px 8px; border-radius: 999px; font-size: 12px; background: #f3f4f6; border: 1px solid #d1d5db; display: inline-block; color: #111827; }
-    .small { color: #6b7280; font-size: 12px; }
-    .nowrap { white-space: nowrap; }
-    .money { font-variant-numeric: tabular-nums; }
-
-    .login-wrap { min-height: calc(100vh - 90px); display: flex; align-items: center; justify-content: center; padding: 24px; }
-    .login-card { width: 100%; max-width: 520px; text-align: center; }
-    .login-logo { max-width: 220px; width: 100%; height: auto; margin: 0 auto 18px auto; display: block; }
-    .login-title { margin-top: 0; margin-bottom: 6px; color: #111827; }
-    .login-subtitle { margin-top: 0; margin-bottom: 20px; color: #6b7280; font-size: 14px; }
-
-    .row-red { background: rgba(220,38,38,0.16); }
-    .row-orange { background: rgba(249,115,22,0.16); }
-    .row-yellow { background: rgba(234,179,8,0.18); }
-    .row-green { background: rgba(34,197,94,0.16); }
-    .row-blue { background: rgba(56,189,248,0.14); }
-
-    .debug-card {
-      background: #0f172a;
-      color: #e2e8f0;
-      border: 1px solid #1e293b;
-    }
-    .debug-card .line {
-      margin-bottom: 6px;
-      word-break: break-word;
-    }
-    .debug-card .title {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 12px;
-    }
-
-    .dash-page {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      align-items: center;
-    }
-
-    .a3-page {
-      width: min(100%, 1560px);
-      background: #ffffff;
-    }
-
-    .dash-shell {
-      background: #ffffff;
-      border: 1px solid #cfd4dc;
-      border-top: 3px solid #f97316;
-      border-bottom: 3px solid #f97316;
-      padding: 10px;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-      width: 100%;
-      box-sizing: border-box;
-      overflow: hidden;
-    }
-
-    .dash-header {
-      display: grid;
-      grid-template-columns: 74px 1.35fr 1fr 64px;
-      gap: 8px;
-      align-items: center;
-      border-bottom: 2px solid #f97316;
-      padding-bottom: 6px;
-      margin-bottom: 8px;
-    }
-
-    .dash-avatar {
-      width: 62px;
-      height: 62px;
-      border-radius: 8px;
-      object-fit: cover;
-      border: 1px solid #d1d5db;
-      background: #f8fafc;
-    }
-
-    .dash-avatar-placeholder {
-      width: 62px;
-      height: 62px;
-      border-radius: 8px;
-      border: 1px solid #d1d5db;
-      background: #f8fafc;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #6b7280;
-      font-size: 10px;
-      text-align: center;
-      padding: 6px;
-      box-sizing: border-box;
-    }
-
-    .dash-title-wrap { min-width: 0; }
-    .dash-main-title {
-      font-size: 17px;
-      font-weight: 800;
-      text-transform: uppercase;
-      text-align: center;
-      margin-bottom: 3px;
-    }
-
-    .dash-subline {
-      font-size: 10px;
-      color: #374151;
-      line-height: 1.35;
-    }
-
-    .dash-meta-box {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 6px;
-    }
-
-    .dash-metric {
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
-      padding: 5px;
-      background: #fafafa;
-    }
-
-    .dash-metric-label {
-      font-size: 9px;
-      color: #6b7280;
-      font-weight: 700;
-      text-transform: uppercase;
-      margin-bottom: 2px;
-    }
-
-    .dash-metric-value {
-      font-size: 15px;
-      font-weight: 800;
-      color: #111827;
-    }
-
-    .dash-kidy-logo {
-      max-width: 54px;
-      width: 100%;
-      height: auto;
-      justify-self: end;
-    }
-
-    .dash-row-top {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1.08fr;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-
-    .dash-row-bottom {
-      display: grid;
-      grid-template-columns: 1.22fr 0.92fr;
-      gap: 8px;
-      align-items: start;
-    }
-
-    .dash-right-stack {
-      display: grid;
-      grid-template-rows: auto auto auto;
-      gap: 8px;
-    }
-
-    .dash-panel {
-      border: 1px solid #9ca3af;
-      background: #ffffff;
-      overflow: hidden;
-    }
-
-    .dash-panel-title {
-      font-size: 11px;
-      font-weight: 800;
-      text-transform: uppercase;
-      color: #111827;
-      background: #f3f4f6;
-      border-bottom: 1px solid #d1d5db;
-      padding: 5px 8px;
-      text-align: center;
-    }
-
-    .dash-panel-body {
-      padding: 6px;
-      box-sizing: border-box;
-    }
-
-    .dash-table-mini {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 9px;
-    }
-
-    .dash-table-mini th,
-    .dash-table-mini td {
-      border: 1px solid #d1d5db;
-      padding: 2px 4px;
-      line-height: 1.15;
-    }
-
-    .dash-table-mini th {
-      background: #e5e7eb;
-      font-weight: 700;
-      text-transform: uppercase;
-      font-size: 8px;
-      position: static;
-    }
-
-    .dash-table-big {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 9px;
-    }
-
-    .dash-table-big th,
-    .dash-table-big td {
-      border: 1px solid #d1d5db;
-      padding: 3px 4px;
-      line-height: 1.12;
-      vertical-align: middle;
-    }
-
-    .dash-table-big th {
-      background: #e5e7eb;
-      font-weight: 700;
-      text-transform: uppercase;
-      font-size: 8px;
-      position: static;
-    }
-
-    .dash-map-placeholder {
-      min-height: 285px;
-      background: #ecfeff;
-      border: 2px dashed #06b6d4;
-      color: #155e75;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 12px;
-      border-radius: 6px;
-      padding: 10px;
-      box-sizing: border-box;
-    }
-
-    .dash-gold-box {
-      min-height: 58px;
-      background: #fef3c7;
-      border: 2px dashed #f59e0b;
-      color: #92400e;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 11px;
-      border-radius: 6px;
-      padding: 8px;
-      box-sizing: border-box;
-    }
-
-    .dash-coverage-box {
-      min-height: 82px;
-      background: #f8fafc;
-      border: 2px dashed #94a3b8;
-      color: #334155;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 11px;
-      border-radius: 6px;
-      padding: 8px;
-      box-sizing: border-box;
-    }
-
-    .dash-summary-box {
-      min-height: 130px;
-      background: #f8fafc;
-      border: 2px dashed #94a3b8;
-      color: #334155;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 11px;
-      border-radius: 6px;
-      padding: 8px;
-      box-sizing: border-box;
-    }
-
-    .print-toolbar {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .print-note {
-      font-size: 11px;
-      color: #6b7280;
-    }
-
-    .status-chip {
-      display: inline-block;
-      min-width: 64px;
-      padding: 2px 5px;
-      border-radius: 999px;
-      text-align: center;
-      font-size: 8px;
-      font-weight: 700;
-      border: 1px solid rgba(0,0,0,0.08);
-    }
-
-    .chip-red { background: rgba(220,38,38,0.18); color: #991b1b; }
-    .chip-orange { background: rgba(249,115,22,0.18); color: #9a3412; }
-    .chip-yellow { background: rgba(234,179,8,0.22); color: #854d0e; }
-    .chip-green { background: rgba(34,197,94,0.18); color: #166534; }
-    .chip-blue { background: rgba(56,189,248,0.18); color: #0c4a6e; }
-    .chip-gray { background: #e5e7eb; color: #374151; }
-
-    .no-break { page-break-inside: avoid; break-inside: avoid; }
-
-    @page {
-      size: A3 landscape;
-      margin: 4mm;
-    }
-
-    @media print {
-      html, body {
-        width: 420mm;
-        height: 297mm;
-        background: #ffffff !important;
-      }
-
-      .topbar,
-      .no-print,
-      .msg {
-        display: none !important;
-      }
-
-      .container {
-        padding: 0 !important;
-        margin: 0 !important;
-        width: 100%;
-      }
-
-      .dash-page {
-        gap: 0 !important;
-        width: 100%;
-      }
-
-      .a3-page {
-        width: 412mm !important;
-        height: 288mm !important;
-        margin: 0 auto !important;
-        overflow: hidden !important;
-      }
-
-      .dash-shell {
-        width: 100% !important;
-        height: 100% !important;
-        padding: 6mm !important;
-        border-radius: 0 !important;
-        box-shadow: none !important;
-        overflow: hidden !important;
-      }
-
-      .dash-header,
-      .dash-row-top,
-      .dash-row-bottom,
-      .dash-right-stack,
-      .dash-panel,
-      .dash-panel-body {
-        break-inside: avoid !important;
-        page-break-inside: avoid !important;
-      }
-
-      .dash-table-mini,
-      .dash-table-big {
-        font-size: 8px !important;
-      }
-
-      .dash-table-mini th, .dash-table-mini td,
-      .dash-table-big th, .dash-table-big td {
-        padding: 2px 3px !important;
-      }
-    }
-
-    @media (max-width: 1200px) {
-      .dash-header { grid-template-columns: 74px 1fr; }
-      .dash-meta-box { grid-column: 1 / -1; }
-      .dash-kidy-logo { justify-self: start; }
-      .dash-row-top { grid-template-columns: 1fr; }
-      .dash-row-bottom { grid-template-columns: 1fr; }
-    }
-  </style>
-</head>
-<body>
-  <div class="topbar">
-    <div><b>Acompanhamento de clientes</b> <span class="small">| {{ subtitle }}</span></div>
-    <div class="topbar-right">
-      {% if logged %}
-        {% if user_type == 'admin' %}
-          <a href="{{ url_for('admin_dashboard') }}" class="btn-link dark">Dashboard</a>
-          <a href="{{ url_for('dashboard') }}" class="btn-link secondary">Carteira</a>
-        {% endif %}
-        {% if user_photo_url %}
-          <img src="{{ user_photo_url }}" alt="Foto do usuário" class="topbar-avatar">
-        {% endif %}
-        <span class="pill">{{ user_name if user_name else user_login }} ({{ user_type }})</span>
-        <a href="{{ url_for('logout') }}"><button class="danger">Sair</button></a>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="container">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for cat, msg in messages %}
-        <div class="msg {{ 'ok' if cat == 'ok' else 'err' }}">{{ msg }}</div>
-      {% endfor %}
-    {% endwith %}
-    {{ body|safe }}
-  </div>
-</body>
-</html>
-"""
-
-LOGIN_BODY = """
-<div class="login-wrap">
-  <div class="card login-card">
-    <img src="{{ logo_url }}" alt="Logo Kidy" class="login-logo">
-    <h2 class="login-title">Acompanhamento de clientes</h2>
-    <p class="login-subtitle">Faça login para acessar a carteira comercial</p>
-
-    <form method="post">
-      <div class="grid-2">
-        <div>
-          <label>Usuário</label>
-          <input name="user" placeholder="admin ou código do representante" required>
-        </div>
-        <div>
-          <label>Senha</label>
-          <input name="pass" type="password" placeholder="admin123 ou o mesmo código" required>
-        </div>
-      </div>
-      <div style="margin-top:12px;">
-        <button type="submit">Entrar</button>
-      </div>
-    </form>
-  </div>
-</div>
-"""
-
-
-# =========================
-# ROTAS
-# =========================
-@app.route("/", methods=["GET", "POST"])
-def login():
-    if require_login():
-        return redirect(url_for("dashboard"))
-
-    if request.method == "POST":
-        u = norm(request.form.get("user"))
-        p = norm(request.form.get("pass"))
-
-        if not u or not p:
-            flash("Informe usuário e senha.", "err")
-        elif u == ADMIN_USER and p == ADMIN_PASS:
-            session.clear()
-            session.permanent = True
-            session["user_type"] = "admin"
-            session["user_login"] = u
-            session["rep_name"] = ""
-            session["rep_code"] = ""
-            flash("Logado como ADMIN.", "ok")
-            return redirect(url_for("dashboard"))
-        elif u.isdigit() and p.isdigit() and u == p:
-            rep_nome = try_get_rep_name(u)
-            session.clear()
-            session.permanent = True
-            session["user_type"] = "rep"
-            session["user_login"] = u
-            session["rep_code"] = u
-            session["rep_name"] = rep_nome or f"Representante {u}"
-            flash(f"Logado como {session['rep_name']}.", "ok")
-            return redirect(url_for("dashboard"))
-        else:
-            flash("Login inválido.", "err")
-
-    body = render_template_string(LOGIN_BODY, logo_url=LOGO_URL)
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle="Acesso",
-        logged=False,
-        user_login="",
-        user_name="",
-        user_type="",
-        user_photo_url="",
-        body=body
-    )
-
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    flash("Sessão encerrada.", "ok")
-    return redirect(url_for("login"))
-
-
 @app.route("/admin-dashboard", methods=["GET"])
 def admin_dashboard():
     if not require_login():
@@ -1318,6 +51,20 @@ def admin_dashboard():
         status_cliente_col = pick_col_exact(headers, ["Status Cliente"])
         observacoes_col = pick_col_exact(headers, ["Observações", "Observacao", "Observacoes"])
 
+        # listas da aba de validação
+        meses = DEFAULT_MESES[:]
+        semanas = DEFAULT_SEMANAS[:]
+        status_list = DEFAULT_STATUS[:]
+
+        try:
+            ws_listas = sh.worksheet(WS_LISTAS)
+            lista_rows = safe_get_all_records(ws_listas)
+            meses = unique_list([r.get("Mês", "") for r in lista_rows]) or DEFAULT_MESES
+            semanas = unique_list([r.get("Semana Atendimento", "") for r in lista_rows]) or DEFAULT_SEMANAS
+            status_list = unique_list([r.get("Status Cliente", "") for r in lista_rows]) or DEFAULT_STATUS
+        except Exception:
+            pass
+
         sup_sel = norm(request.args.get("sup", ""))
         rep_sel = norm(request.args.get("rep", ""))
 
@@ -1325,12 +72,24 @@ def admin_dashboard():
         rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if rep_col else []
 
         filtered_rows = []
-        for r in base_rows:
+        for idx_base, r in enumerate(base_rows, start=2):
             if sup_sel and sup_col and norm(r.get(sup_col, "")) != sup_sel:
                 continue
             if rep_sel and rep_col and norm(r.get(rep_col, "")) != rep_sel:
                 continue
-            filtered_rows.append(r)
+
+            row_copy = dict(r)
+            row_copy["_base_row_number"] = idx_base
+
+            status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                row_copy,
+                status_cor_col=status_cor_col,
+                cliente_novo_col=cliente_novo_col
+            )
+            row_copy["_status_cor"] = status_cor_final
+            row_copy["_row_class"] = row_class
+
+            filtered_rows.append(row_copy)
 
         header_rep_code = rep_sel
         header_rep_name = ""
@@ -1353,50 +112,50 @@ def admin_dashboard():
 
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
 
+        # =========================
+        # TOP 10 2026
+        # =========================
         ranking_2026 = []
         if grupo_col and t2026_col:
             for r in filtered_rows:
                 nome = norm(r.get(grupo_col, ""))
                 valor = parse_number_br(r.get(t2026_col, ""))
                 if nome and valor > 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
                     ranking_2026.append({
                         "grupo": nome,
                         "valor": valor,
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
+                        "status_cor": r.get("_status_cor", ""),
+                        "row_class": r.get("_row_class", "")
                     })
             ranking_2026.sort(key=lambda x: x["valor"], reverse=True)
             ranking_2026 = ranking_2026[:10]
 
+        # =========================
+        # TOP 10 2025
+        # =========================
         ranking_2025 = []
         if grupo_col and t2025_col:
             for r in filtered_rows:
                 nome = norm(r.get(grupo_col, ""))
                 valor = parse_number_br(r.get(t2025_col, ""))
                 if nome and valor > 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
                     ranking_2025.append({
                         "grupo": nome,
                         "valor": valor,
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
+                        "status_cor": r.get("_status_cor", ""),
+                        "row_class": r.get("_row_class", "")
                     })
             ranking_2025.sort(key=lambda x: x["valor"], reverse=True)
             ranking_2025 = ranking_2025[:10]
 
+        # =========================
+        # CLIENTES SEM COMPRA
+        # =========================
         clientes_sem_compra = []
         if key_col and grupo_col and t2026_col:
             for r in filtered_rows:
                 v2026 = parse_number_br(r.get(t2026_col, ""))
                 if v2026 == 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
                     clientes_sem_compra.append({
                         "codigo": norm(r.get(key_col, "")),
                         "grupo": norm(r.get(grupo_col, "")),
@@ -1407,8 +166,7 @@ def admin_dashboard():
                         "mes": norm(r.get(mes_col, "")) if mes_col else "",
                         "semana": norm(r.get(semana_col, "")) if semana_col else "",
                         "status": norm(r.get(status_cliente_col, "")) if status_cliente_col else "",
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
+                        "row_class": r.get("_row_class", "")
                     })
 
             clientes_sem_compra.sort(
@@ -1417,41 +175,24 @@ def admin_dashboard():
             )
 
         # =========================
-        # AGENDA DO DASHBOARD ADMIN
+        # AGENDA EDITÁVEL
         # =========================
         agenda_rows = []
-
-        if key_col and grupo_col:
-            for r in filtered_rows:
-                data_ag = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
-                mes_ag = norm(r.get(mes_col, "")) if mes_col else ""
-                semana_ag = norm(r.get(semana_col, "")) if semana_col else ""
-                status_ag = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
-                obs_ag = norm(r.get(observacoes_col, "")) if observacoes_col else ""
-
-                tem_agenda = any([data_ag, mes_ag, semana_ag, status_ag, obs_ag])
-                if not tem_agenda:
-                    continue
-
-                status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                    r,
-                    status_cor_col=status_cor_col,
-                    cliente_novo_col=cliente_novo_col
-                )
-
-                agenda_rows.append({
-                    "codigo": norm(r.get(key_col, "")),
-                    "grupo": norm(r.get(grupo_col, "")),
-                    "cidade": norm(r.get(cidade_col, "")) if cidade_col else "",
-                    "representante": norm(r.get(nome_rep_col, "")) if nome_rep_col else "",
-                    "data": data_ag,
-                    "mes": mes_ag,
-                    "semana": semana_ag,
-                    "status": status_ag,
-                    "obs": obs_ag,
-                    "status_cor": status_cor_final,
-                    "row_class": row_class
-                })
+        for r in filtered_rows:
+            agenda_rows.append({
+                "codigo": norm(r.get(key_col, "")) if key_col else "",
+                "grupo": norm(r.get(grupo_col, "")) if grupo_col else "",
+                "cidade": norm(r.get(cidade_col, "")) if cidade_col else "",
+                "representante": norm(r.get(nome_rep_col, "")) if nome_rep_col else "",
+                "data": norm(r.get(data_agenda_col, "")) if data_agenda_col else "",
+                "mes": norm(r.get(mes_col, "")) if mes_col else "",
+                "semana": norm(r.get(semana_col, "")) if semana_col else "",
+                "status": norm(r.get(status_cliente_col, "")) if status_cliente_col else "",
+                "obs": norm(r.get(observacoes_col, "")) if observacoes_col else "",
+                "rep_code": norm(r.get(rep_col, "")) if rep_col else "",
+                "base_row_number": r.get("_base_row_number", ""),
+                "row_class": r.get("_row_class", "")
+            })
 
         def agenda_sort_key(x):
             data_txt = x.get("data", "")
@@ -1469,46 +210,6 @@ def admin_dashboard():
             )
 
         agenda_rows.sort(key=agenda_sort_key)
-
-        agenda_html = ""
-        if agenda_rows:
-            rows = []
-            for item in agenda_rows[:18]:
-                rows.append(f"""
-                <tr class="{h(item['row_class'])}">
-                  <td>{h(item['data'])}</td>
-                  <td>{h(item['mes'])}</td>
-                  <td>{h(item['semana'])}</td>
-                  <td>{h(item['codigo'])}</td>
-                  <td>{h(item['grupo'])}</td>
-                  <td>{h(item['cidade'])}</td>
-                  <td>{h(item['status'])}</td>
-                </tr>
-                """)
-            agenda_html = f"""
-            <table class="dash-table-big">
-              <thead>
-                <tr>
-                  <th>Data</th>
-                  <th>Mês</th>
-                  <th>Semana</th>
-                  <th>Código</th>
-                  <th>Grupo</th>
-                  <th>Cidade</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {''.join(rows)}
-              </tbody>
-            </table>
-            """
-        else:
-            agenda_html = """
-            <div class="dash-summary-box">
-              Nenhum registro de agenda encontrado para os filtros atuais.
-            </div>
-            """
 
         total_gold = 0
         total_carteira = len(filtered_rows)
@@ -1530,7 +231,9 @@ def admin_dashboard():
                 return "chip-blue"
             return "chip-gray"
 
-        ranking_2026_html = ""
+        # =========================
+        # HTML TOP 10 2026
+        # =========================
         if ranking_2026:
             rows = []
             for i, item in enumerate(ranking_2026, start=1):
@@ -1566,7 +269,9 @@ def admin_dashboard():
             </div>
             """
 
-        ranking_2025_html = ""
+        # =========================
+        # HTML TOP 10 2025
+        # =========================
         if ranking_2025:
             rows = []
             for i, item in enumerate(ranking_2025, start=1):
@@ -1602,7 +307,9 @@ def admin_dashboard():
             </div>
             """
 
-        clientes_sem_compra_html = ""
+        # =========================
+        # HTML CLIENTES SEM COMPRA
+        # =========================
         if clientes_sem_compra:
             rows = []
             for item in clientes_sem_compra[:24]:
@@ -1646,6 +353,103 @@ def admin_dashboard():
             </div>
             """
 
+        # =========================
+        # HTML AGENDA EDITÁVEL
+        # =========================
+        def opt_html(options, selected):
+            out = ["<option value=''></option>"]
+            for o in options:
+                sel = "selected" if norm(o) == norm(selected) else ""
+                out.append(f"<option value='{h(o)}' {sel}>{h(o)}</option>")
+            return "\n".join(out)
+
+        agenda_table_rows = []
+        for idx, item in enumerate(agenda_rows[:12], start=1):
+            form_id = f"agenda_form_{idx}"
+
+            hidden_filters = ""
+            if sup_sel:
+                hidden_filters += f'<input type="hidden" name="sup" value="{h(sup_sel)}">'
+            if rep_sel:
+                hidden_filters += f'<input type="hidden" name="rep" value="{h(rep_sel)}">'
+
+            agenda_table_rows.append(f"""
+            <tr class="{h(item['row_class'])}">
+              <td>{h(item['codigo'])}</td>
+              <td>{h(item['grupo'])}</td>
+              <td>{h(item['cidade'])}</td>
+
+              <td>
+                <form id="{form_id}" method="post" action="{url_for('salvar')}">
+                  <input type="hidden" name="client_key" value="{h(item['codigo'])}">
+                  <input type="hidden" name="rep_code" value="{h(item['rep_code'])}">
+                  <input type="hidden" name="base_row_number" value="{h(item['base_row_number'])}">
+                  {hidden_filters}
+                </form>
+                <input type="date"
+                       name="Data Agenda Visita"
+                       value="{h(to_input_date(item['data']))}"
+                       form="{form_id}"
+                       style="min-width:125px;">
+              </td>
+
+              <td>
+                <select name="Mês" form="{form_id}" style="min-width:100px;">
+                  {opt_html(meses, item['mes'])}
+                </select>
+              </td>
+
+              <td>
+                <select name="Semana Atendimento" form="{form_id}" style="min-width:120px;">
+                  {opt_html(semanas, item['semana'])}
+                </select>
+              </td>
+
+              <td>
+                <select name="Status Cliente" form="{form_id}" style="min-width:160px;">
+                  {opt_html(status_list, item['status'])}
+                </select>
+              </td>
+
+              <td>
+                <div style="display:flex; gap:6px; align-items:center;">
+                  <input type="text"
+                         name="Observações"
+                         value="{h(item['obs'])}"
+                         form="{form_id}"
+                         placeholder="Observações..."
+                         style="min-width:160px;">
+                  <button type="submit" form="{form_id}" style="white-space:nowrap;">Gravar</button>
+                </div>
+              </td>
+            </tr>
+            """)
+
+        agenda_html = f"""
+        <div style="max-height:245px; overflow:auto;">
+          <table class="dash-table-big">
+            <thead>
+              <tr>
+                <th>Código</th>
+                <th>Grupo</th>
+                <th>Cidade</th>
+                <th>Data</th>
+                <th>Mês</th>
+                <th>Semana</th>
+                <th>Status</th>
+                <th>Observações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {''.join(agenda_table_rows) if agenda_table_rows else '<tr><td colspan="8" style="text-align:center;">Nenhum registro encontrado.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+        """
+
+        # =========================
+        # MAPA
+        # =========================
         mapa_svg_html = ""
         mapa_info_msg = ""
         cidades_mapa_qtd = 0
@@ -1678,10 +482,8 @@ def admin_dashboard():
 
             if not cidade_col:
                 raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
-
             if not cidade_muni_col:
                 raise RuntimeError("A coluna de cidade não foi encontrada na aba 'cidades'.")
-
             if not lat_col or not lon_col:
                 raise RuntimeError("As colunas de latitude/longitude não foram encontradas na aba 'cidades'.")
 
@@ -1704,7 +506,6 @@ def admin_dashboard():
                 cidade_sheet = normalize_city_key(r.get(cidade_muni_col, ""))
                 if not cidade_sheet:
                     continue
-
                 if cidade_sheet not in vendas_por_cidade:
                     continue
 
