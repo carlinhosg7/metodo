@@ -43,7 +43,11 @@ LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.
 # =========================
 # AGENDA SEMANAL
 # =========================
-AGENDA_FILE = r"D:\metodo\agenda_atendimentos.txt"
+AGENDA_SHEET_URL = os.getenv(
+    "AGENDA_SHEET_URL",
+    "https://docs.google.com/spreadsheets/d/1mg2O7VZrPd2MKOfABkkce6QBp-wcjQV_iADltRkUWAg/edit?usp=sharing"
+).strip()
+WS_AGENDA = os.getenv("WS_AGENDA", "AGENDA_SEMANAL").strip()
 
 DIAS_SEMANA = [
     "SEGUNDA",
@@ -471,6 +475,31 @@ def _agenda_vazia():
     return agenda
 
 
+def connect_agenda_gs():
+    agenda_sheet_id = extract_google_sheet_id(AGENDA_SHEET_URL)
+    if not agenda_sheet_id:
+        raise RuntimeError("URL/ID da planilha da agenda não informado.")
+    return connect_gs_by_key(agenda_sheet_id)
+
+
+def ensure_agenda_worksheet(sh_agenda):
+    headers = ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
+
+    try:
+        ws = sh_agenda.worksheet(WS_AGENDA)
+    except WorksheetNotFound:
+        try:
+            ws = sh_agenda.add_worksheet(title=WS_AGENDA, rows="5000", cols="10")
+        except Exception as e:
+            raise RuntimeError(
+                f"Não foi possível acessar/criar a aba '{WS_AGENDA}' da agenda. "
+                f"Compartilhe a planilha da agenda com a service account. Detalhe: {str(e)}"
+            )
+
+    ensure_headers(ws, headers)
+    return ws
+
+
 def carregar_agenda_rep(rep_code):
     rep_code = norm(rep_code)
     agenda = _agenda_vazia()
@@ -478,42 +507,31 @@ def carregar_agenda_rep(rep_code):
     if not rep_code:
         return agenda
 
-    if not os.path.exists(AGENDA_FILE):
-        return agenda
-
     try:
-        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
-            linhas = f.readlines()
+        sh_agenda = connect_agenda_gs()
+        ws_agenda = ensure_agenda_worksheet(sh_agenda)
+        registros = safe_get_all_records(ws_agenda)
     except Exception:
         return agenda
 
-    current_rep = ""
-    for linha in linhas:
-        linha = linha.strip()
-        if not linha:
+    for row in registros:
+        rep = norm(row.get("REP", ""))
+        dia = normalize_text_for_match(row.get("DIA", ""))
+        at_txt = norm(row.get("ATENDIMENTO", ""))
+        cliente = norm(row.get("CLIENTE", ""))
+        valor = norm(row.get("VALOR", ""))
+
+        if rep != rep_code:
             continue
 
-        if linha.startswith("REP="):
-            current_rep = norm(linha.replace("REP=", ""))
-            continue
-
-        if current_rep != rep_code:
-            continue
-
-        partes = linha.split("|")
-        if len(partes) != 4:
-            continue
-
-        dia, at_txt, cliente, valor = partes
-        dia = normalize_text_for_match(dia)
         try:
-            at = int(norm(at_txt))
+            at = int(at_txt)
         except Exception:
             continue
 
         if dia in agenda and at in agenda[dia]:
-            agenda[dia][at]["cliente"] = norm(cliente)
-            agenda[dia][at]["valor"] = norm(valor)
+            agenda[dia][at]["cliente"] = cliente
+            agenda[dia][at]["valor"] = valor
 
     return agenda
 
@@ -523,45 +541,38 @@ def salvar_agenda_rep(rep_code, agenda_dict):
     if not rep_code:
         raise RuntimeError("Representante da agenda não informado.")
 
-    os.makedirs(os.path.dirname(AGENDA_FILE), exist_ok=True)
+    sh_agenda = connect_agenda_gs()
+    ws_agenda = ensure_agenda_worksheet(sh_agenda)
 
-    linhas_existentes = []
-    if os.path.exists(AGENDA_FILE):
-        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
-            linhas_existentes = f.readlines()
+    all_values = ws_agenda.get_all_values()
+    headers = [norm(x) for x in all_values[0]] if all_values else ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
 
-    novas_linhas = []
-    skip_bloco = False
+    rep_col = headers.index("REP") + 1
+    dia_col = headers.index("DIA") + 1
+    at_col = headers.index("ATENDIMENTO") + 1
+    cliente_col = headers.index("CLIENTE") + 1
+    valor_col = headers.index("VALOR") + 1
 
-    for linha in linhas_existentes:
-        linha_strip = linha.strip()
+    rows_to_delete = []
+    for idx, row in enumerate(all_values[1:], start=2):
+        rep_existente = safe_cell(row, rep_col)
+        if rep_existente == rep_code:
+            rows_to_delete.append(idx)
 
-        if linha_strip.startswith("REP="):
-            bloco_rep = norm(linha_strip.replace("REP=", ""))
-            if bloco_rep == rep_code:
-                skip_bloco = True
-                continue
-            else:
-                skip_bloco = False
+    for row_idx in reversed(rows_to_delete):
+        ws_agenda.delete_rows(row_idx)
 
-        if not skip_bloco:
-            novas_linhas.append(linha)
-
-    if novas_linhas and not novas_linhas[-1].endswith("\n"):
-        novas_linhas[-1] += "\n"
-
-    novas_linhas.append(f"REP={rep_code}\n")
-
+    linhas_novas = []
     for dia in DIAS_SEMANA:
         for at in ATENDIMENTOS:
             cliente = norm(agenda_dict.get(dia, {}).get(at, {}).get("cliente", ""))
             valor = norm(agenda_dict.get(dia, {}).get(at, {}).get("valor", ""))
 
             if cliente or valor:
-                novas_linhas.append(f"{dia}|{at}|{cliente}|{valor}\n")
+                linhas_novas.append([rep_code, dia, at, cliente, valor])
 
-    with open(AGENDA_FILE, "w", encoding="utf-8") as f:
-        f.writelines(novas_linhas)
+    if linhas_novas:
+        ws_agenda.append_rows(linhas_novas, value_input_option="USER_ENTERED")
 
 
 def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
@@ -1547,7 +1558,7 @@ def salvar_agenda():
 
     try:
         salvar_agenda_rep(rep_code, agenda_dict)
-        flash(f"Agenda do representante {rep_code} salva com sucesso em {AGENDA_FILE}.", "ok")
+        flash(f"Agenda do representante {rep_code} salva com sucesso na planilha Google Sheets.", "ok")
     except Exception as e:
         flash(f"Erro ao salvar agenda: {norm(str(e))}", "err")
 
@@ -2118,7 +2129,8 @@ def admin_dashboard():
               <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
               <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
               <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
-              <div class="line"><b>AGENDA FILE:</b> {h(AGENDA_FILE)}</div>
+              <div class="line"><b>AGENDA SHEET ID:</b> {h(extract_google_sheet_id(AGENDA_SHEET_URL))}</div>
+              <div class="line"><b>AGENDA ABA:</b> {h(WS_AGENDA)}</div>
               <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
               <div class="line"><b>MUNICIPIOS_SHEET_ID RESOLVIDO:</b> {h(map_debug['municipios_sheet_resolved'])}</div>
