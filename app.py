@@ -50,7 +50,12 @@ DEFAULT_MESES = [
 ]
 
 DEFAULT_SEMANAS = [
-    "Semana 01", "Semana 02", "Semana 03", "Semana 04", "sem Agenda"
+    "Segunda-feira",
+    "Terça-feira",
+    "Quarta-feira",
+    "Quinta-feira",
+    "Sexta-feira",
+    "Sem Agenda"
 ]
 
 DEFAULT_STATUS = [
@@ -1148,6 +1153,8 @@ BASE_HTML = """
       .dash-kidy-logo { justify-self: start; }
       .dash-row-top { grid-template-columns: 1fr; }
       .dash-row-bottom { grid-template-columns: 1fr; }
+      .grid { grid-template-columns: 1fr !important; }
+      .grid-2 { grid-template-columns: 1fr !important; }
     }
   </style>
 </head>
@@ -1214,6 +1221,8 @@ LOGIN_BODY = """
 @app.route("/", methods=["GET", "POST"])
 def login():
     if require_login():
+        if is_admin():
+            return redirect(url_for("admin_dashboard"))
         return redirect(url_for("dashboard"))
 
     if request.method == "POST":
@@ -1230,7 +1239,7 @@ def login():
             session["rep_name"] = ""
             session["rep_code"] = ""
             flash("Logado como ADMIN.", "ok")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("admin_dashboard"))
         elif u.isdigit() and p.isdigit() and u == p:
             rep_nome = try_get_rep_name(u)
             session.clear()
@@ -1444,6 +1453,7 @@ def admin_dashboard():
                     "grupo": norm(r.get(grupo_col, "")),
                     "cidade": norm(r.get(cidade_col, "")) if cidade_col else "",
                     "representante": norm(r.get(nome_rep_col, "")) if nome_rep_col else "",
+                    "codigo_rep": norm(r.get(rep_col, "")) if rep_col else "",
                     "data": data_ag,
                     "mes": mes_ag,
                     "semana": semana_ag,
@@ -1462,9 +1472,8 @@ def admin_dashboard():
             else:
                 data_ord = "99999999"
             return (
+                x.get("codigo_rep", ""),
                 data_ord,
-                x.get("mes", ""),
-                x.get("semana", ""),
                 x.get("grupo", "")
             )
 
@@ -1473,9 +1482,11 @@ def admin_dashboard():
         agenda_html = ""
         if agenda_rows:
             rows = []
-            for item in agenda_rows[:18]:
+            for item in agenda_rows[:40]:
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
+                  <td>{h(item['codigo_rep'])}</td>
+                  <td>{h(item['representante'])}</td>
                   <td>{h(item['data'])}</td>
                   <td>{h(item['mes'])}</td>
                   <td>{h(item['semana'])}</td>
@@ -1489,9 +1500,11 @@ def admin_dashboard():
             <table class="dash-table-big">
               <thead>
                 <tr>
+                  <th>Cód. Rep</th>
+                  <th>Representante</th>
                   <th>Data</th>
                   <th>Mês</th>
-                  <th>Semana</th>
+                  <th>Dia/Semana</th>
                   <th>Código</th>
                   <th>Grupo</th>
                   <th>Cidade</th>
@@ -1630,7 +1643,7 @@ def admin_dashboard():
                   <th>Total 2026</th>
                   <th>Data</th>
                   <th>Mês</th>
-                  <th>Semana</th>
+                  <th>Dia/Semana</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -1797,8 +1810,8 @@ def admin_dashboard():
 
                 <div class="dash-title-wrap">
                   <div class="dash-main-title">Acompanhamento de Representante</div>
-                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "Todos")}</div>
+                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "Todos")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "Todos")}</div>
                   <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
                 </div>
 
@@ -2170,13 +2183,6 @@ def dashboard():
         </div>
         """
 
-    def opt_html(options, selected):
-        out = ["<option value=''></option>"]
-        for o in options:
-            sel = "selected" if norm(o) == norm(selected) else ""
-            out.append(f"<option value='{h(o)}' {sel}>{h(o)}</option>")
-        return "\n".join(out)
-
     table_rows = []
 
     for idx, r in enumerate(out_rows, start=1):
@@ -2191,24 +2197,8 @@ def dashboard():
         t25 = fmt_money(r.get(t2025_col, "")) if t2025_col else ""
         t26 = fmt_money(r.get(t2026_col, "")) if t2026_col else ""
 
-        dav = norm(r.get("Data Agenda Visita", ""))
-        mes = norm(r.get("Mês", ""))
-        sem = norm(r.get("Semana Atendimento", ""))
-        stc = norm(r.get("Status Cliente", ""))
-        obs = norm(r.get("Observações", ""))
-
         status_cor = r.get("_status_cor", "")
         klass = r.get("_row_class", "")
-        base_row_number = r.get("_base_row_number", "")
-        form_id = f"form_row_{idx}"
-
-        hidden_filters = ""
-        if sup_sel:
-            hidden_filters += f'<input type="hidden" name="sup" value="{h(sup_sel)}">'
-        if rep_sel:
-            hidden_filters += f'<input type="hidden" name="rep" value="{h(rep_sel)}">'
-        if q:
-            hidden_filters += f'<input type="hidden" name="q" value="{h(q)}">'
 
         row_html = f"""
         <tr class="{h(klass)}">
@@ -2222,46 +2212,6 @@ def dashboard():
           <td class="money nowrap">{h(t25)}</td>
           <td class="money nowrap">{h(t26)}</td>
           <td class="nowrap"><b>{h(status_cor)}</b></td>
-
-          <td>
-            <form id="{form_id}" method="post" action="{url_for('salvar')}">
-              <input type="hidden" name="client_key" value="{h(ck)}">
-              <input type="hidden" name="rep_code" value="{h(repc)}">
-              <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
-              {hidden_filters}
-            </form>
-            <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
-          </td>
-
-          <td>
-            <select name="Mês" form="{form_id}" style="min-width:140px;">
-              {opt_html(meses, mes)}
-            </select>
-          </td>
-
-          <td>
-            <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
-              {opt_html(semanas, sem)}
-            </select>
-          </td>
-
-          <td>
-            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
-              {opt_html(status_list, stc)}
-            </select>
-          </td>
-
-          <td style="min-width:420px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-              <input type="text"
-                     name="Observações"
-                     form="{form_id}"
-                     placeholder="Digite observações..."
-                     value="{h(obs)}"
-                     style="flex:1; min-width:260px;">
-              <button type="submit" form="{form_id}" style="white-space:nowrap;">Gravar</button>
-            </div>
-          </td>
         </tr>
         """
         table_rows.append(row_html)
@@ -2319,11 +2269,6 @@ def dashboard():
             <th>Total 2025</th>
             <th>Total 2026</th>
             <th>Status Cor</th>
-            <th>Data Agenda Visita</th>
-            <th>Mês</th>
-            <th>Semana Atendimento</th>
-            <th>Status Cliente</th>
-            <th>Observações</th>
           </tr>
         </thead>
         <tbody>
