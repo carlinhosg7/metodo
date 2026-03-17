@@ -46,14 +46,14 @@ MUNICIPIOS_URL = os.getenv(
     "https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/main/csv/municipios.csv"
 ).strip()
 
-PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
+PAGE_SIZE = int(os.getenv("PAGE_SIZE", "100"))
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").strip().lower() in ("1", "true", "sim", "yes")
 
 # ===== CACHE =====
-BASE_CACHE_TTL = int(os.getenv("BASE_CACHE_TTL", "180"))         # 3 min
-LISTAS_CACHE_TTL = int(os.getenv("LISTAS_CACHE_TTL", "600"))     # 10 min
-REP_NAME_CACHE_TTL = int(os.getenv("REP_NAME_CACHE_TTL", "1800"))  # 30 min
-MUNICIPIOS_CACHE_TTL = int(os.getenv("MUNICIPIOS_CACHE_TTL", "86400"))  # 24h
+BASE_CACHE_TTL = int(os.getenv("BASE_CACHE_TTL", "300"))               # 5 min
+LISTAS_CACHE_TTL = int(os.getenv("LISTAS_CACHE_TTL", "900"))           # 15 min
+REP_NAME_CACHE_TTL = int(os.getenv("REP_NAME_CACHE_TTL", "1800"))      # 30 min
+MUNICIPIOS_CACHE_TTL = int(os.getenv("MUNICIPIOS_CACHE_TTL", "86400")) # 24h
 DEBUG_SHEETINFO_CACHE_TTL = int(os.getenv("DEBUG_SHEETINFO_CACHE_TTL", "120"))
 
 APP_TITLE = "Acompanhamento de clientes"
@@ -78,7 +78,6 @@ DIAS_SEMANA = [
 
 ATENDIMENTOS = [1, 2, 3, 4]
 
-
 # =========================
 # LISTAS FIXAS (fallback)
 # =========================
@@ -101,7 +100,6 @@ DEFAULT_STATUS = [
     "CLIENTE VAI MANDAR O PEDIDO",
 ]
 
-
 # =========================
 # APP
 # =========================
@@ -110,7 +108,6 @@ app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=7)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-
 
 # =========================
 # CACHE GLOBAL SIMPLES
@@ -486,13 +483,13 @@ def render_error_page(subtitle, message, user_photo_url=""):
 
 
 # =========================
-# MUNICÍPIOS CACHE
+# MUNICÍPIOS CACHE + ÍNDICE
 # =========================
 def load_public_municipios():
     cache_key = f"municipios::{MUNICIPIOS_URL}"
     cached = cache_get(cache_key)
     if cached is not None:
-        return cached, ""
+        return cached["rows"], cached["index"], ""
 
     try:
         resp = requests.get(MUNICIPIOS_URL, timeout=30)
@@ -500,42 +497,78 @@ def load_public_municipios():
 
         csv_text = resp.text
         if not csv_text.strip():
-            return [], "Arquivo público de municípios vazio."
+            return [], {}, "Arquivo público de municípios vazio."
 
         reader = csvlib.DictReader(StringIO(csv_text))
         rows = []
+        index_exato = {}
+        index_simplificado = {}
+
+        def simplificar(txt):
+            txt = normalize_city_key(txt)
+            txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
+            txt = re.sub(r"\s+", " ", txt).strip()
+            return txt
 
         for row in reader:
             clean_row = {}
             for k, v in row.items():
                 clean_row[norm(k)] = norm(v)
+
             rows.append(clean_row)
 
-        cache_set(cache_key, rows, MUNICIPIOS_CACHE_TTL)
-        return rows, ""
+            nome = norm(
+                clean_row.get("nome", "") or
+                clean_row.get("cidade", "") or
+                clean_row.get("municipio", "") or
+                clean_row.get("município", "")
+            )
+
+            if nome:
+                nome_key = normalize_city_key(nome)
+                nome_simpl = simplificar(nome)
+
+                if nome_key and nome_key not in index_exato:
+                    index_exato[nome_key] = clean_row
+
+                if nome_simpl and nome_simpl not in index_simplificado:
+                    index_simplificado[nome_simpl] = clean_row
+
+        payload = {
+            "rows": rows,
+            "index": {
+                "exato": index_exato,
+                "simplificado": index_simplificado
+            }
+        }
+        cache_set(cache_key, payload, MUNICIPIOS_CACHE_TTL)
+
+        return rows, payload["index"], ""
     except Exception as e:
-        return [], f"Erro ao carregar municípios públicos: {norm(str(e))}"
+        return [], {}, f"Erro ao carregar municípios públicos: {norm(str(e))}"
 
 
-def find_city_coords_public(rows_cidades, cidade_base_norm, cidade_original=""):
-    if not rows_cidades or not cidade_base_norm:
+def find_city_coords_public(rows_cidades, municipios_index, cidade_base_norm, cidade_original=""):
+    if not cidade_base_norm:
         return None, None, ""
 
-    melhor_row = None
+    municipios_index = municipios_index or {}
+    index_exato = municipios_index.get("exato", {})
+    index_simplificado = municipios_index.get("simplificado", {})
 
-    for r in rows_cidades:
-        nome = norm(
-            r.get("nome", "") or
-            r.get("cidade", "") or
-            r.get("municipio", "") or
-            r.get("município", "")
-        )
-        nome_norm = normalize_city_key(nome)
-        if nome_norm == cidade_base_norm:
-            melhor_row = r
-            break
+    def simplificar(txt):
+        txt = normalize_city_key(txt)
+        txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt
+
+    melhor_row = index_exato.get(cidade_base_norm)
 
     if melhor_row is None:
+        base_simpl = simplificar(cidade_original or cidade_base_norm)
+        melhor_row = index_simplificado.get(base_simpl)
+
+    if melhor_row is None and rows_cidades:
         for r in rows_cidades:
             nome = norm(
                 r.get("nome", "") or
@@ -548,32 +581,6 @@ def find_city_coords_public(rows_cidades, cidade_base_norm, cidade_original=""):
             if nome_norm and (
                 cidade_base_norm in nome_norm or
                 nome_norm in cidade_base_norm
-            ):
-                melhor_row = r
-                break
-
-    if melhor_row is None:
-        def simplificar(txt):
-            txt = normalize_city_key(txt)
-            txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
-            txt = re.sub(r"\s+", " ", txt).strip()
-            return txt
-
-        base_simpl = simplificar(cidade_original or cidade_base_norm)
-
-        for r in rows_cidades:
-            nome = norm(
-                r.get("nome", "") or
-                r.get("cidade", "") or
-                r.get("municipio", "") or
-                r.get("município", "")
-            )
-            nome_simpl = simplificar(nome)
-
-            if nome_simpl and (
-                nome_simpl == base_simpl or
-                base_simpl in nome_simpl or
-                nome_simpl in base_simpl
             ):
                 melhor_row = r
                 break
@@ -643,7 +650,6 @@ def build_city_map_svg(city_points, width=760, height=420):
         return x, y
 
     circles = []
-    labels = []
 
     for p in valid_points:
         x, y = project(p["lon"], p["lat"])
@@ -666,18 +672,28 @@ def build_city_map_svg(city_points, width=760, height=420):
             f'<title>{title}</title></circle>'
         )
 
-        labels.append(
-            f'<text x="{x + 7:.2f}" y="{y - 7:.2f}" font-size="9" fill="#334155">{h(cidade[:18])}</text>'
-        )
+    map_uid = f"map_{int(time.time() * 1000)}_{len(valid_points)}"
 
     svg = f"""
-    <div style="width:100%; height:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
-      <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
-        <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
-        <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
-        {''.join(circles)}
-        {''.join(labels)}
-      </svg>
+    <div style="width:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; flex-wrap:wrap;">
+        <div style="font-size:10px; color:#334155; font-weight:700;">
+          Use os botões para zoom
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button type="button" onclick="zoomMap('{map_uid}', 1.2)" style="padding:4px 8px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer;">+</button>
+          <button type="button" onclick="zoomMap('{map_uid}', 0.83)" style="padding:4px 8px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer;">-</button>
+          <button type="button" onclick="resetMapZoom('{map_uid}')" style="padding:4px 8px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer;">Reset</button>
+        </div>
+      </div>
+
+      <div style="width:100%; height:100%; overflow:auto; background:#dff3f1; border-radius:4px;">
+        <svg id="{map_uid}" viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px; transform-origin:center center; transition:transform .15s ease;">
+          <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
+          <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
+          {''.join(circles)}
+        </svg>
+      </div>
 
       <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
         <span style="display:flex; align-items:center; gap:6px;">
@@ -694,6 +710,30 @@ def build_city_map_svg(city_points, width=760, height=420):
         </span>
       </div>
     </div>
+
+    <script>
+      window._mapZoomLevels = window._mapZoomLevels || {{}};
+
+      function zoomMap(mapId, factor) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        if (!window._mapZoomLevels[mapId]) window._mapZoomLevels[mapId] = 1;
+
+        let next = window._mapZoomLevels[mapId] * factor;
+        if (next < 1) next = 1;
+        if (next > 8) next = 8;
+
+        window._mapZoomLevels[mapId] = next;
+        el.style.transform = 'scale(' + next + ')';
+      }}
+
+      function resetMapZoom(mapId) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        window._mapZoomLevels[mapId] = 1;
+        el.style.transform = 'scale(1)';
+      }}
+    </script>
     """
     return svg
 
@@ -1090,6 +1130,7 @@ def invalidate_main_sheet_cache():
     cache_del_prefix(f"base_structure::{extract_google_sheet_id(SHEET_ID)}::{WS_BASE}")
     cache_del_prefix(f"listas::{extract_google_sheet_id(SHEET_ID)}::{WS_LISTAS}")
     cache_del_prefix(f"sheet_info::{extract_google_sheet_id(SHEET_ID)}")
+    cache_del_prefix(f"rep_name::{extract_google_sheet_id(SHEET_ID)}::")
 
 
 def try_get_rep_name(rep_code):
@@ -2293,10 +2334,12 @@ def admin_dashboard():
             "cidade_muni_col": "nome",
             "lat_col": "latitude",
             "lon_col": "longitude",
+            "labels": "desativadas",
+            "zoom": "ativo"
         }
 
         try:
-            rows_cidades, erro_muni = load_public_municipios()
+            rows_cidades, municipios_index, erro_muni = load_public_municipios()
             if erro_muni:
                 raise RuntimeError(erro_muni)
 
@@ -2337,6 +2380,7 @@ def admin_dashboard():
 
                 lat, lon, nome_municipio = find_city_coords_public(
                     rows_cidades,
+                    municipios_index,
                     cidade_key,
                     cidade_original
                 )
@@ -2620,6 +2664,8 @@ def admin_dashboard():
               <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
               <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
               <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
+              <div class="line"><b>LABELS MAPA:</b> {h(map_debug['labels'])}</div>
+              <div class="line"><b>ZOOM MAPA:</b> {h(map_debug['zoom'])}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
               <div class="line"><b>DATA AGENDA COL:</b> {h(data_agenda_col)}</div>
               <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
@@ -2730,7 +2776,6 @@ def dashboard():
     rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if is_admin() else []
 
     prepared_rows = []
-
     q_lower = q.lower()
 
     for idx_base, r in enumerate(base_rows, start=2):
@@ -2742,6 +2787,7 @@ def dashboard():
             continue
         if is_admin() and rep_sel and repc != rep_sel:
             continue
+
         if q_lower:
             grupo_val = norm(r.get(grupo_col, "")) if grupo_col else ""
             cidade_val = norm(r.get(cidade_col, "")) if cidade_col else ""
