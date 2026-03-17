@@ -5,7 +5,11 @@ import base64
 import traceback
 import html
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse, parse_qs
+from io import StringIO
+import csv as csvlib
 
+import requests
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
 import gspread
@@ -30,11 +34,41 @@ WS_BASE = os.getenv("WS_BASE", "BASE").strip()
 WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 
+# ===== CLIENTES GOLD =====
+GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
+GOLD_SHEET_URL = os.getenv("GOLD_SHEET_URL", "").strip()
+GOLD_WS = os.getenv("GOLD_WS", "Tab").strip()
+
+# ===== MUNICÍPIOS PÚBLICOS =====
+MUNICIPIOS_URL = os.getenv(
+    "MUNICIPIOS_URL",
+    "https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/main/csv/municipios.csv"
+).strip()
+
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
 
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
+
+# =========================
+# AGENDA SEMANAL
+# =========================
+AGENDA_SHEET_URL = os.getenv(
+    "AGENDA_SHEET_URL",
+    "https://docs.google.com/spreadsheets/d/1mg2O7VZrPd2MKOfABkkce6QBp-wcjQV_iADltRkUWAg/edit?usp=sharing"
+).strip()
+WS_AGENDA = os.getenv("WS_AGENDA", "AGENDA_SEMANAL").strip()
+
+DIAS_SEMANA = [
+    "SEGUNDA",
+    "TERCA",
+    "QUARTA",
+    "QUINTA",
+    "SEXTA"
+]
+
+ATENDIMENTOS = [1, 2, 3, 4]
 
 
 # =========================
@@ -124,6 +158,32 @@ def normalize_header(s):
     return s
 
 
+def normalize_text_for_match(v):
+    s = norm(v).upper()
+    s = (
+        s.replace("Á", "A")
+         .replace("À", "A")
+         .replace("Ã", "A")
+         .replace("Â", "A")
+         .replace("É", "E")
+         .replace("Ê", "E")
+         .replace("Í", "I")
+         .replace("Ó", "O")
+         .replace("Ô", "O")
+         .replace("Õ", "O")
+         .replace("Ú", "U")
+         .replace("Ç", "C")
+    )
+    return s
+
+
+def normalize_city_key(v):
+    s = normalize_text_for_match(v)
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def pick_col_exact(headers, candidates):
     hmap = {normalize_header(x): x for x in headers}
     for cand in candidates:
@@ -152,25 +212,6 @@ def pick_col_flexible(headers, candidates):
 
 def clean_color_text(v):
     return norm(v)
-
-
-def normalize_text_for_match(v):
-    s = norm(v).upper()
-    s = (
-        s.replace("Á", "A")
-         .replace("À", "A")
-         .replace("Ã", "A")
-         .replace("Â", "A")
-         .replace("É", "E")
-         .replace("Ê", "E")
-         .replace("Í", "I")
-         .replace("Ó", "O")
-         .replace("Ô", "O")
-         .replace("Õ", "O")
-         .replace("Ú", "U")
-         .replace("Ç", "C")
-    )
-    return s
 
 
 def is_truthy_novo(v):
@@ -280,7 +321,6 @@ def parse_number_br(value):
         return 0.0
 
     s = s.replace("R$", "").replace(" ", "")
-
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
@@ -290,6 +330,23 @@ def parse_number_br(value):
         return float(s)
     except Exception:
         return 0.0
+
+
+def parse_float_any(value):
+    s = norm(value)
+    if not s:
+        return None
+
+    s = s.replace(" ", "")
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+
+    try:
+        return float(s)
+    except Exception:
+        return None
 
 
 def format_number_br(value):
@@ -306,10 +363,6 @@ def format_money_br(value):
     return f"R$ {format_number_br(value)}"
 
 
-def is_zero_or_blank(v):
-    return parse_number_br(v) == 0.0
-
-
 def render_status_badge_text(status_cor):
     s = normalize_text_for_match(status_cor)
     if "VERMELH" in s:
@@ -323,6 +376,451 @@ def render_status_badge_text(status_cor):
     if "AZUL" in s or "NOVO" in s:
         return "Azul"
     return norm(status_cor)
+
+
+def extract_google_sheet_id(raw_value):
+    raw = norm(raw_value)
+    if not raw:
+        return ""
+
+    if "/spreadsheets/d/" in raw:
+        m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", raw)
+        if m:
+            return m.group(1)
+
+    if raw.startswith("http://") or raw.startswith("https://"):
+        try:
+            parsed = urlparse(raw)
+            qs = parse_qs(parsed.query)
+            if "id" in qs and qs["id"]:
+                return qs["id"][0]
+        except Exception:
+            pass
+
+    return raw
+
+
+def friendly_gspread_error(exc):
+    txt = norm(str(exc))
+
+    if isinstance(exc, WorksheetNotFound):
+        return "A aba informada não foi encontrada na planilha."
+
+    if "Response [404]" in txt or "Requested entity was not found" in txt:
+        return (
+            "Planilha Google Sheets não encontrada. "
+            "Verifique se o ID/URL está correto e se a planilha existe."
+        )
+
+    if "Response [403]" in txt or "PERMISSION_DENIED" in txt or "The caller does not have permission" in txt:
+        return (
+            "Sem permissão para acessar a planilha Google Sheets. "
+            "Compartilhe a planilha com o e-mail da service account como Editor."
+        )
+
+    if "This operation is not supported for this document" in txt:
+        return (
+            "O arquivo informado não é uma planilha Google Sheets válida. "
+            "Converta o arquivo para Google Sheets e use o ID/URL correto."
+        )
+
+    return txt or "Erro ao acessar Google Sheets."
+
+
+def resolve_gold_sheet_target():
+    target = GOLD_SHEET_ID or GOLD_SHEET_URL or SHEET_ID
+    return extract_google_sheet_id(target)
+
+
+def load_public_municipios():
+    try:
+        resp = requests.get(MUNICIPIOS_URL, timeout=30)
+        resp.raise_for_status()
+
+        csv_text = resp.text
+        if not csv_text.strip():
+            return [], "Arquivo público de municípios vazio."
+
+        reader = csvlib.DictReader(StringIO(csv_text))
+        rows = []
+
+        for row in reader:
+            clean_row = {}
+            for k, v in row.items():
+                clean_row[norm(k)] = norm(v)
+            rows.append(clean_row)
+
+        return rows, ""
+    except Exception as e:
+        return [], f"Erro ao carregar municípios públicos: {norm(str(e))}"
+
+
+def find_city_coords_public(rows_cidades, cidade_base_norm, cidade_original=""):
+    if not rows_cidades or not cidade_base_norm:
+        return None, None, ""
+
+    melhor_row = None
+
+    for r in rows_cidades:
+        nome = norm(
+            r.get("nome", "") or
+            r.get("cidade", "") or
+            r.get("municipio", "") or
+            r.get("município", "")
+        )
+        nome_norm = normalize_city_key(nome)
+        if nome_norm == cidade_base_norm:
+            melhor_row = r
+            break
+
+    if melhor_row is None:
+        for r in rows_cidades:
+            nome = norm(
+                r.get("nome", "") or
+                r.get("cidade", "") or
+                r.get("municipio", "") or
+                r.get("município", "")
+            )
+            nome_norm = normalize_city_key(nome)
+
+            if nome_norm and (
+                cidade_base_norm in nome_norm or
+                nome_norm in cidade_base_norm
+            ):
+                melhor_row = r
+                break
+
+    if melhor_row is None:
+        def simplificar(txt):
+            txt = normalize_city_key(txt)
+            txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
+            txt = re.sub(r"\s+", " ", txt).strip()
+            return txt
+
+        base_simpl = simplificar(cidade_original or cidade_base_norm)
+
+        for r in rows_cidades:
+            nome = norm(
+                r.get("nome", "") or
+                r.get("cidade", "") or
+                r.get("municipio", "") or
+                r.get("município", "")
+            )
+            nome_simpl = simplificar(nome)
+
+            if nome_simpl and (
+                nome_simpl == base_simpl or
+                base_simpl in nome_simpl or
+                nome_simpl in base_simpl
+            ):
+                melhor_row = r
+                break
+
+    if melhor_row is None:
+        return None, None, ""
+
+    nome_final = norm(
+        melhor_row.get("nome", "") or
+        melhor_row.get("cidade", "") or
+        melhor_row.get("municipio", "") or
+        melhor_row.get("município", "")
+    )
+    lat = parse_float_any(melhor_row.get("latitude", "") or melhor_row.get("lat", ""))
+    lon = parse_float_any(melhor_row.get("longitude", "") or melhor_row.get("lon", "") or melhor_row.get("lng", ""))
+
+    return lat, lon, nome_final
+
+
+def build_city_map_svg(city_points, width=760, height=420):
+    if not city_points:
+        return """
+        <div class="dash-map-placeholder">
+          Não foi possível montar o mapa.<br><br>
+          Verifique o cruzamento das cidades e as colunas de latitude e longitude.
+        </div>
+        """
+
+    valid_points = [
+        p for p in city_points
+        if p.get("lat") is not None and p.get("lon") is not None
+    ]
+
+    if not valid_points:
+        return """
+        <div class="dash-map-placeholder">
+          Nenhuma coordenada válida encontrada.
+        </div>
+        """
+
+    min_lon = min(p["lon"] for p in valid_points)
+    max_lon = max(p["lon"] for p in valid_points)
+    min_lat = min(p["lat"] for p in valid_points)
+    max_lat = max(p["lat"] for p in valid_points)
+
+    lon_span = max_lon - min_lon
+    lat_span = max_lat - min_lat
+
+    if lon_span == 0:
+        lon_span = 0.3
+    if lat_span == 0:
+        lat_span = 0.3
+
+    lon_margin = lon_span * 0.08
+    lat_margin = lat_span * 0.08
+
+    min_lon -= lon_margin
+    max_lon += lon_margin
+    min_lat -= lat_margin
+    max_lat += lat_margin
+
+    pad = 10
+
+    def project(lon, lat):
+        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
+        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
+        return x, y
+
+    circles = []
+    labels = []
+
+    for p in valid_points:
+        x, y = project(p["lon"], p["lat"])
+        fill = p["fill"]
+        cidade = p.get("cidade", "")
+        status_txt = p.get("status_txt", "")
+        total_2024 = p.get("total_2024", 0)
+        total_2025 = p.get("total_2025", 0)
+        total_2026 = p.get("total_2026", 0)
+
+        title = h(
+            f"{cidade} | {status_txt} | "
+            f"2024: {format_number_br(total_2024)} | "
+            f"2025: {format_number_br(total_2025)} | "
+            f"2026: {format_number_br(total_2026)}"
+        )
+
+        circles.append(
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="6.2" fill="{fill}" stroke="#ffffff" stroke-width="1.4">'
+            f'<title>{title}</title></circle>'
+        )
+
+        labels.append(
+            f'<text x="{x + 7:.2f}" y="{y - 7:.2f}" font-size="9" fill="#334155">{h(cidade[:18])}</text>'
+        )
+
+    svg = f"""
+    <div style="width:100%; height:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
+      <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
+        <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
+        <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
+        {''.join(circles)}
+        {''.join(labels)}
+      </svg>
+
+      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
+          Vendas em 2026
+        </span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#eab308; display:inline-block;"></span>
+          Vendas em outros períodos
+        </span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
+          Sem vendas
+        </span>
+      </div>
+    </div>
+    """
+    return svg
+
+
+# =========================
+# AGENDA - FUNÇÕES
+# =========================
+def _agenda_vazia():
+    agenda = {}
+    for dia in DIAS_SEMANA:
+        agenda[dia] = {}
+        for at in ATENDIMENTOS:
+            agenda[dia][at] = {
+                "cliente": "",
+                "valor": ""
+            }
+    return agenda
+
+
+def connect_agenda_gs():
+    agenda_sheet_id = extract_google_sheet_id(AGENDA_SHEET_URL)
+    if not agenda_sheet_id:
+        raise RuntimeError("URL/ID da planilha da agenda não informado.")
+    return connect_gs_by_key(agenda_sheet_id)
+
+
+def ensure_agenda_worksheet(sh_agenda):
+    headers = ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
+
+    try:
+        ws = sh_agenda.worksheet(WS_AGENDA)
+    except WorksheetNotFound:
+        try:
+            ws = sh_agenda.add_worksheet(title=WS_AGENDA, rows="5000", cols="10")
+        except Exception as e:
+            raise RuntimeError(
+                f"Não foi possível acessar/criar a aba '{WS_AGENDA}' da agenda. "
+                f"Compartilhe a planilha da agenda com a service account. Detalhe: {friendly_gspread_error(e)}"
+            )
+
+    ensure_headers(ws, headers)
+    return ws
+
+
+def carregar_agenda_rep(rep_code):
+    rep_code = norm(rep_code)
+    agenda = _agenda_vazia()
+
+    if not rep_code:
+        return agenda
+
+    try:
+        sh_agenda = connect_agenda_gs()
+        ws_agenda = ensure_agenda_worksheet(sh_agenda)
+        registros = safe_get_all_records(ws_agenda)
+    except Exception:
+        return agenda
+
+    for row in registros:
+        rep = norm(row.get("REP", ""))
+        dia = normalize_text_for_match(row.get("DIA", ""))
+        at_txt = norm(row.get("ATENDIMENTO", ""))
+        cliente = norm(row.get("CLIENTE", ""))
+        valor = norm(row.get("VALOR", ""))
+
+        if rep != rep_code:
+            continue
+
+        try:
+            at = int(at_txt)
+        except Exception:
+            continue
+
+        if dia in agenda and at in agenda[dia]:
+            agenda[dia][at]["cliente"] = cliente
+            agenda[dia][at]["valor"] = valor
+
+    return agenda
+
+
+def salvar_agenda_rep(rep_code, agenda_dict):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        raise RuntimeError("Representante da agenda não informado.")
+
+    sh_agenda = connect_agenda_gs()
+    ws_agenda = ensure_agenda_worksheet(sh_agenda)
+
+    all_values = ws_agenda.get_all_values()
+    headers = [norm(x) for x in all_values[0]] if all_values else ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
+
+    rep_col = headers.index("REP") + 1
+
+    rows_to_delete = []
+    for idx, row in enumerate(all_values[1:], start=2):
+        rep_existente = safe_cell(row, rep_col)
+        if rep_existente == rep_code:
+            rows_to_delete.append(idx)
+
+    for row_idx in reversed(rows_to_delete):
+        ws_agenda.delete_rows(row_idx)
+
+    linhas_novas = []
+    for dia in DIAS_SEMANA:
+        for at in ATENDIMENTOS:
+            cliente = norm(agenda_dict.get(dia, {}).get(at, {}).get("cliente", ""))
+            valor = norm(agenda_dict.get(dia, {}).get(at, {}).get("valor", ""))
+
+            if cliente or valor:
+                linhas_novas.append([rep_code, dia, at, cliente, valor])
+
+    if linhas_novas:
+        ws_agenda.append_rows(linhas_novas, value_input_option="USER_ENTERED")
+
+
+def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        return """
+        <div class="dash-summary-box">
+          Selecione um representante para exibir e salvar a agenda semanal.
+        </div>
+        """
+
+    agenda = carregar_agenda_rep(rep_code)
+
+    header_top = []
+    header_top.append("<tr>")
+    header_top.append('<th style="width:90px;">DIA</th>')
+    for at in ATENDIMENTOS:
+        header_top.append(f'<th colspan="2" style="text-align:center;">ATENDIMENTO {at:02d}</th>')
+    header_top.append("</tr>")
+
+    header_sub = []
+    header_sub.append("<tr>")
+    header_sub.append("<th></th>")
+    for _ in ATENDIMENTOS:
+        header_sub.append('<th style="width:150px;">CLIENTE</th>')
+        header_sub.append('<th style="width:80px;">VALOR</th>')
+    header_sub.append("</tr>")
+
+    body_rows = []
+
+    for dia in DIAS_SEMANA:
+        row = [f"<tr><td><b>{h(dia)}</b></td>"]
+        for at in ATENDIMENTOS:
+            cliente = agenda[dia][at]["cliente"]
+            valor = agenda[dia][at]["valor"]
+
+            row.append(
+                f'<td><input class="agenda-input" type="text" name="{h(dia)}_{at}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
+            )
+            row.append(
+                f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor"></td>'
+            )
+        row.append("</tr>")
+        body_rows.append("".join(row))
+
+    hidden_sup = f'<input type="hidden" name="sup" value="{h(sup_sel)}">' if sup_sel else ""
+    hidden_rep = f'<input type="hidden" name="rep" value="{h(rep_sel)}">' if rep_sel else ""
+
+    return f"""
+    <form method="post" action="{url_for('salvar_agenda')}">
+      <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
+      {hidden_sup}
+      {hidden_rep}
+
+      <div class="agenda-topbar">
+        <div class="agenda-rep-label">
+          Agenda semanal do representante <b>{h(rep_code)}</b>
+        </div>
+        <div>
+          <button type="submit" class="agenda-save-btn">Salvar Agenda</button>
+        </div>
+      </div>
+
+      <div class="agenda-wrapper">
+        <table class="agenda-table">
+          <thead>
+            {''.join(header_top)}
+            {''.join(header_sub)}
+          </thead>
+          <tbody>
+            {''.join(body_rows)}
+          </tbody>
+        </table>
+      </div>
+    </form>
+    """
 
 
 # =========================
@@ -344,9 +842,10 @@ def _load_service_account_info():
     return info
 
 
-def connect_gs():
-    if not SHEET_ID:
-        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
+def connect_gs_by_key(sheet_key_or_url):
+    resolved_key = extract_google_sheet_id(sheet_key_or_url)
+    if not resolved_key:
+        raise RuntimeError("Sheet ID não informado.")
 
     info = _load_service_account_info()
     scopes = [
@@ -355,7 +854,27 @@ def connect_gs():
     ]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(SHEET_ID)
+
+    try:
+        return gc.open_by_key(resolved_key)
+    except Exception as e:
+        raise RuntimeError(friendly_gspread_error(e))
+
+
+def connect_gs():
+    if not SHEET_ID:
+        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
+    return connect_gs_by_key(SHEET_ID)
+
+
+def connect_gold_gs():
+    gold_target = resolve_gold_sheet_target()
+    if not gold_target:
+        raise RuntimeError(
+            "Faltou configurar a planilha de CLIENTES GOLD. "
+            "Defina GOLD_SHEET_ID ou GOLD_SHEET_URL."
+        )
+    return connect_gs_by_key(gold_target)
 
 
 def safe_get_all_records(ws):
@@ -420,7 +939,7 @@ def ensure_edicoes_worksheet(sh):
             raise RuntimeError(
                 f"Não foi possível acessar/criar a aba '{WS_EDICOES}'. "
                 f"Crie essa aba manualmente na planilha ou conceda permissão de Editor à service account. "
-                f"Detalhe: {str(e)}"
+                f"Detalhe: {friendly_gspread_error(e)}"
             )
 
     ensure_headers(ws, headers)
@@ -504,6 +1023,124 @@ def try_get_rep_name(rep_code):
         return ""
 
 
+def get_gold_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+
+    info = {
+        "total_gold": 0,
+        "gold_rows": [],
+        "sheet_title": "",
+        "worksheet_title": "",
+        "rep_col": "",
+        "codigo_col": "",
+        "cliente_col": "",
+        "grupo_col": "",
+        "supervisor_col": "",
+        "ok": False,
+        "error": "",
+        "resolved_sheet_id": resolve_gold_sheet_target(),
+    }
+
+    if not rep_code:
+        info["error"] = "Selecione um representante para consultar CLIENTES GOLD."
+        return info
+
+    try:
+        sh_gold = connect_gold_gs()
+        info["sheet_title"] = norm(getattr(sh_gold, "title", ""))
+
+        try:
+            ws_gold = sh_gold.worksheet(GOLD_WS)
+        except WorksheetNotFound:
+            raise RuntimeError(
+                f"A aba '{GOLD_WS}' não foi encontrada na planilha de CLIENTES GOLD."
+            )
+
+        info["worksheet_title"] = norm(getattr(ws_gold, "title", ""))
+
+        headers_gold, rows_gold = safe_get_raw_rows(ws_gold)
+        if not headers_gold:
+            raise RuntimeError("A aba de clientes gold está vazia ou sem cabeçalho.")
+
+        rep_gold_col = pick_col_flexible(headers_gold, [
+            "Cod. Representante", "Cod Representante", "Código Representante",
+            "Codigo Representante", "Representante", "COD_REP", "REP"
+        ])
+
+        codigo_gold_col = pick_col_flexible(headers_gold, [
+            "Codigo", "Código", "Codigo Cliente", "Código Cliente",
+            "Codigo Grupo Cliente", "Código Grupo Cliente",
+            "Cod Cliente", "Cod. Cliente", "Cod Grupo Cliente", "Cod. Grupo Cliente"
+        ])
+
+        cliente_gold_col = pick_col_flexible(headers_gold, [
+            "Cliente / Grupo", "Cliente Grupo", "Cliente", "Nome Cliente",
+            "Razao Social", "Razão Social", "Fantasia", "Nome"
+        ])
+
+        grupo_gold_col = pick_col_flexible(headers_gold, [
+            "Grupo Cliente / Cliente", "Grupo Cliente Cliente", "Grupo Cliente", "Grupo", "Cliente / Grupo"
+        ])
+
+        supervisor_gold_col = pick_col_flexible(headers_gold, [
+            "Supervisor", "Cod. Supervisor", "Código Supervisor", "Codigo Supervisor"
+        ])
+
+        info["rep_col"] = rep_gold_col or ""
+        info["codigo_col"] = codigo_gold_col or ""
+        info["cliente_col"] = cliente_gold_col or ""
+        info["grupo_col"] = grupo_gold_col or ""
+        info["supervisor_col"] = supervisor_gold_col or ""
+
+        if not rep_gold_col:
+            raise RuntimeError(
+                "Não encontrei a coluna do representante na planilha GOLD. "
+                "Verifique o cabeçalho da aba informada em GOLD_WS."
+            )
+
+        gold_rows = []
+        for row in rows_gold:
+            rep_val = norm(row.get(rep_gold_col, ""))
+            rep_val_num = rep_val.lstrip("0") or "0"
+            rep_code_num = rep_code.lstrip("0") or "0"
+
+            if rep_val == rep_code or rep_val_num == rep_code_num:
+                codigo_val = norm(row.get(codigo_gold_col, "")) if codigo_gold_col else ""
+                cliente_val = norm(row.get(cliente_gold_col, "")) if cliente_gold_col else ""
+                grupo_val = norm(row.get(grupo_gold_col, "")) if grupo_gold_col else ""
+                supervisor_val = norm(row.get(supervisor_gold_col, "")) if supervisor_gold_col else ""
+
+                if not cliente_val and grupo_val:
+                    cliente_val = grupo_val
+                if not grupo_val and cliente_val:
+                    grupo_val = cliente_val
+
+                gold_rows.append({
+                    "codigo": codigo_val,
+                    "cliente_grupo": cliente_val,
+                    "grupo_cliente_cliente": grupo_val,
+                    "rep": rep_val,
+                    "supervisor": supervisor_val
+                })
+
+        gold_rows.sort(
+            key=lambda x: (
+                norm(x.get("cliente_grupo", "")),
+                norm(x.get("grupo_cliente_cliente", "")),
+                norm(x.get("codigo", ""))
+            )
+        )
+
+        info["gold_rows"] = gold_rows
+        info["total_gold"] = len(gold_rows)
+        info["ok"] = True
+        return info
+
+    except Exception as e:
+        info["error"] = friendly_gspread_error(e)
+        return info
+
+
 def build_debug_sheet_info(sh=None):
     try:
         if sh is None:
@@ -511,18 +1148,18 @@ def build_debug_sheet_info(sh=None):
 
         abas = [ws.title for ws in sh.worksheets()]
         return {
-            "sheet_id": SHEET_ID,
+            "sheet_id": extract_google_sheet_id(SHEET_ID),
             "spreadsheet_title": norm(getattr(sh, "title", "")),
             "worksheets": abas,
             "ok": True,
         }
     except Exception as e:
         return {
-            "sheet_id": SHEET_ID,
+            "sheet_id": extract_google_sheet_id(SHEET_ID),
             "spreadsheet_title": "",
             "worksheets": [],
             "ok": False,
-            "error": str(e),
+            "error": friendly_gspread_error(e),
         }
 
 
@@ -559,7 +1196,7 @@ def handle_any_exception(e):
 
 
 # =========================
-# TEMPLATE BASE
+# TEMPLATES
 # =========================
 BASE_HTML = """
 <!doctype html>
@@ -574,8 +1211,8 @@ BASE_HTML = """
     .topbar-right { display: flex; align-items: center; gap: 10px; }
     .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
 
-    .container { padding: 16px; }
-    .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 16px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .container { padding: 12px; }
+    .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
 
     .rep-card { display: flex; align-items: center; gap: 16px; }
     .rep-photo { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 2px solid #d1d5db; background: #f8fafc; flex-shrink: 0; }
@@ -584,7 +1221,7 @@ BASE_HTML = """
     label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
     input, select {
       width: 100%;
-      padding: 10px;
+      padding: 9px;
       border-radius: 10px;
       border: 1px solid #cbd5e1;
       background: #ffffff;
@@ -600,7 +1237,7 @@ BASE_HTML = """
     }
 
     button, .btn-link {
-      padding: 10px 14px;
+      padding: 9px 13px;
       border-radius: 10px;
       border: 0;
       background: #2563eb;
@@ -620,7 +1257,7 @@ BASE_HTML = """
     .btn-link.orange { background: #f97316; }
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
-    th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; vertical-align: top; }
+    th, td { border-bottom: 1px solid #e5e7eb; padding: 8px; vertical-align: top; }
     th { position: sticky; top: 0; background: #f8fafc; color: #374151; text-align: left; z-index: 2; }
 
     .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
@@ -662,13 +1299,16 @@ BASE_HTML = """
       margin-bottom: 12px;
     }
 
-    /* ===============================
-       DASHBOARD ADMIN A3
-       =============================== */
     .dash-page {
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .a3-page {
+      width: min(100%, 1560px);
+      background: #ffffff;
     }
 
     .dash-shell {
@@ -676,26 +1316,27 @@ BASE_HTML = """
       border: 1px solid #cfd4dc;
       border-top: 3px solid #f97316;
       border-bottom: 3px solid #f97316;
-      padding: 12px;
+      padding: 10px;
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.05);
       width: 100%;
       box-sizing: border-box;
+      overflow: hidden;
     }
 
     .dash-header {
       display: grid;
-      grid-template-columns: 80px 1.35fr 1fr 70px;
-      gap: 10px;
+      grid-template-columns: 74px 1.35fr 1fr 64px;
+      gap: 8px;
       align-items: center;
       border-bottom: 2px solid #f97316;
-      padding-bottom: 8px;
-      margin-bottom: 10px;
+      padding-bottom: 6px;
+      margin-bottom: 8px;
     }
 
     .dash-avatar {
-      width: 66px;
-      height: 66px;
+      width: 62px;
+      height: 62px;
       border-radius: 8px;
       object-fit: cover;
       border: 1px solid #d1d5db;
@@ -703,8 +1344,8 @@ BASE_HTML = """
     }
 
     .dash-avatar-placeholder {
-      width: 66px;
-      height: 66px;
+      width: 62px;
+      height: 62px;
       border-radius: 8px;
       border: 1px solid #d1d5db;
       background: #f8fafc;
@@ -712,7 +1353,7 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       color: #6b7280;
-      font-size: 11px;
+      font-size: 10px;
       text-align: center;
       padding: 6px;
       box-sizing: border-box;
@@ -720,17 +1361,17 @@ BASE_HTML = """
 
     .dash-title-wrap { min-width: 0; }
     .dash-main-title {
-      font-size: 18px;
+      font-size: 17px;
       font-weight: 800;
       text-transform: uppercase;
       text-align: center;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }
 
     .dash-subline {
-      font-size: 11px;
+      font-size: 10px;
       color: #374151;
-      line-height: 1.4;
+      line-height: 1.35;
     }
 
     .dash-meta-box {
@@ -742,26 +1383,26 @@ BASE_HTML = """
     .dash-metric {
       border: 1px solid #d1d5db;
       border-radius: 8px;
-      padding: 6px;
+      padding: 5px;
       background: #fafafa;
     }
 
     .dash-metric-label {
-      font-size: 10px;
+      font-size: 9px;
       color: #6b7280;
       font-weight: 700;
       text-transform: uppercase;
-      margin-bottom: 3px;
+      margin-bottom: 2px;
     }
 
     .dash-metric-value {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 800;
       color: #111827;
     }
 
     .dash-kidy-logo {
-      max-width: 60px;
+      max-width: 54px;
       width: 100%;
       height: auto;
       justify-self: end;
@@ -769,79 +1410,78 @@ BASE_HTML = """
 
     .dash-row-top {
       display: grid;
-      grid-template-columns: 1fr 1fr 1.1fr;
-      gap: 10px;
-      margin-bottom: 10px;
+      grid-template-columns: 1fr 1fr 1.08fr;
+      gap: 8px;
+      margin-bottom: 8px;
     }
 
     .dash-row-bottom {
       display: grid;
-      grid-template-columns: 1.18fr 0.95fr;
-      gap: 10px;
+      grid-template-columns: 1.22fr 0.92fr;
+      gap: 8px;
       align-items: start;
     }
 
     .dash-right-stack {
       display: grid;
-      grid-template-rows: auto auto auto;
-      gap: 10px;
+      grid-template-rows: auto auto;
+      gap: 8px;
     }
 
     .dash-panel {
       border: 1px solid #9ca3af;
       background: #ffffff;
-      position: relative;
       overflow: hidden;
     }
 
     .dash-panel-title {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 800;
       text-transform: uppercase;
       color: #111827;
       background: #f3f4f6;
       border-bottom: 1px solid #d1d5db;
-      padding: 6px 8px;
+      padding: 5px 8px;
       text-align: center;
     }
 
     .dash-panel-body {
-      padding: 8px;
+      padding: 6px;
       box-sizing: border-box;
     }
 
     .dash-table-mini {
       width: 100%;
       border-collapse: collapse;
-      font-size: 10px;
+      font-size: 9px;
     }
 
     .dash-table-mini th,
     .dash-table-mini td {
       border: 1px solid #d1d5db;
-      padding: 3px 5px;
-      line-height: 1.2;
+      padding: 2px 4px;
+      line-height: 1.15;
     }
 
     .dash-table-mini th {
       background: #e5e7eb;
       font-weight: 700;
       text-transform: uppercase;
-      font-size: 9px;
+      font-size: 8px;
       position: static;
     }
 
     .dash-table-big {
       width: 100%;
       border-collapse: collapse;
-      font-size: 10px;
+      font-size: 9px;
     }
 
     .dash-table-big th,
     .dash-table-big td {
       border: 1px solid #d1d5db;
-      padding: 4px 5px;
-      line-height: 1.2;
+      padding: 3px 4px;
+      line-height: 1.12;
       vertical-align: middle;
     }
 
@@ -849,12 +1489,12 @@ BASE_HTML = """
       background: #e5e7eb;
       font-weight: 700;
       text-transform: uppercase;
-      font-size: 9px;
+      font-size: 8px;
       position: static;
     }
 
     .dash-map-placeholder {
-      min-height: 210px;
+      min-height: 285px;
       background: #ecfeff;
       border: 2px dashed #06b6d4;
       color: #155e75;
@@ -865,10 +1505,11 @@ BASE_HTML = """
       font-size: 12px;
       border-radius: 6px;
       padding: 10px;
+      box-sizing: border-box;
     }
 
     .dash-gold-box {
-      min-height: 68px;
+      min-height: 58px;
       background: #fef3c7;
       border: 2px dashed #f59e0b;
       color: #92400e;
@@ -876,13 +1517,16 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       text-align: center;
-      font-size: 12px;
+      font-size: 11px;
       border-radius: 6px;
-      padding: 10px;
+      padding: 8px;
+      box-sizing: border-box;
+      flex-direction: column;
+      gap: 4px;
     }
 
     .dash-coverage-box {
-      min-height: 90px;
+      min-height: 82px;
       background: #f8fafc;
       border: 2px dashed #94a3b8;
       color: #334155;
@@ -890,13 +1534,14 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       text-align: center;
-      font-size: 12px;
+      font-size: 11px;
       border-radius: 6px;
-      padding: 10px;
+      padding: 8px;
+      box-sizing: border-box;
     }
 
     .dash-summary-box {
-      min-height: 150px;
+      min-height: 130px;
       background: #f8fafc;
       border: 2px dashed #94a3b8;
       color: #334155;
@@ -904,9 +1549,10 @@ BASE_HTML = """
       align-items: center;
       justify-content: center;
       text-align: center;
-      font-size: 12px;
+      font-size: 11px;
       border-radius: 6px;
-      padding: 10px;
+      padding: 8px;
+      box-sizing: border-box;
     }
 
     .print-toolbar {
@@ -923,11 +1569,11 @@ BASE_HTML = """
 
     .status-chip {
       display: inline-block;
-      min-width: 70px;
-      padding: 2px 6px;
+      min-width: 64px;
+      padding: 2px 5px;
       border-radius: 999px;
       text-align: center;
-      font-size: 9px;
+      font-size: 8px;
       font-weight: 700;
       border: 1px solid rgba(0,0,0,0.08);
     }
@@ -939,54 +1585,130 @@ BASE_HTML = """
     .chip-blue { background: rgba(56,189,248,0.18); color: #0c4a6e; }
     .chip-gray { background: #e5e7eb; color: #374151; }
 
+    .agenda-wrapper { overflow:auto; width:100%; }
+    .agenda-table { width:100%; border-collapse:collapse; font-size:10px; }
+    .agenda-table th, .agenda-table td {
+      border:1px solid #9ca3af;
+      padding:4px;
+      vertical-align:middle;
+      background:#ffffff;
+    }
+    .agenda-table thead th {
+      background:#f3f4f6;
+      text-align:center;
+      font-size:10px;
+      font-weight:800;
+      text-transform:uppercase;
+      position:static;
+    }
+    .agenda-input {
+      width:100%;
+      min-width:80px;
+      padding:5px 6px;
+      border-radius:4px;
+      border:1px solid #cbd5e1;
+      font-size:10px;
+      box-sizing:border-box;
+    }
+    .agenda-valor {
+      min-width:58px;
+      text-align:center;
+    }
+    .agenda-topbar {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:8px;
+      margin-bottom:6px;
+      flex-wrap:wrap;
+    }
+    .agenda-rep-label {
+      font-size:11px;
+      color:#374151;
+      font-weight:700;
+    }
+    .agenda-save-btn {
+      background:#f97316;
+      padding:8px 12px;
+      border-radius:8px;
+      border:0;
+      color:#fff;
+      cursor:pointer;
+      font-weight:700;
+    }
+
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
     @page {
       size: A3 landscape;
-      margin: 10mm;
+      margin: 4mm;
     }
 
     @media print {
-      body {
-        background: #ffffff;
+      html, body {
+        width: 420mm;
+        height: 297mm;
+        background: #ffffff !important;
       }
 
       .topbar,
-      .card:first-child,
-      .print-toolbar,
       .no-print,
       .msg {
         display: none !important;
       }
 
       .container {
-        padding: 0;
-        margin: 0;
-      }
-
-      .dash-shell {
-        border-radius: 0;
-        box-shadow: none;
-        border-left: 1px solid #cfd4dc;
-        border-right: 1px solid #cfd4dc;
+        padding: 0 !important;
+        margin: 0 !important;
         width: 100%;
       }
 
-      .dash-table-mini,
-      .dash-table-big {
-        font-size: 9px;
+      .dash-page {
+        gap: 0 !important;
+        width: 100%;
       }
 
-      .dash-table-mini th,
-      .dash-table-mini td,
-      .dash-table-big th,
-      .dash-table-big td {
-        padding: 3px 4px;
+      .a3-page {
+        width: 412mm !important;
+        height: 288mm !important;
+        margin: 0 auto !important;
+        overflow: hidden !important;
+      }
+
+      .dash-shell {
+        width: 100% !important;
+        height: 100% !important;
+        padding: 6mm !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        overflow: hidden !important;
+      }
+
+      .dash-header,
+      .dash-row-top,
+      .dash-row-bottom,
+      .dash-right-stack,
+      .dash-panel,
+      .dash-panel-body {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+      }
+
+      .dash-table-mini,
+      .dash-table-big,
+      .agenda-table {
+        font-size: 8px !important;
+      }
+
+      .dash-table-mini th, .dash-table-mini td,
+      .dash-table-big th, .dash-table-big td,
+      .agenda-table th, .agenda-table td {
+        padding: 2px 3px !important;
       }
     }
 
     @media (max-width: 1200px) {
-      .dash-header { grid-template-columns: 80px 1fr; }
+      .dash-header { grid-template-columns: 74px 1fr; }
       .dash-meta-box { grid-column: 1 / -1; }
       .dash-kidy-logo { justify-self: start; }
       .dash-row-top { grid-template-columns: 1fr; }
@@ -1108,9 +1830,47 @@ def logout():
     return redirect(url_for("login"))
 
 
-# =========================
-# ROUTE ADMIN DASHBOARD
-# =========================
+@app.route("/salvar_agenda", methods=["POST"])
+def salvar_agenda():
+    if not require_login():
+        flash("Sessão expirada. Faça login novamente.", "err")
+        return redirect(url_for("login"))
+
+    if not is_admin():
+        flash("Somente admin pode salvar a agenda do dashboard.", "err")
+        return redirect(url_for("dashboard"))
+
+    rep_code = norm(request.form.get("rep_code_agenda", ""))
+    sup = norm(request.form.get("sup", ""))
+    rep = norm(request.form.get("rep", ""))
+
+    if not rep_code:
+        flash("Selecione um representante antes de salvar a agenda.", "err")
+        return redirect(url_for("admin_dashboard", sup=sup, rep=rep))
+
+    agenda_dict = _agenda_vazia()
+
+    for dia in DIAS_SEMANA:
+        for at in ATENDIMENTOS:
+            cliente = norm(request.form.get(f"{dia}_{at}_cliente", ""))
+            valor = norm(request.form.get(f"{dia}_{at}_valor", ""))
+            agenda_dict[dia][at]["cliente"] = cliente
+            agenda_dict[dia][at]["valor"] = valor
+
+    try:
+        salvar_agenda_rep(rep_code, agenda_dict)
+        flash(f"Agenda do representante {rep_code} salva com sucesso na planilha Google Sheets.", "ok")
+    except Exception as e:
+        flash(f"Erro ao salvar agenda: {norm(str(e))}", "err")
+
+    args = {}
+    if sup:
+        args["sup"] = sup
+    if rep:
+        args["rep"] = rep
+    return redirect(url_for("admin_dashboard", **args))
+
+
 @app.route("/admin-dashboard", methods=["GET"])
 def admin_dashboard():
     if not require_login():
@@ -1131,9 +1891,6 @@ def admin_dashboard():
         except Exception:
             headers, base_rows = [], []
 
-        # =========================================
-        # BLOCO: LOCALIZAÇÃO DAS COLUNAS
-        # =========================================
         key_col = pick_col_flexible(headers, [
             "Codigo Grupo Cliente", "Código Grupo Cliente",
             "Codigo Cliente", "Código Cliente", "COD_CLIENTE", "Cliente"
@@ -1167,9 +1924,6 @@ def admin_dashboard():
         status_cliente_col = pick_col_exact(headers, ["Status Cliente"])
         observacoes_col = pick_col_exact(headers, ["Observações", "Observacao", "Observacoes"])
 
-        # =========================================
-        # BLOCO: FILTROS
-        # =========================================
         sup_sel = norm(request.args.get("sup", ""))
         rep_sel = norm(request.args.get("rep", ""))
 
@@ -1184,9 +1938,6 @@ def admin_dashboard():
                 continue
             filtered_rows.append(r)
 
-        # =========================================
-        # BLOCO: DADOS CABEÇALHO
-        # =========================================
         header_rep_code = rep_sel
         header_rep_name = ""
         header_sup = sup_sel
@@ -1203,15 +1954,11 @@ def admin_dashboard():
                         header_sup = norm(r.get(sup_col, ""))
                     break
 
-        # Realizado = soma do Total 2026 filtrado
         total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
         header_realizado = format_money_br(total_realizado_2026)
 
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
 
-        # =========================================
-        # BLOCO: TOP 10 MAIORES 2026
-        # =========================================
         ranking_2026 = []
         if grupo_col and t2026_col:
             for r in filtered_rows:
@@ -1230,9 +1977,6 @@ def admin_dashboard():
             ranking_2026.sort(key=lambda x: x["valor"], reverse=True)
             ranking_2026 = ranking_2026[:10]
 
-        # =========================================
-        # BLOCO: TOP 10 MAIORES 2025
-        # =========================================
         ranking_2025 = []
         if grupo_col and t2025_col:
             for r in filtered_rows:
@@ -1251,10 +1995,6 @@ def admin_dashboard():
             ranking_2025.sort(key=lambda x: x["valor"], reverse=True)
             ranking_2025 = ranking_2025[:10]
 
-        # =========================================
-        # BLOCO: CLIENTES SEM COMPRA
-        # REGRA ATUAL = Total 2026 vazio ou zero
-        # =========================================
         clientes_sem_compra = []
         if key_col and grupo_col and t2026_col:
             for r in filtered_rows:
@@ -1278,30 +2018,24 @@ def admin_dashboard():
                     })
 
             clientes_sem_compra.sort(
-                key=lambda x: (
-                    x["t2025"],
-                    x["t2024"],
-                    x["grupo"]
-                ),
+                key=lambda x: (x["t2025"], x["t2024"], x["grupo"]),
                 reverse=True
             )
 
-        # =========================================
-        # BLOCO: CLIENTES GOLD (placeholder de contagem)
-        # =========================================
-        total_gold = 0
+        agenda_semanal_html = render_agenda_semana_html(
+            rep_code=header_rep_code,
+            sup_sel=sup_sel,
+            rep_sel=rep_sel
+        )
 
-        # =========================================
-        # BLOCO: COBERTURA CARTEIRA
-        # =========================================
+        gold_info = get_gold_info_by_rep(header_rep_code)
+        total_gold = gold_info.get("total_gold", 0)
+
         total_carteira = len(filtered_rows)
         total_sem_compra = len(clientes_sem_compra)
         total_com_compra = max(total_carteira - total_sem_compra, 0)
         cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
 
-        # =========================================
-        # HTMLS AUXILIARES
-        # =========================================
         def chip_class(status_cor):
             s = normalize_text_for_match(status_cor)
             if "VERMELH" in s:
@@ -1322,10 +2056,10 @@ def admin_dashboard():
             for i, item in enumerate(ranking_2026, start=1):
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
-                  <td style="width:26px; text-align:center;">{i}</td>
+                  <td style="width:22px; text-align:center;">{i}</td>
                   <td>{h(item['grupo'])}</td>
-                  <td style="width:110px; text-align:right;">{h(format_number_br(item['valor']))}</td>
-                  <td style="width:82px; text-align:center;">
+                  <td style="width:90px; text-align:right;">{h(format_number_br(item['valor']))}</td>
+                  <td style="width:70px; text-align:center;">
                     <span class="status-chip {chip_class(item['status_cor'])}">{h(render_status_badge_text(item['status_cor']))}</span>
                   </td>
                 </tr>
@@ -1347,7 +2081,7 @@ def admin_dashboard():
             """
         else:
             ranking_2026_html = """
-            <div class="dash-map-placeholder" style="min-height:150px;">
+            <div class="dash-map-placeholder" style="min-height:120px;">
               Sem dados para o Top 10 de 2026
             </div>
             """
@@ -1358,10 +2092,10 @@ def admin_dashboard():
             for i, item in enumerate(ranking_2025, start=1):
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
-                  <td style="width:26px; text-align:center;">{i}</td>
+                  <td style="width:22px; text-align:center;">{i}</td>
                   <td>{h(item['grupo'])}</td>
-                  <td style="width:110px; text-align:right;">{h(format_number_br(item['valor']))}</td>
-                  <td style="width:82px; text-align:center;">
+                  <td style="width:90px; text-align:right;">{h(format_number_br(item['valor']))}</td>
+                  <td style="width:70px; text-align:center;">
                     <span class="status-chip {chip_class(item['status_cor'])}">{h(render_status_badge_text(item['status_cor']))}</span>
                   </td>
                 </tr>
@@ -1383,7 +2117,7 @@ def admin_dashboard():
             """
         else:
             ranking_2025_html = """
-            <div class="dash-map-placeholder" style="min-height:150px;">
+            <div class="dash-map-placeholder" style="min-height:120px;">
               Sem dados para o Top 10 de 2025
             </div>
             """
@@ -1391,7 +2125,7 @@ def admin_dashboard():
         clientes_sem_compra_html = ""
         if clientes_sem_compra:
             rows = []
-            for item in clientes_sem_compra[:38]:
+            for item in clientes_sem_compra[:24]:
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
                   <td>{h(item['codigo'])}</td>
@@ -1427,15 +2161,176 @@ def admin_dashboard():
             """
         else:
             clientes_sem_compra_html = """
-            <div class="dash-map-placeholder" style="min-height:260px;">
+            <div class="dash-map-placeholder" style="min-height:220px;">
               Nenhum cliente sem compra encontrado pela regra atual (Total 2026 = 0)
+            </div>
+            """
+
+        mapa_svg_html = ""
+        mapa_info_msg = ""
+        cidades_mapa_qtd = 0
+        cidades_sem_coordenada = 0
+
+        map_debug = {
+            "municipios_url": MUNICIPIOS_URL,
+            "cidade_muni_col": "nome",
+            "lat_col": "latitude",
+            "lon_col": "longitude",
+        }
+
+        try:
+            rows_cidades, erro_muni = load_public_municipios()
+            if erro_muni:
+                raise RuntimeError(erro_muni)
+
+            if not rows_cidades:
+                raise RuntimeError("Nenhum município foi carregado da URL pública.")
+
+            if not cidade_col:
+                raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
+
+            vendas_por_cidade = {}
+            for r in filtered_rows:
+                cidade_original = norm(r.get(cidade_col, ""))
+                cidade_base = normalize_city_key(cidade_original)
+
+                if not cidade_base:
+                    continue
+
+                total_2024 = parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0
+                total_2025 = parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0
+                total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
+
+                if cidade_base not in vendas_por_cidade:
+                    vendas_por_cidade[cidade_base] = {
+                        "cidade_original": cidade_original,
+                        "total_2024": 0.0,
+                        "total_2025": 0.0,
+                        "total_2026": 0.0,
+                    }
+
+                vendas_por_cidade[cidade_base]["total_2024"] += total_2024
+                vendas_por_cidade[cidade_base]["total_2025"] += total_2025
+                vendas_por_cidade[cidade_base]["total_2026"] += total_2026
+
+            city_points = []
+
+            for cidade_key, dados_cidade in vendas_por_cidade.items():
+                cidade_original = dados_cidade["cidade_original"]
+
+                lat, lon, nome_municipio = find_city_coords_public(
+                    rows_cidades,
+                    cidade_key,
+                    cidade_original
+                )
+
+                if lat is None or lon is None:
+                    cidades_sem_coordenada += 1
+                    continue
+
+                total_2024 = dados_cidade["total_2024"]
+                total_2025 = dados_cidade["total_2025"]
+                total_2026 = dados_cidade["total_2026"]
+                total_outros = total_2024 + total_2025
+
+                if total_2026 > 0:
+                    fill = "#16a34a"
+                    status_txt = "Vendas em 2026"
+                elif total_outros > 0:
+                    fill = "#eab308"
+                    status_txt = "Vendas em outros períodos"
+                else:
+                    fill = "#dc2626"
+                    status_txt = "Sem vendas"
+
+                city_points.append({
+                    "cidade": cidade_original or nome_municipio,
+                    "lat": lat,
+                    "lon": lon,
+                    "total_2024": total_2024,
+                    "total_2025": total_2025,
+                    "total_2026": total_2026,
+                    "fill": fill,
+                    "status_txt": status_txt
+                })
+
+            cidades_mapa_qtd = len(city_points)
+            mapa_svg_html = build_city_map_svg(city_points)
+
+            if not city_points:
+                mapa_info_msg = "Nenhuma cidade da carteira encontrou coordenadas no arquivo público."
+            elif cidades_sem_coordenada > 0:
+                mapa_info_msg = f"{cidades_sem_coordenada} cidade(s) da carteira não encontraram coordenadas."
+
+        except Exception as e:
+            erro_txt = norm(str(e))
+            mapa_svg_html = f"""
+            <div class="dash-map-placeholder">
+              Erro ao montar mapa.<br><br>
+              {h(erro_txt)}
+            </div>
+            """
+
+        gold_subinfo = ""
+        gold_table_html = ""
+
+        if not header_rep_code:
+            gold_subinfo = """
+            <div style="font-size:10px; color:#92400e;">
+              Selecione um representante para consultar os clientes GOLD.
+            </div>
+            """
+        elif gold_info.get("ok"):
+            gold_subinfo = f"""
+            <div style="font-size:10px; color:#92400e;">
+              Rep: <b>{h(header_rep_code)}</b> | Aba GOLD: <b>{h(gold_info.get('worksheet_title', GOLD_WS))}</b>
+            </div>
+            """
+
+            if gold_info.get("gold_rows"):
+                gold_rows_html = []
+                for item in gold_info.get("gold_rows", [])[:20]:
+                    gold_rows_html.append(f"""
+                    <tr>
+                      <td>{h(item.get('codigo', ''))}</td>
+                      <td>{h(item.get('cliente_grupo', ''))}</td>
+                      <td>{h(item.get('grupo_cliente_cliente', ''))}</td>
+                    </tr>
+                    """)
+
+                gold_table_html = f"""
+                <div style="margin-top:8px; max-height:180px; overflow:auto; width:100%;">
+                  <table class="dash-table-mini">
+                    <thead>
+                      <tr>
+                        <th style="width:90px;">Código</th>
+                        <th>Cliente / Grupo</th>
+                        <th>Grupo Cliente / Cliente</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {''.join(gold_rows_html)}
+                    </tbody>
+                  </table>
+                </div>
+                """
+            else:
+                gold_table_html = """
+                <div style="margin-top:8px; font-size:10px; color:#92400e;">
+                  Nenhum cliente GOLD encontrado para este representante.
+                </div>
+                """
+        elif gold_info.get("error"):
+            gold_subinfo = f"""
+            <div style="font-size:10px; color:#b91c1c;">
+              Erro GOLD: {h(gold_info.get('error'))}
             </div>
             """
 
         body = f"""
         <div class="dash-page">
 
-          <div class="card no-print">
+          <div class="card no-print a3-page">
             <form method="get">
               <div class="grid">
                 <div>
@@ -1461,124 +2356,127 @@ def admin_dashboard():
                 </div>
 
                 <div class="print-note">
-                  Dashboard ajustado para impressão em A3 horizontal.
+                  Ajustado para sair em uma única página A3 horizontal.
                 </div>
               </div>
             </form>
           </div>
 
-          <div class="dash-shell no-break">
+          <div class="a3-page no-break">
+            <div class="dash-shell">
 
-            <div class="dash-header">
-              <div>
-                {
-                    f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
-                    if rep_photo else
-                    '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
-                }
-              </div>
-
-              <div class="dash-title-wrap">
-                <div class="dash-main-title">Acompanhamento de Representante</div>
-                <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
-                <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
-              </div>
-
-              <div class="dash-meta-box">
-                <div class="dash-metric">
-                  <div class="dash-metric-label">Meta</div>
-                  <div class="dash-metric-value">{h(header_meta)}</div>
+              <div class="dash-header">
+                <div>
+                  {
+                      f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
+                      if rep_photo else
+                      '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
+                  }
                 </div>
-                <div class="dash-metric">
-                  <div class="dash-metric-label">Realizado</div>
-                  <div class="dash-metric-value">{h(header_realizado)}</div>
+
+                <div class="dash-title-wrap">
+                  <div class="dash-main-title">Acompanhamento de Representante</div>
+                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                  <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
                 </div>
-                <div class="dash-metric">
-                  <div class="dash-metric-label">% Realizado</div>
-                  <div class="dash-metric-value">{h(header_percentual)}</div>
-                </div>
-              </div>
 
-              <div>
-                <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
-              </div>
-            </div>
-
-            <div class="dash-row-top">
-
-              <div class="dash-panel">
-                <div class="dash-panel-title">10 Maiores Clientes</div>
-                <div class="dash-panel-body">
-                  {ranking_2026_html}
-                </div>
-              </div>
-
-              <div class="dash-panel">
-                <div class="dash-panel-title">10 Maiores Clientes 2025</div>
-                <div class="dash-panel-body">
-                  {ranking_2025_html}
-                </div>
-              </div>
-
-              <div class="dash-panel">
-                <div class="dash-panel-title">Cidades da Região</div>
-                <div class="dash-panel-body">
-                  <div class="dash-map-placeholder">
-                    LOCAL DO MAPA<br><br>
-                    Estrutura preservada para depois ligar latitude/longitude
-                    ou mapa por cidade/região.
+                <div class="dash-meta-box">
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">Meta</div>
+                    <div class="dash-metric-value">{h(header_meta)}</div>
+                  </div>
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">Realizado</div>
+                    <div class="dash-metric-value">{h(header_realizado)}</div>
+                  </div>
+                  <div class="dash-metric">
+                    <div class="dash-metric-label">% Realizado</div>
+                    <div class="dash-metric-value">{h(header_percentual)}</div>
                   </div>
                 </div>
-              </div>
 
-            </div>
-
-            <div class="dash-row-bottom">
-
-              <div class="dash-panel">
-                <div class="dash-panel-title">Clientes sem Compra</div>
-                <div class="dash-panel-body">
-                  {clientes_sem_compra_html}
+                <div>
+                  <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
                 </div>
               </div>
 
-              <div class="dash-right-stack">
+              <div class="dash-row-top">
 
                 <div class="dash-panel">
-                  <div class="dash-panel-title">Clientes Gold</div>
+                  <div class="dash-panel-title">10 Maiores Clientes</div>
                   <div class="dash-panel-body">
-                    <div class="dash-gold-box">
-                      Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
-                    </div>
+                    {ranking_2026_html}
                   </div>
                 </div>
 
                 <div class="dash-panel">
-                  <div class="dash-panel-title">Cobertura da Carteira</div>
+                  <div class="dash-panel-title">10 Maiores Clientes 2025</div>
                   <div class="dash-panel-body">
-                    <div class="dash-coverage-box">
-                      Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                      Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                      Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                      Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
-                    </div>
+                    {ranking_2025_html}
                   </div>
                 </div>
 
                 <div class="dash-panel">
-                  <div class="dash-panel-title">Tabela / Resumo Operacional</div>
+                  <div class="dash-panel-title">Cidades da Região</div>
                   <div class="dash-panel-body">
-                    <div class="dash-summary-box">
-                      Estrutura pronta para entrar depois com resumo operacional,
-                      metas, visitas, pedidos, saldo e KPIs adicionais.
+                    {mapa_svg_html}
+                    <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                      Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
+                      {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                     </div>
                   </div>
                 </div>
 
               </div>
-            </div>
 
+              <div class="dash-row-bottom">
+
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Clientes sem Compra</div>
+                  <div class="dash-panel-body">
+                    {clientes_sem_compra_html}
+                  </div>
+                </div>
+
+                <div class="dash-right-stack">
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Clientes Gold</div>
+                    <div class="dash-panel-body">
+                      <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
+                        <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                        {gold_subinfo}
+                        {gold_table_html}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Cobertura da Carteira</div>
+                    <div class="dash-panel-body">
+                      <div class="dash-coverage-box">
+                        Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                        Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              <div style="margin-top:8px;">
+                <div class="dash-panel">
+                  <div class="dash-panel-title">Agenda Semanal do Representante</div>
+                  <div class="dash-panel-body">
+                    {agenda_semanal_html}
+                  </div>
+                </div>
+              </div>
+
+            </div>
           </div>
         </div>
         """
@@ -1595,15 +2493,35 @@ def admin_dashboard():
               <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
               <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
               <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
-              <div class="line"><b>REP COL:</b> {h(rep_col)}</div>
-              <div class="line"><b>GRUPO COL:</b> {h(grupo_col)}</div>
-              <div class="line"><b>T2024 COL:</b> {h(t2024_col)}</div>
-              <div class="line"><b>T2025 COL:</b> {h(t2025_col)}</div>
+              <div class="line"><b>AGENDA SHEET ID:</b> {h(extract_google_sheet_id(AGENDA_SHEET_URL))}</div>
+              <div class="line"><b>AGENDA ABA:</b> {h(WS_AGENDA)}</div>
+              <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
+              <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
+              <div class="line"><b>CIDADES SEM COORDENADA:</b> {h(cidades_sem_coordenada)}</div>
+              <div class="line"><b>MUNICIPIOS URL:</b> {h(map_debug['municipios_url'])}</div>
+              <div class="line"><b>COLUNA CIDADE BASE:</b> {h(cidade_col)}</div>
+              <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
+              <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
+              <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
-              <div class="line"><b>DATA COL:</b> {h(data_agenda_col)}</div>
+              <div class="line"><b>DATA AGENDA COL:</b> {h(data_agenda_col)}</div>
               <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
               <div class="line"><b>SEMANA COL:</b> {h(semana_col)}</div>
-              <div class="line"><b>STATUS COL:</b> {h(status_cliente_col)}</div>
+              <div class="line"><b>STATUS CLIENTE COL:</b> {h(status_cliente_col)}</div>
+              <div class="line"><b>OBS COL:</b> {h(observacoes_col)}</div>
+              <hr style="border-color:#334155;">
+              <div class="line"><b>GOLD SHEET ID/URL RESOLVIDO:</b> {h(gold_info.get('resolved_sheet_id', ''))}</div>
+              <div class="line"><b>GOLD WS:</b> {h(GOLD_WS)}</div>
+              <div class="line"><b>GOLD SHEET TITLE:</b> {h(gold_info.get('sheet_title', ''))}</div>
+              <div class="line"><b>GOLD WORKSHEET TITLE:</b> {h(gold_info.get('worksheet_title', ''))}</div>
+              <div class="line"><b>GOLD REP COL:</b> {h(gold_info.get('rep_col', ''))}</div>
+              <div class="line"><b>GOLD CODIGO COL:</b> {h(gold_info.get('codigo_col', ''))}</div>
+              <div class="line"><b>GOLD CLIENTE COL:</b> {h(gold_info.get('cliente_col', ''))}</div>
+              <div class="line"><b>GOLD GRUPO COL:</b> {h(gold_info.get('grupo_col', ''))}</div>
+              <div class="line"><b>GOLD SUPERVISOR COL:</b> {h(gold_info.get('supervisor_col', ''))}</div>
+              <div class="line"><b>TOTAL GOLD:</b> {h(gold_info.get('total_gold', 0))}</div>
+              <div class="line"><b>GOLD OK:</b> {h(gold_info.get('ok', False))}</div>
+              <div class="line"><b>GOLD ERROR:</b> {h(gold_info.get('error', ''))}</div>
             </div>
             """
 
@@ -1719,7 +2637,6 @@ def dashboard():
     prepared_rows = []
 
     for idx_base, r in enumerate(base_rows, start=2):
-        ck = norm(r.get(key_col, "")) if key_col else ""
         repc = norm(r.get(rep_col, "")) if rep_col else ""
 
         if not is_admin() and repc != norm(session.get("rep_code", "")):
@@ -1769,7 +2686,6 @@ def dashboard():
         current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
 
     rep_card_html = ""
-
     selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
 
     if selected_rep_code and rep_col:
@@ -2184,4 +3100,8 @@ def salvar():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
+        debug=DEBUG_MODE
+    )

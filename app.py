@@ -4,6 +4,7 @@ import json
 import base64
 import traceback
 import html
+import time
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 from io import StringIO
@@ -46,7 +47,7 @@ MUNICIPIOS_URL = os.getenv(
 ).strip()
 
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
-DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").strip().lower() in ("1", "true", "sim", "yes")
 
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
@@ -102,6 +103,20 @@ app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=7)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+
+# =========================
+# CACHE SIMPLES
+# =========================
+_CACHE = {
+    "municipios": {"ts": 0, "data": [], "error": ""},
+    "base_data": {"ts": 0, "headers": [], "rows": []},
+    "listas_data": {"ts": 0, "rows": []},
+}
+
+CACHE_TTL_MUNICIPIOS = int(os.getenv("CACHE_TTL_MUNICIPIOS", "3600"))
+CACHE_TTL_BASE = int(os.getenv("CACHE_TTL_BASE", "90"))
+CACHE_TTL_LISTAS = int(os.getenv("CACHE_TTL_LISTAS", "300"))
 
 
 # =========================
@@ -433,13 +448,22 @@ def resolve_gold_sheet_target():
 
 
 def load_public_municipios():
+    now = time.time()
+    cache = _CACHE["municipios"]
+
+    if cache["data"] and (now - cache["ts"] < CACHE_TTL_MUNICIPIOS):
+        return cache["data"], cache["error"]
+
     try:
-        resp = requests.get(MUNICIPIOS_URL, timeout=30)
+        resp = requests.get(MUNICIPIOS_URL, timeout=20)
         resp.raise_for_status()
 
         csv_text = resp.text
         if not csv_text.strip():
-            return [], "Arquivo público de municípios vazio."
+            cache["ts"] = now
+            cache["data"] = []
+            cache["error"] = "Arquivo público de municípios vazio."
+            return [], cache["error"]
 
         reader = csvlib.DictReader(StringIO(csv_text))
         rows = []
@@ -450,9 +474,16 @@ def load_public_municipios():
                 clean_row[norm(k)] = norm(v)
             rows.append(clean_row)
 
+        cache["ts"] = now
+        cache["data"] = rows
+        cache["error"] = ""
         return rows, ""
+
     except Exception as e:
-        return [], f"Erro ao carregar municípios públicos: {norm(str(e))}"
+        cache["ts"] = now
+        cache["data"] = []
+        cache["error"] = f"Erro ao carregar municípios públicos: {norm(str(e))}"
+        return [], cache["error"]
 
 
 def find_city_coords_public(rows_cidades, cidade_base_norm, cidade_original=""):
@@ -565,8 +596,8 @@ def build_city_map_svg(city_points, width=760, height=420):
     if lat_span == 0:
         lat_span = 0.3
 
-    lon_margin = lon_span * 0.08
-    lat_margin = lat_span * 0.08
+    lon_margin = lon_span * 0.15
+    lat_margin = lat_span * 0.15
 
     min_lon -= lon_margin
     max_lon += lon_margin
@@ -600,12 +631,12 @@ def build_city_map_svg(city_points, width=760, height=420):
         )
 
         circles.append(
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="6.2" fill="{fill}" stroke="#ffffff" stroke-width="1.4">'
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="7" fill="{fill}" stroke="#ffffff" stroke-width="1.6">'
             f'<title>{title}</title></circle>'
         )
 
         labels.append(
-            f'<text x="{x + 7:.2f}" y="{y - 7:.2f}" font-size="9" fill="#334155">{h(cidade[:18])}</text>'
+            f'<text x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="9" fill="#334155">{h(cidade[:18])}</text>'
         )
 
     svg = f"""
@@ -993,6 +1024,36 @@ def get_base_structure(ws_base):
     return final_headers, data_rows
 
 
+def get_cached_base_structure(ws_base):
+    now = time.time()
+    cache = _CACHE["base_data"]
+    if cache["rows"] and (now - cache["ts"] < CACHE_TTL_BASE):
+        return cache["headers"], cache["rows"]
+
+    headers, rows = get_base_structure(ws_base)
+    cache["ts"] = now
+    cache["headers"] = headers
+    cache["rows"] = rows
+    return headers, rows
+
+
+def get_cached_listas(ws_listas):
+    now = time.time()
+    cache = _CACHE["listas_data"]
+    if cache["rows"] and (now - cache["ts"] < CACHE_TTL_LISTAS):
+        return cache["rows"]
+
+    rows = safe_get_all_records(ws_listas)
+    cache["ts"] = now
+    cache["rows"] = rows
+    return rows
+
+
+def invalidate_runtime_cache():
+    _CACHE["base_data"] = {"ts": 0, "headers": [], "rows": []}
+    _CACHE["listas_data"] = {"ts": 0, "rows": []}
+
+
 def try_get_rep_name(rep_code):
     rep_code = norm(rep_code)
     if not rep_code:
@@ -1001,7 +1062,7 @@ def try_get_rep_name(rep_code):
     try:
         sh = connect_gs()
         ws_base = sh.worksheet(WS_BASE)
-        headers, base_rows = safe_get_raw_rows(ws_base)
+        headers, base_rows = get_cached_base_structure(ws_base)
 
         rep_col = pick_col_flexible(headers, [
             "Codigo Representante", "Código Representante",
@@ -1142,6 +1203,9 @@ def get_gold_info_by_rep(rep_code):
 
 
 def build_debug_sheet_info(sh=None):
+    if not DEBUG_MODE:
+        return {"sheet_id": "", "spreadsheet_title": "", "worksheets": [], "ok": True}
+
     try:
         if sh is None:
             sh = connect_gs()
@@ -1210,14 +1274,11 @@ BASE_HTML = """
     .topbar { background: #ffffff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d1d5db; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
     .topbar-right { display: flex; align-items: center; gap: 10px; }
     .topbar-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #d1d5db; background: #f8fafc; }
-
     .container { padding: 12px; }
     .card { background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; padding: 14px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
-
     .rep-card { display: flex; align-items: center; gap: 16px; }
     .rep-photo { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 2px solid #d1d5db; background: #f8fafc; flex-shrink: 0; }
     .rep-photo-placeholder { width: 88px; height: 88px; border-radius: 50%; border: 2px solid #d1d5db; background: #f8fafc; display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 12px; text-align: center; flex-shrink: 0; padding: 6px; box-sizing: border-box; }
-
     label { font-size: 12px; color: #4b5563; display: block; margin-bottom: 4px; font-weight: 600; }
     input, select {
       width: 100%;
@@ -1229,13 +1290,11 @@ BASE_HTML = """
       box-sizing: border-box;
       font-family: Arial, sans-serif;
     }
-
     input:focus, select:focus {
       outline: none;
       border-color: #2563eb;
       box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
     }
-
     button, .btn-link {
       padding: 9px 13px;
       border-radius: 10px;
@@ -1250,67 +1309,37 @@ BASE_HTML = """
       justify-content: center;
       box-sizing: border-box;
     }
-
     button.secondary, .btn-link.secondary { background: #6b7280; }
     button.danger, .btn-link.danger { background: #dc2626; }
     .btn-link.dark { background: #111827; }
     .btn-link.orange { background: #f97316; }
-
     table { width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; }
     th, td { border-bottom: 1px solid #e5e7eb; padding: 8px; vertical-align: top; }
     th { position: sticky; top: 0; background: #f8fafc; color: #374151; text-align: left; z-index: 2; }
-
     .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-
     .msg { padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
     .ok { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
     .err { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
-
     .pill { padding: 3px 8px; border-radius: 999px; font-size: 12px; background: #f3f4f6; border: 1px solid #d1d5db; display: inline-block; color: #111827; }
     .small { color: #6b7280; font-size: 12px; }
     .nowrap { white-space: nowrap; }
     .money { font-variant-numeric: tabular-nums; }
-
     .login-wrap { min-height: calc(100vh - 90px); display: flex; align-items: center; justify-content: center; padding: 24px; }
     .login-card { width: 100%; max-width: 520px; text-align: center; }
     .login-logo { max-width: 220px; width: 100%; height: auto; margin: 0 auto 18px auto; display: block; }
     .login-title { margin-top: 0; margin-bottom: 6px; color: #111827; }
     .login-subtitle { margin-top: 0; margin-bottom: 20px; color: #6b7280; font-size: 14px; }
-
     .row-red { background: rgba(220,38,38,0.16); }
     .row-orange { background: rgba(249,115,22,0.16); }
     .row-yellow { background: rgba(234,179,8,0.18); }
     .row-green { background: rgba(34,197,94,0.16); }
     .row-blue { background: rgba(56,189,248,0.14); }
-
-    .debug-card {
-      background: #0f172a;
-      color: #e2e8f0;
-      border: 1px solid #1e293b;
-    }
-    .debug-card .line {
-      margin-bottom: 6px;
-      word-break: break-word;
-    }
-    .debug-card .title {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 12px;
-    }
-
-    .dash-page {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      align-items: center;
-    }
-
-    .a3-page {
-      width: min(100%, 1560px);
-      background: #ffffff;
-    }
-
+    .debug-card { background: #0f172a; color: #e2e8f0; border: 1px solid #1e293b; }
+    .debug-card .line { margin-bottom: 6px; word-break: break-word; }
+    .debug-card .title { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
+    .dash-page { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+    .a3-page { width: min(100%, 1560px); background: #ffffff; }
     .dash-shell {
       background: #ffffff;
       border: 1px solid #cfd4dc;
@@ -1323,7 +1352,6 @@ BASE_HTML = """
       box-sizing: border-box;
       overflow: hidden;
     }
-
     .dash-header {
       display: grid;
       grid-template-columns: 74px 1.35fr 1fr 64px;
@@ -1333,7 +1361,6 @@ BASE_HTML = """
       padding-bottom: 6px;
       margin-bottom: 8px;
     }
-
     .dash-avatar {
       width: 62px;
       height: 62px;
@@ -1342,7 +1369,6 @@ BASE_HTML = """
       border: 1px solid #d1d5db;
       background: #f8fafc;
     }
-
     .dash-avatar-placeholder {
       width: 62px;
       height: 62px;
@@ -1358,7 +1384,6 @@ BASE_HTML = """
       padding: 6px;
       box-sizing: border-box;
     }
-
     .dash-title-wrap { min-width: 0; }
     .dash-main-title {
       font-size: 17px;
@@ -1367,26 +1392,14 @@ BASE_HTML = """
       text-align: center;
       margin-bottom: 3px;
     }
-
-    .dash-subline {
-      font-size: 10px;
-      color: #374151;
-      line-height: 1.35;
-    }
-
-    .dash-meta-box {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 6px;
-    }
-
+    .dash-subline { font-size: 10px; color: #374151; line-height: 1.35; }
+    .dash-meta-box { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
     .dash-metric {
       border: 1px solid #d1d5db;
       border-radius: 8px;
       padding: 5px;
       background: #fafafa;
     }
-
     .dash-metric-label {
       font-size: 9px;
       color: #6b7280;
@@ -1394,46 +1407,12 @@ BASE_HTML = """
       text-transform: uppercase;
       margin-bottom: 2px;
     }
-
-    .dash-metric-value {
-      font-size: 15px;
-      font-weight: 800;
-      color: #111827;
-    }
-
-    .dash-kidy-logo {
-      max-width: 54px;
-      width: 100%;
-      height: auto;
-      justify-self: end;
-    }
-
-    .dash-row-top {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1.08fr;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-
-    .dash-row-bottom {
-      display: grid;
-      grid-template-columns: 1.22fr 0.92fr;
-      gap: 8px;
-      align-items: start;
-    }
-
-    .dash-right-stack {
-      display: grid;
-      grid-template-rows: auto auto;
-      gap: 8px;
-    }
-
-    .dash-panel {
-      border: 1px solid #9ca3af;
-      background: #ffffff;
-      overflow: hidden;
-    }
-
+    .dash-metric-value { font-size: 15px; font-weight: 800; color: #111827; }
+    .dash-kidy-logo { max-width: 54px; width: 100%; height: auto; justify-self: end; }
+    .dash-row-top { display: grid; grid-template-columns: 1fr 1fr 1.08fr; gap: 8px; margin-bottom: 8px; }
+    .dash-row-bottom { display: grid; grid-template-columns: 1.22fr 0.92fr; gap: 8px; align-items: start; }
+    .dash-right-stack { display: grid; grid-template-rows: auto auto; gap: 8px; }
+    .dash-panel { border: 1px solid #9ca3af; background: #ffffff; overflow: hidden; }
     .dash-panel-title {
       font-size: 11px;
       font-weight: 800;
@@ -1444,25 +1423,13 @@ BASE_HTML = """
       padding: 5px 8px;
       text-align: center;
     }
-
-    .dash-panel-body {
-      padding: 6px;
-      box-sizing: border-box;
-    }
-
-    .dash-table-mini {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 9px;
-    }
-
-    .dash-table-mini th,
-    .dash-table-mini td {
+    .dash-panel-body { padding: 6px; box-sizing: border-box; }
+    .dash-table-mini { width: 100%; border-collapse: collapse; font-size: 9px; }
+    .dash-table-mini th, .dash-table-mini td {
       border: 1px solid #d1d5db;
       padding: 2px 4px;
       line-height: 1.15;
     }
-
     .dash-table-mini th {
       background: #e5e7eb;
       font-weight: 700;
@@ -1470,21 +1437,13 @@ BASE_HTML = """
       font-size: 8px;
       position: static;
     }
-
-    .dash-table-big {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 9px;
-    }
-
-    .dash-table-big th,
-    .dash-table-big td {
+    .dash-table-big { width: 100%; border-collapse: collapse; font-size: 9px; }
+    .dash-table-big th, .dash-table-big td {
       border: 1px solid #d1d5db;
       padding: 3px 4px;
       line-height: 1.12;
       vertical-align: middle;
     }
-
     .dash-table-big th {
       background: #e5e7eb;
       font-weight: 700;
@@ -1492,7 +1451,6 @@ BASE_HTML = """
       font-size: 8px;
       position: static;
     }
-
     .dash-map-placeholder {
       min-height: 285px;
       background: #ecfeff;
@@ -1507,7 +1465,6 @@ BASE_HTML = """
       padding: 10px;
       box-sizing: border-box;
     }
-
     .dash-gold-box {
       min-height: 58px;
       background: #fef3c7;
@@ -1524,7 +1481,6 @@ BASE_HTML = """
       flex-direction: column;
       gap: 4px;
     }
-
     .dash-coverage-box {
       min-height: 82px;
       background: #f8fafc;
@@ -1539,7 +1495,6 @@ BASE_HTML = """
       padding: 8px;
       box-sizing: border-box;
     }
-
     .dash-summary-box {
       min-height: 130px;
       background: #f8fafc;
@@ -1554,19 +1509,8 @@ BASE_HTML = """
       padding: 8px;
       box-sizing: border-box;
     }
-
-    .print-toolbar {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .print-note {
-      font-size: 11px;
-      color: #6b7280;
-    }
-
+    .print-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .print-note { font-size: 11px; color: #6b7280; }
     .status-chip {
       display: inline-block;
       min-width: 64px;
@@ -1577,14 +1521,12 @@ BASE_HTML = """
       font-weight: 700;
       border: 1px solid rgba(0,0,0,0.08);
     }
-
     .chip-red { background: rgba(220,38,38,0.18); color: #991b1b; }
     .chip-orange { background: rgba(249,115,22,0.18); color: #9a3412; }
     .chip-yellow { background: rgba(234,179,8,0.22); color: #854d0e; }
     .chip-green { background: rgba(34,197,94,0.18); color: #166534; }
     .chip-blue { background: rgba(56,189,248,0.18); color: #0c4a6e; }
     .chip-gray { background: #e5e7eb; color: #374151; }
-
     .agenda-wrapper { overflow:auto; width:100%; }
     .agenda-table { width:100%; border-collapse:collapse; font-size:10px; }
     .agenda-table th, .agenda-table td {
@@ -1610,10 +1552,7 @@ BASE_HTML = """
       font-size:10px;
       box-sizing:border-box;
     }
-    .agenda-valor {
-      min-width:58px;
-      text-align:center;
-    }
+    .agenda-valor { min-width:58px; text-align:center; }
     .agenda-topbar {
       display:flex;
       justify-content:space-between;
@@ -1622,11 +1561,7 @@ BASE_HTML = """
       margin-bottom:6px;
       flex-wrap:wrap;
     }
-    .agenda-rep-label {
-      font-size:11px;
-      color:#374151;
-      font-weight:700;
-    }
+    .agenda-rep-label { font-size:11px; color:#374151; font-weight:700; }
     .agenda-save-btn {
       background:#f97316;
       padding:8px 12px;
@@ -1636,77 +1571,24 @@ BASE_HTML = """
       cursor:pointer;
       font-weight:700;
     }
-
     .no-break { page-break-inside: avoid; break-inside: avoid; }
-
-    @page {
-      size: A3 landscape;
-      margin: 4mm;
-    }
-
+    @page { size: A3 landscape; margin: 4mm; }
     @media print {
-      html, body {
-        width: 420mm;
-        height: 297mm;
-        background: #ffffff !important;
-      }
-
-      .topbar,
-      .no-print,
-      .msg {
-        display: none !important;
-      }
-
-      .container {
-        padding: 0 !important;
-        margin: 0 !important;
-        width: 100%;
-      }
-
-      .dash-page {
-        gap: 0 !important;
-        width: 100%;
-      }
-
-      .a3-page {
-        width: 412mm !important;
-        height: 288mm !important;
-        margin: 0 auto !important;
-        overflow: hidden !important;
-      }
-
-      .dash-shell {
-        width: 100% !important;
-        height: 100% !important;
-        padding: 6mm !important;
-        border-radius: 0 !important;
-        box-shadow: none !important;
-        overflow: hidden !important;
-      }
-
-      .dash-header,
-      .dash-row-top,
-      .dash-row-bottom,
-      .dash-right-stack,
-      .dash-panel,
-      .dash-panel-body {
+      html, body { width: 420mm; height: 297mm; background: #ffffff !important; }
+      .topbar, .no-print, .msg { display: none !important; }
+      .container { padding: 0 !important; margin: 0 !important; width: 100%; }
+      .dash-page { gap: 0 !important; width: 100%; }
+      .a3-page { width: 412mm !important; height: 288mm !important; margin: 0 auto !important; overflow: hidden !important; }
+      .dash-shell { width: 100% !important; height: 100% !important; padding: 6mm !important; border-radius: 0 !important; box-shadow: none !important; overflow: hidden !important; }
+      .dash-header, .dash-row-top, .dash-row-bottom, .dash-right-stack, .dash-panel, .dash-panel-body {
         break-inside: avoid !important;
         page-break-inside: avoid !important;
       }
-
-      .dash-table-mini,
-      .dash-table-big,
-      .agenda-table {
-        font-size: 8px !important;
-      }
-
-      .dash-table-mini th, .dash-table-mini td,
-      .dash-table-big th, .dash-table-big td,
-      .agenda-table th, .agenda-table td {
+      .dash-table-mini, .dash-table-big, .agenda-table { font-size: 8px !important; }
+      .dash-table-mini th, .dash-table-mini td, .dash-table-big th, .dash-table-big td, .agenda-table th, .agenda-table td {
         padding: 2px 3px !important;
       }
     }
-
     @media (max-width: 1200px) {
       .dash-header { grid-template-columns: 74px 1fr; }
       .dash-meta-box { grid-column: 1 / -1; }
@@ -1887,7 +1769,7 @@ def admin_dashboard():
 
         try:
             ws_base = sh.worksheet(WS_BASE)
-            headers, base_rows = get_base_structure(ws_base)
+            headers, base_rows = get_cached_base_structure(ws_base)
         except Exception:
             headers, base_rows = [], []
 
@@ -1960,81 +1842,185 @@ def admin_dashboard():
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
 
         ranking_2026 = []
-        if grupo_col and t2026_col:
-            for r in filtered_rows:
-                nome = norm(r.get(grupo_col, ""))
-                valor = parse_number_br(r.get(t2026_col, ""))
-                if nome and valor > 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
-                    ranking_2026.append({
-                        "grupo": nome,
-                        "valor": valor,
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
-                    })
-            ranking_2026.sort(key=lambda x: x["valor"], reverse=True)
-            ranking_2026 = ranking_2026[:10]
-
         ranking_2025 = []
-        if grupo_col and t2025_col:
-            for r in filtered_rows:
-                nome = norm(r.get(grupo_col, ""))
-                valor = parse_number_br(r.get(t2025_col, ""))
-                if nome and valor > 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
-                    ranking_2025.append({
-                        "grupo": nome,
-                        "valor": valor,
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
-                    })
-            ranking_2025.sort(key=lambda x: x["valor"], reverse=True)
-            ranking_2025 = ranking_2025[:10]
-
         clientes_sem_compra = []
-        if key_col and grupo_col and t2026_col:
-            for r in filtered_rows:
-                v2026 = parse_number_br(r.get(t2026_col, ""))
-                if v2026 == 0:
-                    status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                        r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
-                    )
-                    clientes_sem_compra.append({
-                        "codigo": norm(r.get(key_col, "")),
-                        "grupo": norm(r.get(grupo_col, "")),
-                        "t2024": parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0,
-                        "t2025": parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0,
-                        "t2026": parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0,
-                        "data": norm(r.get(data_agenda_col, "")) if data_agenda_col else "",
-                        "mes": norm(r.get(mes_col, "")) if mes_col else "",
-                        "semana": norm(r.get(semana_col, "")) if semana_col else "",
-                        "status": norm(r.get(status_cliente_col, "")) if status_cliente_col else "",
-                        "status_cor": status_cor_final,
-                        "row_class": row_class
-                    })
-
-            clientes_sem_compra.sort(
-                key=lambda x: (x["t2025"], x["t2024"], x["grupo"]),
-                reverse=True
-            )
-
         agenda_semanal_html = render_agenda_semana_html(
             rep_code=header_rep_code,
             sup_sel=sup_sel,
             rep_sel=rep_sel
         )
-
         gold_info = get_gold_info_by_rep(header_rep_code)
         total_gold = gold_info.get("total_gold", 0)
 
-        total_carteira = len(filtered_rows)
-        total_sem_compra = len(clientes_sem_compra)
-        total_com_compra = max(total_carteira - total_sem_compra, 0)
-        cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
+        mapa_svg_html = """
+        <div class="dash-map-placeholder">
+          Selecione um representante para montar o mapa da região.
+        </div>
+        """
+        mapa_info_msg = ""
+        cidades_mapa_qtd = 0
+        cidades_sem_coordenada = 0
+
+        map_debug = {
+            "municipios_url": MUNICIPIOS_URL,
+            "cidade_muni_col": "nome",
+            "lat_col": "latitude",
+            "lon_col": "longitude",
+        }
+
+        if header_rep_code:
+            if grupo_col and t2026_col:
+                for r in filtered_rows:
+                    nome = norm(r.get(grupo_col, ""))
+                    valor = parse_number_br(r.get(t2026_col, ""))
+                    if nome and valor > 0:
+                        status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                            r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
+                        )
+                        ranking_2026.append({
+                            "grupo": nome,
+                            "valor": valor,
+                            "status_cor": status_cor_final,
+                            "row_class": row_class
+                        })
+                ranking_2026.sort(key=lambda x: x["valor"], reverse=True)
+                ranking_2026 = ranking_2026[:10]
+
+            if grupo_col and t2025_col:
+                for r in filtered_rows:
+                    nome = norm(r.get(grupo_col, ""))
+                    valor = parse_number_br(r.get(t2025_col, ""))
+                    if nome and valor > 0:
+                        status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                            r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
+                        )
+                        ranking_2025.append({
+                            "grupo": nome,
+                            "valor": valor,
+                            "status_cor": status_cor_final,
+                            "row_class": row_class
+                        })
+                ranking_2025.sort(key=lambda x: x["valor"], reverse=True)
+                ranking_2025 = ranking_2025[:10]
+
+            if key_col and grupo_col and t2026_col:
+                for r in filtered_rows:
+                    v2026 = parse_number_br(r.get(t2026_col, ""))
+                    if v2026 == 0:
+                        status_cor_final, row_class, _ = resolve_status_cor_from_base(
+                            r, status_cor_col=status_cor_col, cliente_novo_col=cliente_novo_col
+                        )
+                        clientes_sem_compra.append({
+                            "codigo": norm(r.get(key_col, "")),
+                            "grupo": norm(r.get(grupo_col, "")),
+                            "t2024": parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0,
+                            "t2025": parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0,
+                            "t2026": parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0,
+                            "data": norm(r.get(data_agenda_col, "")) if data_agenda_col else "",
+                            "mes": norm(r.get(mes_col, "")) if mes_col else "",
+                            "semana": norm(r.get(semana_col, "")) if semana_col else "",
+                            "status": norm(r.get(status_cliente_col, "")) if status_cliente_col else "",
+                            "status_cor": status_cor_final,
+                            "row_class": row_class
+                        })
+
+                clientes_sem_compra.sort(
+                    key=lambda x: (x["t2025"], x["t2024"], x["grupo"]),
+                    reverse=True
+                )
+
+            try:
+                rows_cidades, erro_muni = load_public_municipios()
+                if erro_muni:
+                    raise RuntimeError(erro_muni)
+
+                if not rows_cidades:
+                    raise RuntimeError("Nenhum município foi carregado da URL pública.")
+
+                if not cidade_col:
+                    raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
+
+                vendas_por_cidade = {}
+                for r in filtered_rows:
+                    cidade_original = norm(r.get(cidade_col, ""))
+                    cidade_base = normalize_city_key(cidade_original)
+
+                    if not cidade_base:
+                        continue
+
+                    total_2024 = parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0
+                    total_2025 = parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0
+                    total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
+
+                    if cidade_base not in vendas_por_cidade:
+                        vendas_por_cidade[cidade_base] = {
+                            "cidade_original": cidade_original,
+                            "total_2024": 0.0,
+                            "total_2025": 0.0,
+                            "total_2026": 0.0,
+                        }
+
+                    vendas_por_cidade[cidade_base]["total_2024"] += total_2024
+                    vendas_por_cidade[cidade_base]["total_2025"] += total_2025
+                    vendas_por_cidade[cidade_base]["total_2026"] += total_2026
+
+                city_points = []
+
+                for cidade_key, dados_cidade in vendas_por_cidade.items():
+                    cidade_original = dados_cidade["cidade_original"]
+
+                    lat, lon, nome_municipio = find_city_coords_public(
+                        rows_cidades,
+                        cidade_key,
+                        cidade_original
+                    )
+
+                    if lat is None or lon is None:
+                        cidades_sem_coordenada += 1
+                        continue
+
+                    total_2024 = dados_cidade["total_2024"]
+                    total_2025 = dados_cidade["total_2025"]
+                    total_2026 = dados_cidade["total_2026"]
+                    total_outros = total_2024 + total_2025
+
+                    if total_2026 > 0:
+                        fill = "#16a34a"
+                        status_txt = "Vendas em 2026"
+                    elif total_outros > 0:
+                        fill = "#eab308"
+                        status_txt = "Vendas em outros períodos"
+                    else:
+                        fill = "#dc2626"
+                        status_txt = "Sem vendas"
+
+                    city_points.append({
+                        "cidade": cidade_original or nome_municipio,
+                        "lat": lat,
+                        "lon": lon,
+                        "total_2024": total_2024,
+                        "total_2025": total_2025,
+                        "total_2026": total_2026,
+                        "fill": fill,
+                        "status_txt": status_txt
+                    })
+
+                cidades_mapa_qtd = len(city_points)
+                mapa_svg_html = build_city_map_svg(city_points)
+
+                if not city_points:
+                    mapa_info_msg = "Nenhuma cidade da carteira encontrou coordenadas no arquivo público."
+                elif cidades_sem_coordenada > 0:
+                    mapa_info_msg = f"{cidades_sem_coordenada} cidade(s) da carteira não encontraram coordenadas."
+
+            except Exception as e:
+                erro_txt = norm(str(e))
+                mapa_svg_html = f"""
+                <div class="dash-map-placeholder">
+                  Erro ao montar mapa.<br><br>
+                  {h(erro_txt)}
+                </div>
+                """
 
         def chip_class(status_cor):
             s = normalize_text_for_match(status_cor)
@@ -2082,7 +2068,7 @@ def admin_dashboard():
         else:
             ranking_2026_html = """
             <div class="dash-map-placeholder" style="min-height:120px;">
-              Sem dados para o Top 10 de 2026
+              Selecione um representante para o Top 10 de 2026
             </div>
             """
 
@@ -2118,7 +2104,7 @@ def admin_dashboard():
         else:
             ranking_2025_html = """
             <div class="dash-map-placeholder" style="min-height:120px;">
-              Sem dados para o Top 10 de 2025
+              Selecione um representante para o Top 10 de 2025
             </div>
             """
 
@@ -2162,112 +2148,7 @@ def admin_dashboard():
         else:
             clientes_sem_compra_html = """
             <div class="dash-map-placeholder" style="min-height:220px;">
-              Nenhum cliente sem compra encontrado pela regra atual (Total 2026 = 0)
-            </div>
-            """
-
-        mapa_svg_html = ""
-        mapa_info_msg = ""
-        cidades_mapa_qtd = 0
-        cidades_sem_coordenada = 0
-
-        map_debug = {
-            "municipios_url": MUNICIPIOS_URL,
-            "cidade_muni_col": "nome",
-            "lat_col": "latitude",
-            "lon_col": "longitude",
-        }
-
-        try:
-            rows_cidades, erro_muni = load_public_municipios()
-            if erro_muni:
-                raise RuntimeError(erro_muni)
-
-            if not rows_cidades:
-                raise RuntimeError("Nenhum município foi carregado da URL pública.")
-
-            if not cidade_col:
-                raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
-
-            vendas_por_cidade = {}
-            for r in filtered_rows:
-                cidade_original = norm(r.get(cidade_col, ""))
-                cidade_base = normalize_city_key(cidade_original)
-
-                if not cidade_base:
-                    continue
-
-                total_2024 = parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0
-                total_2025 = parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0
-                total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
-
-                if cidade_base not in vendas_por_cidade:
-                    vendas_por_cidade[cidade_base] = {
-                        "cidade_original": cidade_original,
-                        "total_2024": 0.0,
-                        "total_2025": 0.0,
-                        "total_2026": 0.0,
-                    }
-
-                vendas_por_cidade[cidade_base]["total_2024"] += total_2024
-                vendas_por_cidade[cidade_base]["total_2025"] += total_2025
-                vendas_por_cidade[cidade_base]["total_2026"] += total_2026
-
-            city_points = []
-
-            for cidade_key, dados_cidade in vendas_por_cidade.items():
-                cidade_original = dados_cidade["cidade_original"]
-
-                lat, lon, nome_municipio = find_city_coords_public(
-                    rows_cidades,
-                    cidade_key,
-                    cidade_original
-                )
-
-                if lat is None or lon is None:
-                    cidades_sem_coordenada += 1
-                    continue
-
-                total_2024 = dados_cidade["total_2024"]
-                total_2025 = dados_cidade["total_2025"]
-                total_2026 = dados_cidade["total_2026"]
-                total_outros = total_2024 + total_2025
-
-                if total_2026 > 0:
-                    fill = "#16a34a"
-                    status_txt = "Vendas em 2026"
-                elif total_outros > 0:
-                    fill = "#eab308"
-                    status_txt = "Vendas em outros períodos"
-                else:
-                    fill = "#dc2626"
-                    status_txt = "Sem vendas"
-
-                city_points.append({
-                    "cidade": cidade_original or nome_municipio,
-                    "lat": lat,
-                    "lon": lon,
-                    "total_2024": total_2024,
-                    "total_2025": total_2025,
-                    "total_2026": total_2026,
-                    "fill": fill,
-                    "status_txt": status_txt
-                })
-
-            cidades_mapa_qtd = len(city_points)
-            mapa_svg_html = build_city_map_svg(city_points)
-
-            if not city_points:
-                mapa_info_msg = "Nenhuma cidade da carteira encontrou coordenadas no arquivo público."
-            elif cidades_sem_coordenada > 0:
-                mapa_info_msg = f"{cidades_sem_coordenada} cidade(s) da carteira não encontraram coordenadas."
-
-        except Exception as e:
-            erro_txt = norm(str(e))
-            mapa_svg_html = f"""
-            <div class="dash-map-placeholder">
-              Erro ao montar mapa.<br><br>
-              {h(erro_txt)}
+              Selecione um representante para listar clientes sem compra
             </div>
             """
 
@@ -2327,6 +2208,11 @@ def admin_dashboard():
             </div>
             """
 
+        total_carteira = len(filtered_rows) if header_rep_code else 0
+        total_sem_compra = len(clientes_sem_compra) if header_rep_code else 0
+        total_com_compra = max(total_carteira - total_sem_compra, 0)
+        cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
+
         body = f"""
         <div class="dash-page">
 
@@ -2344,7 +2230,7 @@ def admin_dashboard():
                 <div>
                   <label>Representante</label>
                   <select name="rep">
-                    <option value="">(Todos)</option>
+                    <option value="">(Selecione)</option>
                     {''.join([f"<option value='{h(r)}' {'selected' if norm(r) == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
                   </select>
                 </div>
@@ -2376,8 +2262,8 @@ def admin_dashboard():
 
                 <div class="dash-title-wrap">
                   <div class="dash-main-title">Acompanhamento de Representante</div>
-                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "Selecione um representante")}</div>
+                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "-")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "-")}</div>
                   <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
                 </div>
 
@@ -2582,13 +2468,8 @@ def dashboard():
             body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_LISTAS)}</div>"
         )
 
-    try:
-        ensure_edicoes_worksheet(sh)
-    except Exception as e:
-        flash(str(e), "err")
-
-    headers, base_rows = get_base_structure(ws_base)
-    lista_rows = safe_get_all_records(ws_listas)
+    headers, base_rows = get_cached_base_structure(ws_base)
+    lista_rows = get_cached_listas(ws_listas)
 
     key_col = pick_col_flexible(headers, [
         "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -3066,6 +2947,8 @@ def salvar():
             result_txt = "BASE OK / EDICOES OK"
         else:
             result_txt = "BASE OK / EDICOES NÃO DISPONÍVEL"
+
+        invalidate_runtime_cache()
 
         set_last_save_debug({
             "row_num": row_num,
