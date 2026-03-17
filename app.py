@@ -636,6 +636,30 @@ def build_city_map_svg(city_points, width=760, height=420):
     return svg
 
 
+def get_optional_worksheet(sh, ws_name):
+    try:
+        return sh.worksheet(ws_name)
+    except WorksheetNotFound:
+        return None
+    except Exception:
+        return None
+
+
+def render_error_page(subtitle, message, user_photo_url=""):
+    body = f"<div class='card'><b>{h(message)}</b></div>"
+    return render_template_string(
+        BASE_HTML,
+        title=APP_TITLE,
+        subtitle=subtitle,
+        logged=require_login(),
+        user_login=session.get("user_login", ""),
+        user_name=session.get("rep_name", ""),
+        user_type=session.get("user_type", ""),
+        user_photo_url=user_photo_url,
+        body=body
+    )
+
+
 # =========================
 # AGENDA - FUNÇÕES
 # =========================
@@ -1883,13 +1907,17 @@ def admin_dashboard():
 
     try:
         sh = connect_gs()
+    except Exception as e:
+        return render_error_page("Dashboard Admin", f"Erro ao conectar na planilha principal: {norm(str(e))}")
+
+    try:
         debug_info = build_debug_sheet_info(sh)
 
         try:
             ws_base = sh.worksheet(WS_BASE)
             headers, base_rows = get_base_structure(ws_base)
-        except Exception:
-            headers, base_rows = [], []
+        except Exception as e:
+            return render_error_page("Dashboard Admin", f"Erro ao abrir a aba BASE: {norm(str(e))}")
 
         key_col = pick_col_flexible(headers, [
             "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -2538,8 +2566,7 @@ def admin_dashboard():
         )
 
     except Exception as e:
-        flash(f"Erro ao abrir dashboard admin: {norm(str(e))}", "err")
-        return redirect(url_for("dashboard"))
+        return render_error_page("Dashboard Admin", f"Erro ao abrir dashboard admin: {norm(str(e))}")
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -2548,47 +2575,38 @@ def dashboard():
         flash("Faça login para continuar.", "err")
         return redirect(url_for("login"))
 
-    sh = connect_gs()
+    current_user_photo = ""
+    if session.get("user_type") == "rep":
+        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
+    try:
+        sh = connect_gs()
+    except Exception as e:
+        return render_error_page("Erro", f"Erro ao conectar na planilha principal: {norm(str(e))}", current_user_photo)
+
     debug_info = build_debug_sheet_info(sh)
     last_save = get_last_save_debug()
 
     try:
         ws_base = sh.worksheet(WS_BASE)
     except WorksheetNotFound:
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_BASE)}</div>"
-        )
+        return render_error_page("Erro", f"Aba não encontrada: {WS_BASE}", current_user_photo)
+    except Exception as e:
+        return render_error_page("Erro", f"Erro ao abrir aba BASE: {norm(str(e))}", current_user_photo)
 
-    try:
-        ws_listas = sh.worksheet(WS_LISTAS)
-    except WorksheetNotFound:
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_LISTAS)}</div>"
-        )
+    ws_listas = get_optional_worksheet(sh, WS_LISTAS)
 
     try:
         ensure_edicoes_worksheet(sh)
     except Exception as e:
         flash(str(e), "err")
 
-    headers, base_rows = get_base_structure(ws_base)
-    lista_rows = safe_get_all_records(ws_listas)
+    try:
+        headers, base_rows = get_base_structure(ws_base)
+    except Exception as e:
+        return render_error_page("Erro", f"Erro ao ler estrutura da BASE: {norm(str(e))}", current_user_photo)
+
+    lista_rows = safe_get_all_records(ws_listas) if ws_listas else []
 
     key_col = pick_col_flexible(headers, [
         "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -2681,10 +2699,6 @@ def dashboard():
 
     out_rows = prepared_rows[:PAGE_SIZE]
 
-    current_user_photo = ""
-    if session.get("user_type") == "rep":
-        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
-
     rep_card_html = ""
     selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
 
@@ -2745,6 +2759,8 @@ def dashboard():
         last_obs = h(last_save.get("observacoes", ""))
         last_result = h(last_save.get("result", ""))
 
+        listas_status = "OK" if ws_listas else "FALLBACK DEFAULT"
+
         debug_html = f"""
         <div class="card debug-card">
           <div class="title">DEBUG CONEXÃO / GRAVAÇÃO</div>
@@ -2754,6 +2770,7 @@ def dashboard():
           <div class="line"><b>USUÁRIO:</b> {h(session.get("user_login", ""))} ({h(session.get("user_type", ""))})</div>
           <div class="line"><b>REPRESENTANTE LOGADO:</b> {h(session.get("rep_code", ""))}</div>
           <div class="line"><b>REPRESENTANTE FILTRADO:</b> {h(selected_rep_code)}</div>
+          <div class="line"><b>WS_LISTAS:</b> {h(WS_LISTAS)} ({h(listas_status)})</div>
           <hr style="border-color:#334155;">
           <div class="line"><b>ÚLTIMA LINHA GRAVADA:</b> {last_row}</div>
           <div class="line"><b>ÚLTIMO CLIENT_KEY:</b> {last_ck}</div>
