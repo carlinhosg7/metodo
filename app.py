@@ -11,7 +11,7 @@ from flask import Flask, request, redirect, url_for, session, render_template_st
 
 import gspread
 from google.oauth2.service_account import Credentials
-from gspread.exceptions import WorksheetNotFound, APIError
+from gspread.exceptions import WorksheetNotFound
 from gspread.utils import rowcol_to_a1
 
 
@@ -35,7 +35,6 @@ MUNICIPIOS_SHEET_ID = os.getenv("MUNICIPIOS_SHEET_ID", "").strip()
 WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
 
 # ===== CLIENTES GOLD =====
-# Pode informar GOLD_SHEET_ID ou GOLD_SHEET_URL
 GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
 GOLD_SHEET_URL = os.getenv("GOLD_SHEET_URL", "").strip()
 GOLD_WS = os.getenv("GOLD_WS", "Tab").strip()
@@ -896,12 +895,15 @@ def try_get_rep_name(rep_code):
 
 def get_gold_info_by_rep(rep_code):
     rep_code = norm(rep_code)
+
     info = {
         "total_gold": 0,
         "gold_rows": [],
         "sheet_title": "",
         "worksheet_title": "",
         "rep_col": "",
+        "codigo_col": "",
+        "cliente_col": "",
         "grupo_col": "",
         "supervisor_col": "",
         "ok": False,
@@ -940,12 +942,38 @@ def get_gold_info_by_rep(rep_code):
             "REP"
         ])
 
-        grupo_gold_col = pick_col_flexible(headers_gold, [
-            "Grupo Cliente / Cliente",
-            "Grupo Cliente",
+        codigo_gold_col = pick_col_flexible(headers_gold, [
+            "Codigo",
+            "Código",
+            "Codigo Cliente",
+            "Código Cliente",
+            "Codigo Grupo Cliente",
+            "Código Grupo Cliente",
+            "Cod Cliente",
+            "Cod. Cliente",
+            "Cod Grupo Cliente",
+            "Cod. Grupo Cliente",
+            "Cliente Codigo",
+            "Cliente Código"
+        ])
+
+        cliente_gold_col = pick_col_flexible(headers_gold, [
+            "Cliente / Grupo",
+            "Cliente Grupo",
             "Cliente",
             "Nome Cliente",
-            "Grupo"
+            "Razao Social",
+            "Razão Social",
+            "Fantasia",
+            "Nome"
+        ])
+
+        grupo_gold_col = pick_col_flexible(headers_gold, [
+            "Grupo Cliente / Cliente",
+            "Grupo Cliente Cliente",
+            "Grupo Cliente",
+            "Grupo",
+            "Cliente / Grupo"
         ])
 
         supervisor_gold_col = pick_col_flexible(headers_gold, [
@@ -956,6 +984,8 @@ def get_gold_info_by_rep(rep_code):
         ])
 
         info["rep_col"] = rep_gold_col or ""
+        info["codigo_col"] = codigo_gold_col or ""
+        info["cliente_col"] = cliente_gold_col or ""
         info["grupo_col"] = grupo_gold_col or ""
         info["supervisor_col"] = supervisor_gold_col or ""
 
@@ -968,12 +998,36 @@ def get_gold_info_by_rep(rep_code):
         gold_rows = []
         for row in rows_gold:
             rep_val = norm(row.get(rep_gold_col, ""))
-            if rep_val == rep_code:
+
+            rep_val_num = rep_val.lstrip("0") or "0"
+            rep_code_num = rep_code.lstrip("0") or "0"
+
+            if rep_val == rep_code or rep_val_num == rep_code_num:
+                codigo_val = norm(row.get(codigo_gold_col, "")) if codigo_gold_col else ""
+                cliente_val = norm(row.get(cliente_gold_col, "")) if cliente_gold_col else ""
+                grupo_val = norm(row.get(grupo_gold_col, "")) if grupo_gold_col else ""
+                supervisor_val = norm(row.get(supervisor_gold_col, "")) if supervisor_gold_col else ""
+
+                if not cliente_val and grupo_val:
+                    cliente_val = grupo_val
+                if not grupo_val and cliente_val:
+                    grupo_val = cliente_val
+
                 gold_rows.append({
-                    "grupo": norm(row.get(grupo_gold_col, "")) if grupo_gold_col else "",
+                    "codigo": codigo_val,
+                    "cliente_grupo": cliente_val,
+                    "grupo_cliente_cliente": grupo_val,
                     "rep": rep_val,
-                    "supervisor": norm(row.get(supervisor_gold_col, "")) if supervisor_gold_col else ""
+                    "supervisor": supervisor_val
                 })
+
+        gold_rows.sort(
+            key=lambda x: (
+                norm(x.get("cliente_grupo", "")),
+                norm(x.get("grupo_cliente_cliente", "")),
+                norm(x.get("codigo", ""))
+            )
+        )
 
         info["gold_rows"] = gold_rows
         info["total_gold"] = len(gold_rows)
@@ -2107,6 +2161,8 @@ def admin_dashboard():
             """
 
         gold_subinfo = ""
+        gold_table_html = ""
+
         if not header_rep_code:
             gold_subinfo = """
             <div style="font-size:10px; color:#92400e;">
@@ -2119,6 +2175,40 @@ def admin_dashboard():
               Rep: <b>{h(header_rep_code)}</b> | Aba GOLD: <b>{h(gold_info.get('worksheet_title', GOLD_WS))}</b>
             </div>
             """
+
+            if gold_info.get("gold_rows"):
+                gold_rows_html = []
+                for item in gold_info.get("gold_rows", [])[:20]:
+                    gold_rows_html.append(f"""
+                    <tr>
+                      <td>{h(item.get('codigo', ''))}</td>
+                      <td>{h(item.get('cliente_grupo', ''))}</td>
+                      <td>{h(item.get('grupo_cliente_cliente', ''))}</td>
+                    </tr>
+                    """)
+
+                gold_table_html = f"""
+                <div style="margin-top:8px; max-height:180px; overflow:auto; width:100%;">
+                  <table class="dash-table-mini">
+                    <thead>
+                      <tr>
+                        <th style="width:90px;">Código</th>
+                        <th>Cliente / Grupo</th>
+                        <th>Grupo Cliente / Cliente</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {''.join(gold_rows_html)}
+                    </tbody>
+                  </table>
+                </div>
+                """
+            else:
+                gold_table_html = """
+                <div style="margin-top:8px; font-size:10px; color:#92400e;">
+                  Nenhum cliente GOLD encontrado para este representante.
+                </div>
+                """
         elif gold_info.get("error"):
             gold_subinfo = f"""
             <div style="font-size:10px; color:#b91c1c;">
@@ -2243,9 +2333,10 @@ def admin_dashboard():
                   <div class="dash-panel">
                     <div class="dash-panel-title">Clientes Gold</div>
                     <div class="dash-panel-body">
-                      <div class="dash-gold-box">
-                        <div>Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                      <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
+                        <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
                         {gold_subinfo}
+                        {gold_table_html}
                       </div>
                     </div>
                   </div>
@@ -2313,6 +2404,8 @@ def admin_dashboard():
               <div class="line"><b>GOLD SHEET TITLE:</b> {h(gold_info.get('sheet_title', ''))}</div>
               <div class="line"><b>GOLD WORKSHEET TITLE:</b> {h(gold_info.get('worksheet_title', ''))}</div>
               <div class="line"><b>GOLD REP COL:</b> {h(gold_info.get('rep_col', ''))}</div>
+              <div class="line"><b>GOLD CODIGO COL:</b> {h(gold_info.get('codigo_col', ''))}</div>
+              <div class="line"><b>GOLD CLIENTE COL:</b> {h(gold_info.get('cliente_col', ''))}</div>
               <div class="line"><b>GOLD GRUPO COL:</b> {h(gold_info.get('grupo_col', ''))}</div>
               <div class="line"><b>GOLD SUPERVISOR COL:</b> {h(gold_info.get('supervisor_col', ''))}</div>
               <div class="line"><b>TOTAL GOLD:</b> {h(gold_info.get('total_gold', 0))}</div>
