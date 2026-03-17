@@ -34,6 +34,10 @@ WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 MUNICIPIOS_SHEET_ID = os.getenv("MUNICIPIOS_SHEET_ID", "").strip()
 WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
 
+# ===== NOVO: CLIENTES GOLD =====
+GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "1qmqkdFL5EnQowDL-n5Kbehch-H0CVLkU").strip()
+GOLD_WS = os.getenv("GOLD_WS", "Tab").strip()
+
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
 
@@ -696,6 +700,13 @@ def connect_municipios_gs():
     return connect_gs_by_key(target_id)
 
 
+# ===== NOVO: CONEXÃO CLIENTES GOLD =====
+def connect_gold_gs():
+    if not GOLD_SHEET_ID:
+        raise RuntimeError("Faltou GOLD_SHEET_ID nas variáveis de ambiente.")
+    return connect_gs_by_key(GOLD_SHEET_ID)
+
+
 def safe_get_all_records(ws):
     try:
         return ws.get_all_records()
@@ -840,6 +851,90 @@ def try_get_rep_name(rep_code):
         return ""
     except Exception:
         return ""
+
+
+# ===== NOVO: LEITURA CLIENTES GOLD =====
+def get_gold_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+    info = {
+        "total_gold": 0,
+        "gold_rows": [],
+        "sheet_title": "",
+        "worksheet_title": "",
+        "rep_col": "",
+        "grupo_col": "",
+        "supervisor_col": "",
+        "ok": False,
+        "error": ""
+    }
+
+    if not rep_code:
+        return info
+
+    try:
+        sh_gold = connect_gold_gs()
+        info["sheet_title"] = norm(getattr(sh_gold, "title", ""))
+
+        ws_gold = sh_gold.worksheet(GOLD_WS)
+        info["worksheet_title"] = norm(getattr(ws_gold, "title", ""))
+
+        headers_gold, rows_gold = safe_get_raw_rows(ws_gold)
+        if not headers_gold:
+            raise RuntimeError("A aba de clientes gold está vazia ou sem cabeçalho.")
+
+        rep_gold_col = pick_col_flexible(headers_gold, [
+            "Cod. Representante",
+            "Cod Representante",
+            "Código Representante",
+            "Codigo Representante",
+            "Representante",
+            "COD_REP",
+            "REP"
+        ])
+
+        grupo_gold_col = pick_col_flexible(headers_gold, [
+            "Grupo Cliente / Cliente",
+            "Grupo Cliente",
+            "Cliente",
+            "Nome Cliente",
+            "Grupo"
+        ])
+
+        supervisor_gold_col = pick_col_flexible(headers_gold, [
+            "Supervisor",
+            "Cod. Supervisor",
+            "Código Supervisor",
+            "Codigo Supervisor"
+        ])
+
+        info["rep_col"] = rep_gold_col or ""
+        info["grupo_col"] = grupo_gold_col or ""
+        info["supervisor_col"] = supervisor_gold_col or ""
+
+        if not rep_gold_col:
+            raise RuntimeError(
+                "Não encontrei a coluna do representante na planilha GOLD. "
+                "Verifique o cabeçalho da aba informada em GOLD_WS."
+            )
+
+        gold_rows = []
+        for row in rows_gold:
+            rep_val = norm(row.get(rep_gold_col, ""))
+            if rep_val == rep_code:
+                gold_rows.append({
+                    "grupo": norm(row.get(grupo_gold_col, "")) if grupo_gold_col else "",
+                    "rep": rep_val,
+                    "supervisor": norm(row.get(supervisor_gold_col, "")) if supervisor_gold_col else ""
+                })
+
+        info["gold_rows"] = gold_rows
+        info["total_gold"] = len(gold_rows)
+        info["ok"] = True
+        return info
+
+    except Exception as e:
+        info["error"] = str(e)
+        return info
 
 
 def build_debug_sheet_info(sh=None):
@@ -1222,6 +1317,8 @@ BASE_HTML = """
       border-radius: 6px;
       padding: 8px;
       box-sizing: border-box;
+      flex-direction: column;
+      gap: 4px;
     }
 
     .dash-coverage-box {
@@ -1727,7 +1824,20 @@ def admin_dashboard():
             rep_sel=rep_sel
         )
 
-        total_gold = 0
+        # ===== NOVO: TOTAL CLIENTES GOLD POR REPRESENTANTE =====
+        gold_info = get_gold_info_by_rep(header_rep_code) if header_rep_code else {
+            "total_gold": 0,
+            "gold_rows": [],
+            "sheet_title": "",
+            "worksheet_title": "",
+            "rep_col": "",
+            "grupo_col": "",
+            "supervisor_col": "",
+            "ok": False,
+            "error": ""
+        }
+        total_gold = gold_info.get("total_gold", 0)
+
         total_carteira = len(filtered_rows)
         total_sem_compra = len(clientes_sem_compra)
         total_com_compra = max(total_carteira - total_sem_compra, 0)
@@ -1965,6 +2075,21 @@ def admin_dashboard():
             </div>
             """
 
+        gold_subinfo = ""
+        if header_rep_code:
+            if gold_info.get("ok"):
+                gold_subinfo = f"""
+                <div style="font-size:10px; color:#92400e;">
+                  Rep: <b>{h(header_rep_code)}</b> | Aba GOLD: <b>{h(gold_info.get('worksheet_title', GOLD_WS))}</b>
+                </div>
+                """
+            elif gold_info.get("error"):
+                gold_subinfo = f"""
+                <div style="font-size:10px; color:#b91c1c;">
+                  Erro GOLD: {h(gold_info.get('error'))}
+                </div>
+                """
+
         body = f"""
         <div class="dash-page">
 
@@ -2083,7 +2208,8 @@ def admin_dashboard():
                     <div class="dash-panel-title">Clientes Gold</div>
                     <div class="dash-panel-body">
                       <div class="dash-gold-box">
-                        Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
+                        <div>Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                        {gold_subinfo}
                       </div>
                     </div>
                   </div>
@@ -2145,6 +2271,17 @@ def admin_dashboard():
               <div class="line"><b>SEMANA COL:</b> {h(semana_col)}</div>
               <div class="line"><b>STATUS CLIENTE COL:</b> {h(status_cliente_col)}</div>
               <div class="line"><b>OBS COL:</b> {h(observacoes_col)}</div>
+              <hr style="border-color:#334155;">
+              <div class="line"><b>GOLD SHEET ID:</b> {h(GOLD_SHEET_ID)}</div>
+              <div class="line"><b>GOLD WS:</b> {h(GOLD_WS)}</div>
+              <div class="line"><b>GOLD SHEET TITLE:</b> {h(gold_info.get('sheet_title', ''))}</div>
+              <div class="line"><b>GOLD WORKSHEET TITLE:</b> {h(gold_info.get('worksheet_title', ''))}</div>
+              <div class="line"><b>GOLD REP COL:</b> {h(gold_info.get('rep_col', ''))}</div>
+              <div class="line"><b>GOLD GRUPO COL:</b> {h(gold_info.get('grupo_col', ''))}</div>
+              <div class="line"><b>GOLD SUPERVISOR COL:</b> {h(gold_info.get('supervisor_col', ''))}</div>
+              <div class="line"><b>TOTAL GOLD:</b> {h(gold_info.get('total_gold', 0))}</div>
+              <div class="line"><b>GOLD OK:</b> {h(gold_info.get('ok', False))}</div>
+              <div class="line"><b>GOLD ERROR:</b> {h(gold_info.get('error', ''))}</div>
             </div>
             """
 
