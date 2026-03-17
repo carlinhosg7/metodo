@@ -7,6 +7,7 @@ import html
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 from io import StringIO
+import csv as csvlib
 
 import requests
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
@@ -32,9 +33,6 @@ SECRET_KEY = os.getenv("SECRET_KEY", "troque-esta-chave").strip()
 WS_BASE = os.getenv("WS_BASE", "BASE").strip()
 WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
-
-MUNICIPIOS_SHEET_ID = os.getenv("MUNICIPIOS_SHEET_ID", "").strip()
-WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
 
 # ===== CLIENTES GOLD =====
 GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
@@ -402,86 +400,6 @@ def extract_google_sheet_id(raw_value):
     return raw
 
 
-def build_city_map_svg(city_points, width=650, height=360):
-    if not city_points:
-        return """
-        <div class="dash-map-placeholder">
-          Não foi possível montar o mapa.<br><br>
-          Verifique o cruzamento das cidades e as colunas de latitude e longitude.
-        </div>
-        """
-
-    valid_points = [
-        p for p in city_points
-        if p.get("lat") is not None and p.get("lon") is not None
-    ]
-
-    if not valid_points:
-        return """
-        <div class="dash-map-placeholder">
-          Nenhuma coordenada válida encontrada.
-        </div>
-        """
-
-    min_lon = min(p["lon"] for p in valid_points)
-    max_lon = max(p["lon"] for p in valid_points)
-    min_lat = min(p["lat"] for p in valid_points)
-    max_lat = max(p["lat"] for p in valid_points)
-
-    if min_lon == max_lon:
-        max_lon += 0.01
-    if min_lat == max_lat:
-        max_lat += 0.01
-
-    pad = 18
-
-    def project(lon, lat):
-        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
-        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
-        return x, y
-
-    circles = []
-    for p in valid_points:
-        x, y = project(p["lon"], p["lat"])
-        fill = p["fill"]
-        title = h(
-            f"{p['cidade']} | {p['status_txt']} | "
-            f"2024: {format_number_br(p.get('total_2024', 0))} | "
-            f"2025: {format_number_br(p.get('total_2025', 0))} | "
-            f"2026: {format_number_br(p.get('total_2026', 0))}"
-        )
-        circles.append(
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="4.8" fill="{fill}" stroke="#ffffff" stroke-width="1.2">'
-            f'<title>{title}</title></circle>'
-        )
-
-    svg = f"""
-    <div style="width:100%; height:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
-      <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
-        <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
-        <rect x="10" y="10" width="{width-20}" height="{height-20}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
-        {''.join(circles)}
-      </svg>
-
-      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
-          Vendas em 2026
-        </span>
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#eab308; display:inline-block;"></span>
-          Vendas em outros períodos
-        </span>
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
-          Sem vendas
-        </span>
-      </div>
-    </div>
-    """
-    return svg
-
-
 def friendly_gspread_error(exc):
     txt = norm(str(exc))
 
@@ -523,7 +441,6 @@ def load_public_municipios():
         if not csv_text.strip():
             return [], "Arquivo público de municípios vazio."
 
-        import csv as csvlib
         reader = csvlib.DictReader(StringIO(csv_text))
         rows = []
 
@@ -536,6 +453,187 @@ def load_public_municipios():
         return rows, ""
     except Exception as e:
         return [], f"Erro ao carregar municípios públicos: {norm(str(e))}"
+
+
+def find_city_coords_public(rows_cidades, cidade_base_norm, cidade_original=""):
+    if not rows_cidades or not cidade_base_norm:
+        return None, None, ""
+
+    melhor_row = None
+
+    for r in rows_cidades:
+        nome = norm(
+            r.get("nome", "") or
+            r.get("cidade", "") or
+            r.get("municipio", "") or
+            r.get("município", "")
+        )
+        nome_norm = normalize_city_key(nome)
+        if nome_norm == cidade_base_norm:
+            melhor_row = r
+            break
+
+    if melhor_row is None:
+        for r in rows_cidades:
+            nome = norm(
+                r.get("nome", "") or
+                r.get("cidade", "") or
+                r.get("municipio", "") or
+                r.get("município", "")
+            )
+            nome_norm = normalize_city_key(nome)
+
+            if nome_norm and (
+                cidade_base_norm in nome_norm or
+                nome_norm in cidade_base_norm
+            ):
+                melhor_row = r
+                break
+
+    if melhor_row is None:
+        def simplificar(txt):
+            txt = normalize_city_key(txt)
+            txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
+            txt = re.sub(r"\s+", " ", txt).strip()
+            return txt
+
+        base_simpl = simplificar(cidade_original or cidade_base_norm)
+
+        for r in rows_cidades:
+            nome = norm(
+                r.get("nome", "") or
+                r.get("cidade", "") or
+                r.get("municipio", "") or
+                r.get("município", "")
+            )
+            nome_simpl = simplificar(nome)
+
+            if nome_simpl and (
+                nome_simpl == base_simpl or
+                base_simpl in nome_simpl or
+                nome_simpl in base_simpl
+            ):
+                melhor_row = r
+                break
+
+    if melhor_row is None:
+        return None, None, ""
+
+    nome_final = norm(
+        melhor_row.get("nome", "") or
+        melhor_row.get("cidade", "") or
+        melhor_row.get("municipio", "") or
+        melhor_row.get("município", "")
+    )
+    lat = parse_float_any(melhor_row.get("latitude", "") or melhor_row.get("lat", ""))
+    lon = parse_float_any(melhor_row.get("longitude", "") or melhor_row.get("lon", "") or melhor_row.get("lng", ""))
+
+    return lat, lon, nome_final
+
+
+def build_city_map_svg(city_points, width=760, height=420):
+    if not city_points:
+        return """
+        <div class="dash-map-placeholder">
+          Não foi possível montar o mapa.<br><br>
+          Verifique o cruzamento das cidades e as colunas de latitude e longitude.
+        </div>
+        """
+
+    valid_points = [
+        p for p in city_points
+        if p.get("lat") is not None and p.get("lon") is not None
+    ]
+
+    if not valid_points:
+        return """
+        <div class="dash-map-placeholder">
+          Nenhuma coordenada válida encontrada.
+        </div>
+        """
+
+    min_lon = min(p["lon"] for p in valid_points)
+    max_lon = max(p["lon"] for p in valid_points)
+    min_lat = min(p["lat"] for p in valid_points)
+    max_lat = max(p["lat"] for p in valid_points)
+
+    lon_span = max_lon - min_lon
+    lat_span = max_lat - min_lat
+
+    if lon_span == 0:
+        lon_span = 0.3
+    if lat_span == 0:
+        lat_span = 0.3
+
+    lon_margin = lon_span * 0.08
+    lat_margin = lat_span * 0.08
+
+    min_lon -= lon_margin
+    max_lon += lon_margin
+    min_lat -= lat_margin
+    max_lat += lat_margin
+
+    pad = 10
+
+    def project(lon, lat):
+        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
+        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
+        return x, y
+
+    circles = []
+    labels = []
+
+    for p in valid_points:
+        x, y = project(p["lon"], p["lat"])
+        fill = p["fill"]
+        cidade = p.get("cidade", "")
+        status_txt = p.get("status_txt", "")
+        total_2024 = p.get("total_2024", 0)
+        total_2025 = p.get("total_2025", 0)
+        total_2026 = p.get("total_2026", 0)
+
+        title = h(
+            f"{cidade} | {status_txt} | "
+            f"2024: {format_number_br(total_2024)} | "
+            f"2025: {format_number_br(total_2025)} | "
+            f"2026: {format_number_br(total_2026)}"
+        )
+
+        circles.append(
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="6.2" fill="{fill}" stroke="#ffffff" stroke-width="1.4">'
+            f'<title>{title}</title></circle>'
+        )
+
+        labels.append(
+            f'<text x="{x + 7:.2f}" y="{y - 7:.2f}" font-size="9" fill="#334155">{h(cidade[:18])}</text>'
+        )
+
+    svg = f"""
+    <div style="width:100%; height:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
+      <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
+        <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
+        <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
+        {''.join(circles)}
+        {''.join(labels)}
+      </svg>
+
+      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
+          Vendas em 2026
+        </span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#eab308; display:inline-block;"></span>
+          Vendas em outros períodos
+        </span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
+          Sem vendas
+        </span>
+      </div>
+    </div>
+    """
+    return svg
 
 
 # =========================
@@ -626,10 +724,6 @@ def salvar_agenda_rep(rep_code, agenda_dict):
     headers = [norm(x) for x in all_values[0]] if all_values else ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
 
     rep_col = headers.index("REP") + 1
-    dia_col = headers.index("DIA") + 1
-    at_col = headers.index("ATENDIMENTO") + 1
-    cliente_col = headers.index("CLIENTE") + 1
-    valor_col = headers.index("VALOR") + 1
 
     rows_to_delete = []
     for idx, row in enumerate(all_values[1:], start=2):
@@ -771,11 +865,6 @@ def connect_gs():
     if not SHEET_ID:
         raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
     return connect_gs_by_key(SHEET_ID)
-
-
-def connect_municipios_gs():
-    target_id = MUNICIPIOS_SHEET_ID or SHEET_ID
-    return connect_gs_by_key(target_id)
 
 
 def connect_gold_gs():
@@ -974,54 +1063,27 @@ def get_gold_info_by_rep(rep_code):
             raise RuntimeError("A aba de clientes gold está vazia ou sem cabeçalho.")
 
         rep_gold_col = pick_col_flexible(headers_gold, [
-            "Cod. Representante",
-            "Cod Representante",
-            "Código Representante",
-            "Codigo Representante",
-            "Representante",
-            "COD_REP",
-            "REP"
+            "Cod. Representante", "Cod Representante", "Código Representante",
+            "Codigo Representante", "Representante", "COD_REP", "REP"
         ])
 
         codigo_gold_col = pick_col_flexible(headers_gold, [
-            "Codigo",
-            "Código",
-            "Codigo Cliente",
-            "Código Cliente",
-            "Codigo Grupo Cliente",
-            "Código Grupo Cliente",
-            "Cod Cliente",
-            "Cod. Cliente",
-            "Cod Grupo Cliente",
-            "Cod. Grupo Cliente",
-            "Cliente Codigo",
-            "Cliente Código"
+            "Codigo", "Código", "Codigo Cliente", "Código Cliente",
+            "Codigo Grupo Cliente", "Código Grupo Cliente",
+            "Cod Cliente", "Cod. Cliente", "Cod Grupo Cliente", "Cod. Grupo Cliente"
         ])
 
         cliente_gold_col = pick_col_flexible(headers_gold, [
-            "Cliente / Grupo",
-            "Cliente Grupo",
-            "Cliente",
-            "Nome Cliente",
-            "Razao Social",
-            "Razão Social",
-            "Fantasia",
-            "Nome"
+            "Cliente / Grupo", "Cliente Grupo", "Cliente", "Nome Cliente",
+            "Razao Social", "Razão Social", "Fantasia", "Nome"
         ])
 
         grupo_gold_col = pick_col_flexible(headers_gold, [
-            "Grupo Cliente / Cliente",
-            "Grupo Cliente Cliente",
-            "Grupo Cliente",
-            "Grupo",
-            "Cliente / Grupo"
+            "Grupo Cliente / Cliente", "Grupo Cliente Cliente", "Grupo Cliente", "Grupo", "Cliente / Grupo"
         ])
 
         supervisor_gold_col = pick_col_flexible(headers_gold, [
-            "Supervisor",
-            "Cod. Supervisor",
-            "Código Supervisor",
-            "Codigo Supervisor"
+            "Supervisor", "Cod. Supervisor", "Código Supervisor", "Codigo Supervisor"
         ])
 
         info["rep_col"] = rep_gold_col or ""
@@ -1039,7 +1101,6 @@ def get_gold_info_by_rep(rep_code):
         gold_rows = []
         for row in rows_gold:
             rep_val = norm(row.get(rep_gold_col, ""))
-
             rep_val_num = rep_val.lstrip("0") or "0"
             rep_code_num = rep_code.lstrip("0") or "0"
 
@@ -2108,11 +2169,13 @@ def admin_dashboard():
         mapa_svg_html = ""
         mapa_info_msg = ""
         cidades_mapa_qtd = 0
+        cidades_sem_coordenada = 0
+
         map_debug = {
             "municipios_url": MUNICIPIOS_URL,
-            "cidade_muni_col": "",
-            "lat_col": "",
-            "lon_col": "",
+            "cidade_muni_col": "nome",
+            "lat_col": "latitude",
+            "lon_col": "longitude",
         }
 
         try:
@@ -2123,34 +2186,14 @@ def admin_dashboard():
             if not rows_cidades:
                 raise RuntimeError("Nenhum município foi carregado da URL pública.")
 
-            headers_cidades = list(rows_cidades[0].keys()) if rows_cidades else []
-
-            cidade_muni_col = pick_col_flexible(headers_cidades, [
-                "cidade", "municipio", "município", "nome", "nome municipio", "nome município"
-            ])
-            lat_col = pick_col_flexible(headers_cidades, [
-                "latitude", "lat"
-            ])
-            lon_col = pick_col_flexible(headers_cidades, [
-                "longitude", "long", "lon", "lng"
-            ])
-
-            map_debug["cidade_muni_col"] = cidade_muni_col or ""
-            map_debug["lat_col"] = lat_col or ""
-            map_debug["lon_col"] = lon_col or ""
-
             if not cidade_col:
                 raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
 
-            if not cidade_muni_col:
-                raise RuntimeError("A coluna de cidade não foi encontrada no arquivo público de municípios.")
-
-            if not lat_col or not lon_col:
-                raise RuntimeError("As colunas de latitude/longitude não foram encontradas no arquivo público de municípios.")
-
             vendas_por_cidade = {}
             for r in filtered_rows:
-                cidade_base = normalize_city_key(r.get(cidade_col, ""))
+                cidade_original = norm(r.get(cidade_col, ""))
+                cidade_base = normalize_city_key(cidade_original)
+
                 if not cidade_base:
                     continue
 
@@ -2160,7 +2203,7 @@ def admin_dashboard():
 
                 if cidade_base not in vendas_por_cidade:
                     vendas_por_cidade[cidade_base] = {
-                        "cidade_original": norm(r.get(cidade_col, "")),
+                        "cidade_original": cidade_original,
                         "total_2024": 0.0,
                         "total_2025": 0.0,
                         "total_2026": 0.0,
@@ -2171,20 +2214,23 @@ def admin_dashboard():
                 vendas_por_cidade[cidade_base]["total_2026"] += total_2026
 
             city_points = []
-            for r in rows_cidades:
-                cidade_sheet = normalize_city_key(r.get(cidade_muni_col, ""))
-                if not cidade_sheet:
+
+            for cidade_key, dados_cidade in vendas_por_cidade.items():
+                cidade_original = dados_cidade["cidade_original"]
+
+                lat, lon, nome_municipio = find_city_coords_public(
+                    rows_cidades,
+                    cidade_key,
+                    cidade_original
+                )
+
+                if lat is None or lon is None:
+                    cidades_sem_coordenada += 1
                     continue
 
-                if cidade_sheet not in vendas_por_cidade:
-                    continue
-
-                lat = parse_float_any(r.get(lat_col, ""))
-                lon = parse_float_any(r.get(lon_col, ""))
-
-                total_2024 = vendas_por_cidade[cidade_sheet]["total_2024"]
-                total_2025 = vendas_por_cidade[cidade_sheet]["total_2025"]
-                total_2026 = vendas_por_cidade[cidade_sheet]["total_2026"]
+                total_2024 = dados_cidade["total_2024"]
+                total_2025 = dados_cidade["total_2025"]
+                total_2026 = dados_cidade["total_2026"]
                 total_outros = total_2024 + total_2025
 
                 if total_2026 > 0:
@@ -2198,7 +2244,7 @@ def admin_dashboard():
                     status_txt = "Sem vendas"
 
                 city_points.append({
-                    "cidade": vendas_por_cidade[cidade_sheet]["cidade_original"] or norm(r.get(cidade_muni_col, "")),
+                    "cidade": cidade_original or nome_municipio,
                     "lat": lat,
                     "lon": lon,
                     "total_2024": total_2024,
@@ -2212,7 +2258,9 @@ def admin_dashboard():
             mapa_svg_html = build_city_map_svg(city_points)
 
             if not city_points:
-                mapa_info_msg = "Nenhuma cidade cruzou entre a carteira do representante e o arquivo público de municípios."
+                mapa_info_msg = "Nenhuma cidade da carteira encontrou coordenadas no arquivo público."
+            elif cidades_sem_coordenada > 0:
+                mapa_info_msg = f"{cidades_sem_coordenada} cidade(s) da carteira não encontraram coordenadas."
 
         except Exception as e:
             erro_txt = norm(str(e))
@@ -2449,6 +2497,7 @@ def admin_dashboard():
               <div class="line"><b>AGENDA ABA:</b> {h(WS_AGENDA)}</div>
               <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
+              <div class="line"><b>CIDADES SEM COORDENADA:</b> {h(cidades_sem_coordenada)}</div>
               <div class="line"><b>MUNICIPIOS URL:</b> {h(map_debug['municipios_url'])}</div>
               <div class="line"><b>COLUNA CIDADE BASE:</b> {h(cidade_col)}</div>
               <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
@@ -2588,7 +2637,6 @@ def dashboard():
     prepared_rows = []
 
     for idx_base, r in enumerate(base_rows, start=2):
-        ck = norm(r.get(key_col, "")) if key_col else ""
         repc = norm(r.get(rep_col, "")) if rep_col else ""
 
         if not is_admin() and repc != norm(session.get("rep_code", "")):
@@ -2638,7 +2686,6 @@ def dashboard():
         current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
 
     rep_card_html = ""
-
     selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
 
     if selected_rep_code and rep_col:
