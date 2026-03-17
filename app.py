@@ -650,6 +650,7 @@ def build_city_map_svg(city_points, width=760, height=420):
         return x, y
 
     circles = []
+    labels = []
 
     for p in valid_points:
         x, y = project(p["lon"], p["lat"])
@@ -672,6 +673,10 @@ def build_city_map_svg(city_points, width=760, height=420):
             f'<title>{title}</title></circle>'
         )
 
+        labels.append(
+            f'<text class="map-label" x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="10" fill="#1f2937">{h(cidade[:22])}</text>'
+        )
+
     map_uid = f"map_{int(time.time() * 1000)}_{len(valid_points)}"
 
     svg = f"""
@@ -681,9 +686,9 @@ def build_city_map_svg(city_points, width=760, height=420):
           Use os botões para zoom
         </div>
         <div style="display:flex; gap:6px; align-items:center;">
-          <button type="button" onclick="zoomMap('{map_uid}', 1.2)" style="padding:4px 8px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer;">+</button>
-          <button type="button" onclick="zoomMap('{map_uid}', 0.83)" style="padding:4px 8px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer;">-</button>
-          <button type="button" onclick="resetMapZoom('{map_uid}')" style="padding:4px 8px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer;">Reset</button>
+          <button type="button" onclick="zoomMap('{map_uid}', 1.2)" title="Aumentar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">+</button>
+          <button type="button" onclick="zoomMap('{map_uid}', 0.83)" title="Diminuir zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">−</button>
+          <button type="button" onclick="resetMapZoom('{map_uid}')" title="Resetar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:700; font-size:12px;">Reset</button>
         </div>
       </div>
 
@@ -692,6 +697,9 @@ def build_city_map_svg(city_points, width=760, height=420):
           <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
           <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
           {''.join(circles)}
+          <g class="map-labels" style="display:none;">
+            {''.join(labels)}
+          </g>
         </svg>
       </div>
 
@@ -701,18 +709,29 @@ def build_city_map_svg(city_points, width=760, height=420):
           Vendas em 2026
         </span>
         <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#eab308; display:inline-block;"></span>
-          Vendas em outros períodos
-        </span>
-        <span style="display:flex; align-items:center; gap:6px;">
           <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
-          Sem vendas
+          Sem vendas em 2026
         </span>
       </div>
     </div>
 
     <script>
       window._mapZoomLevels = window._mapZoomLevels || {{}};
+
+      function applyMapLabelVisibility(mapId) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+
+        const zoom = window._mapZoomLevels[mapId] || 1;
+        const labels = el.querySelector('.map-labels');
+        if (!labels) return;
+
+        if (zoom > 1.05) {{
+          labels.style.display = 'block';
+        }} else {{
+          labels.style.display = 'none';
+        }}
+      }}
 
       function zoomMap(mapId, factor) {{
         const el = document.getElementById(mapId);
@@ -725,6 +744,7 @@ def build_city_map_svg(city_points, width=760, height=420):
 
         window._mapZoomLevels[mapId] = next;
         el.style.transform = 'scale(' + next + ')';
+        applyMapLabelVisibility(mapId);
       }}
 
       function resetMapZoom(mapId) {{
@@ -732,7 +752,15 @@ def build_city_map_svg(city_points, width=760, height=420):
         if (!el) return;
         window._mapZoomLevels[mapId] = 1;
         el.style.transform = 'scale(1)';
+        applyMapLabelVisibility(mapId);
       }}
+
+      setTimeout(function() {{
+        if (!window._mapZoomLevels['{map_uid}']) {{
+          window._mapZoomLevels['{map_uid}'] = 1;
+        }}
+        applyMapLabelVisibility('{map_uid}');
+      }}, 0);
     </script>
     """
     return svg
@@ -2334,7 +2362,7 @@ def admin_dashboard():
             "cidade_muni_col": "nome",
             "lat_col": "latitude",
             "lon_col": "longitude",
-            "labels": "desativadas",
+            "labels": "aparecem no zoom",
             "zoom": "ativo"
         }
 
@@ -2392,17 +2420,13 @@ def admin_dashboard():
                 total_2024 = dados_cidade["total_2024"]
                 total_2025 = dados_cidade["total_2025"]
                 total_2026 = dados_cidade["total_2026"]
-                total_outros = total_2024 + total_2025
 
                 if total_2026 > 0:
                     fill = "#16a34a"
                     status_txt = "Vendas em 2026"
-                elif total_outros > 0:
-                    fill = "#eab308"
-                    status_txt = "Vendas em outros períodos"
                 else:
                     fill = "#dc2626"
-                    status_txt = "Sem vendas"
+                    status_txt = "Sem vendas em 2026"
 
                 city_points.append({
                     "cidade": cidade_original or nome_municipio,
