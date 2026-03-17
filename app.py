@@ -6,7 +6,9 @@ import traceback
 import html
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
+from io import StringIO
 
+import requests
 from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
 import gspread
@@ -38,6 +40,12 @@ WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
 GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
 GOLD_SHEET_URL = os.getenv("GOLD_SHEET_URL", "").strip()
 GOLD_WS = os.getenv("GOLD_WS", "Tab").strip()
+
+# ===== MUNICÍPIOS PÚBLICOS =====
+MUNICIPIOS_URL = os.getenv(
+    "MUNICIPIOS_URL",
+    "https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/main/csv/municipios.csv"
+).strip()
 
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
@@ -399,7 +407,7 @@ def build_city_map_svg(city_points, width=650, height=360):
         return """
         <div class="dash-map-placeholder">
           Não foi possível montar o mapa.<br><br>
-          Verifique a planilha de municípios, a aba <b>cidades</b> e as colunas de cidade, latitude e longitude.
+          Verifique o cruzamento das cidades e as colunas de latitude e longitude.
         </div>
         """
 
@@ -411,7 +419,7 @@ def build_city_map_svg(city_points, width=650, height=360):
     if not valid_points:
         return """
         <div class="dash-map-placeholder">
-          Nenhuma coordenada válida encontrada na aba <b>cidades</b>.
+          Nenhuma coordenada válida encontrada.
         </div>
         """
 
@@ -436,7 +444,12 @@ def build_city_map_svg(city_points, width=650, height=360):
     for p in valid_points:
         x, y = project(p["lon"], p["lat"])
         fill = p["fill"]
-        title = h(f"{p['cidade']} | {p['status_txt']} | Total 2026: {format_number_br(p['total_2026'])}")
+        title = h(
+            f"{p['cidade']} | {p['status_txt']} | "
+            f"2024: {format_number_br(p.get('total_2024', 0))} | "
+            f"2025: {format_number_br(p.get('total_2025', 0))} | "
+            f"2026: {format_number_br(p.get('total_2026', 0))}"
+        )
         circles.append(
             f'<circle cx="{x:.2f}" cy="{y:.2f}" r="4.8" fill="{fill}" stroke="#ffffff" stroke-width="1.2">'
             f'<title>{title}</title></circle>'
@@ -453,7 +466,11 @@ def build_city_map_svg(city_points, width=650, height=360):
       <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
         <span style="display:flex; align-items:center; gap:6px;">
           <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
-          Com vendas
+          Vendas em 2026
+        </span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#eab308; display:inline-block;"></span>
+          Vendas em outros períodos
         </span>
         <span style="display:flex; align-items:center; gap:6px;">
           <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
@@ -495,6 +512,30 @@ def friendly_gspread_error(exc):
 def resolve_gold_sheet_target():
     target = GOLD_SHEET_ID or GOLD_SHEET_URL or SHEET_ID
     return extract_google_sheet_id(target)
+
+
+def load_public_municipios():
+    try:
+        resp = requests.get(MUNICIPIOS_URL, timeout=30)
+        resp.raise_for_status()
+
+        csv_text = resp.text
+        if not csv_text.strip():
+            return [], "Arquivo público de municípios vazio."
+
+        import csv as csvlib
+        reader = csvlib.DictReader(StringIO(csv_text))
+        rows = []
+
+        for row in reader:
+            clean_row = {}
+            for k, v in row.items():
+                clean_row[norm(k)] = norm(v)
+            rows.append(clean_row)
+
+        return rows, ""
+    except Exception as e:
+        return [], f"Erro ao carregar municípios públicos: {norm(str(e))}"
 
 
 # =========================
@@ -2068,17 +2109,21 @@ def admin_dashboard():
         mapa_info_msg = ""
         cidades_mapa_qtd = 0
         map_debug = {
-            "municipios_sheet_resolved": extract_google_sheet_id(MUNICIPIOS_SHEET_ID or SHEET_ID),
-            "ws_cidades": WS_CIDADES,
+            "municipios_url": MUNICIPIOS_URL,
             "cidade_muni_col": "",
             "lat_col": "",
             "lon_col": "",
         }
 
         try:
-            sh_muni = connect_municipios_gs()
-            ws_cidades = sh_muni.worksheet(WS_CIDADES)
-            headers_cidades, rows_cidades = safe_get_raw_rows(ws_cidades)
+            rows_cidades, erro_muni = load_public_municipios()
+            if erro_muni:
+                raise RuntimeError(erro_muni)
+
+            if not rows_cidades:
+                raise RuntimeError("Nenhum município foi carregado da URL pública.")
+
+            headers_cidades = list(rows_cidades[0].keys()) if rows_cidades else []
 
             cidade_muni_col = pick_col_flexible(headers_cidades, [
                 "cidade", "municipio", "município", "nome", "nome municipio", "nome município"
@@ -2098,10 +2143,10 @@ def admin_dashboard():
                 raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
 
             if not cidade_muni_col:
-                raise RuntimeError("A coluna de cidade não foi encontrada na aba 'cidades'.")
+                raise RuntimeError("A coluna de cidade não foi encontrada no arquivo público de municípios.")
 
             if not lat_col or not lon_col:
-                raise RuntimeError("As colunas de latitude/longitude não foram encontradas na aba 'cidades'.")
+                raise RuntimeError("As colunas de latitude/longitude não foram encontradas no arquivo público de municípios.")
 
             vendas_por_cidade = {}
             for r in filtered_rows:
@@ -2109,12 +2154,20 @@ def admin_dashboard():
                 if not cidade_base:
                     continue
 
+                total_2024 = parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0
+                total_2025 = parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0
                 total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
+
                 if cidade_base not in vendas_por_cidade:
                     vendas_por_cidade[cidade_base] = {
                         "cidade_original": norm(r.get(cidade_col, "")),
-                        "total_2026": 0.0
+                        "total_2024": 0.0,
+                        "total_2025": 0.0,
+                        "total_2026": 0.0,
                     }
+
+                vendas_por_cidade[cidade_base]["total_2024"] += total_2024
+                vendas_por_cidade[cidade_base]["total_2025"] += total_2025
                 vendas_por_cidade[cidade_base]["total_2026"] += total_2026
 
             city_points = []
@@ -2128,31 +2181,41 @@ def admin_dashboard():
 
                 lat = parse_float_any(r.get(lat_col, ""))
                 lon = parse_float_any(r.get(lon_col, ""))
+
+                total_2024 = vendas_por_cidade[cidade_sheet]["total_2024"]
+                total_2025 = vendas_por_cidade[cidade_sheet]["total_2025"]
                 total_2026 = vendas_por_cidade[cidade_sheet]["total_2026"]
+                total_outros = total_2024 + total_2025
+
+                if total_2026 > 0:
+                    fill = "#16a34a"
+                    status_txt = "Vendas em 2026"
+                elif total_outros > 0:
+                    fill = "#eab308"
+                    status_txt = "Vendas em outros períodos"
+                else:
+                    fill = "#dc2626"
+                    status_txt = "Sem vendas"
 
                 city_points.append({
                     "cidade": vendas_por_cidade[cidade_sheet]["cidade_original"] or norm(r.get(cidade_muni_col, "")),
                     "lat": lat,
                     "lon": lon,
+                    "total_2024": total_2024,
+                    "total_2025": total_2025,
                     "total_2026": total_2026,
-                    "fill": "#16a34a" if total_2026 > 0 else "#dc2626",
-                    "status_txt": "Com vendas" if total_2026 > 0 else "Sem vendas"
+                    "fill": fill,
+                    "status_txt": status_txt
                 })
 
             cidades_mapa_qtd = len(city_points)
             mapa_svg_html = build_city_map_svg(city_points)
 
             if not city_points:
-                mapa_info_msg = "Nenhuma cidade cruzou entre a carteira e a planilha de municípios."
+                mapa_info_msg = "Nenhuma cidade cruzou entre a carteira do representante e o arquivo público de municípios."
 
-        except WorksheetNotFound:
-            mapa_svg_html = f"""
-            <div class="dash-map-placeholder">
-              Aba <b>{h(WS_CIDADES)}</b> não encontrada na planilha de municípios.
-            </div>
-            """
         except Exception as e:
-            erro_txt = friendly_gspread_error(e)
+            erro_txt = norm(str(e))
             mapa_svg_html = f"""
             <div class="dash-map-placeholder">
               Erro ao montar mapa.<br><br>
@@ -2386,8 +2449,7 @@ def admin_dashboard():
               <div class="line"><b>AGENDA ABA:</b> {h(WS_AGENDA)}</div>
               <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
-              <div class="line"><b>MUNICIPIOS_SHEET_ID RESOLVIDO:</b> {h(map_debug['municipios_sheet_resolved'])}</div>
-              <div class="line"><b>WS_CIDADES:</b> {h(map_debug['ws_cidades'])}</div>
+              <div class="line"><b>MUNICIPIOS URL:</b> {h(map_debug['municipios_url'])}</div>
               <div class="line"><b>COLUNA CIDADE BASE:</b> {h(cidade_col)}</div>
               <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
               <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>

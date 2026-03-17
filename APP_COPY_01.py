@@ -34,6 +34,11 @@ WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 MUNICIPIOS_SHEET_ID = os.getenv("MUNICIPIOS_SHEET_ID", "").strip()
 WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
 
+# ===== CLIENTES GOLD =====
+GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
+GOLD_SHEET_URL = os.getenv("GOLD_SHEET_URL", "").strip()
+GOLD_WS = os.getenv("GOLD_WS", "Tab").strip()
+
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
 DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
 
@@ -43,7 +48,11 @@ LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.
 # =========================
 # AGENDA SEMANAL
 # =========================
-AGENDA_FILE = r"D:\metodo\agenda_atendimentos.txt"
+AGENDA_SHEET_URL = os.getenv(
+    "AGENDA_SHEET_URL",
+    "https://docs.google.com/spreadsheets/d/1mg2O7VZrPd2MKOfABkkce6QBp-wcjQV_iADltRkUWAg/edit?usp=sharing"
+).strip()
+WS_AGENDA = os.getenv("WS_AGENDA", "AGENDA_SEMANAL").strip()
 
 DIAS_SEMANA = [
     "SEGUNDA",
@@ -456,6 +465,38 @@ def build_city_map_svg(city_points, width=650, height=360):
     return svg
 
 
+def friendly_gspread_error(exc):
+    txt = norm(str(exc))
+
+    if isinstance(exc, WorksheetNotFound):
+        return "A aba informada não foi encontrada na planilha."
+
+    if "Response [404]" in txt or "Requested entity was not found" in txt:
+        return (
+            "Planilha Google Sheets não encontrada. "
+            "Verifique se o ID/URL está correto e se a planilha existe."
+        )
+
+    if "Response [403]" in txt or "PERMISSION_DENIED" in txt or "The caller does not have permission" in txt:
+        return (
+            "Sem permissão para acessar a planilha Google Sheets. "
+            "Compartilhe a planilha com o e-mail da service account como Editor."
+        )
+
+    if "This operation is not supported for this document" in txt:
+        return (
+            "O arquivo informado não é uma planilha Google Sheets válida. "
+            "Converta o arquivo para Google Sheets e use o ID/URL correto."
+        )
+
+    return txt or "Erro ao acessar Google Sheets."
+
+
+def resolve_gold_sheet_target():
+    target = GOLD_SHEET_ID or GOLD_SHEET_URL or SHEET_ID
+    return extract_google_sheet_id(target)
+
+
 # =========================
 # AGENDA - FUNÇÕES
 # =========================
@@ -471,6 +512,31 @@ def _agenda_vazia():
     return agenda
 
 
+def connect_agenda_gs():
+    agenda_sheet_id = extract_google_sheet_id(AGENDA_SHEET_URL)
+    if not agenda_sheet_id:
+        raise RuntimeError("URL/ID da planilha da agenda não informado.")
+    return connect_gs_by_key(agenda_sheet_id)
+
+
+def ensure_agenda_worksheet(sh_agenda):
+    headers = ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
+
+    try:
+        ws = sh_agenda.worksheet(WS_AGENDA)
+    except WorksheetNotFound:
+        try:
+            ws = sh_agenda.add_worksheet(title=WS_AGENDA, rows="5000", cols="10")
+        except Exception as e:
+            raise RuntimeError(
+                f"Não foi possível acessar/criar a aba '{WS_AGENDA}' da agenda. "
+                f"Compartilhe a planilha da agenda com a service account. Detalhe: {friendly_gspread_error(e)}"
+            )
+
+    ensure_headers(ws, headers)
+    return ws
+
+
 def carregar_agenda_rep(rep_code):
     rep_code = norm(rep_code)
     agenda = _agenda_vazia()
@@ -478,42 +544,31 @@ def carregar_agenda_rep(rep_code):
     if not rep_code:
         return agenda
 
-    if not os.path.exists(AGENDA_FILE):
-        return agenda
-
     try:
-        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
-            linhas = f.readlines()
+        sh_agenda = connect_agenda_gs()
+        ws_agenda = ensure_agenda_worksheet(sh_agenda)
+        registros = safe_get_all_records(ws_agenda)
     except Exception:
         return agenda
 
-    current_rep = ""
-    for linha in linhas:
-        linha = linha.strip()
-        if not linha:
+    for row in registros:
+        rep = norm(row.get("REP", ""))
+        dia = normalize_text_for_match(row.get("DIA", ""))
+        at_txt = norm(row.get("ATENDIMENTO", ""))
+        cliente = norm(row.get("CLIENTE", ""))
+        valor = norm(row.get("VALOR", ""))
+
+        if rep != rep_code:
             continue
 
-        if linha.startswith("REP="):
-            current_rep = norm(linha.replace("REP=", ""))
-            continue
-
-        if current_rep != rep_code:
-            continue
-
-        partes = linha.split("|")
-        if len(partes) != 4:
-            continue
-
-        dia, at_txt, cliente, valor = partes
-        dia = normalize_text_for_match(dia)
         try:
-            at = int(norm(at_txt))
+            at = int(at_txt)
         except Exception:
             continue
 
         if dia in agenda and at in agenda[dia]:
-            agenda[dia][at]["cliente"] = norm(cliente)
-            agenda[dia][at]["valor"] = norm(valor)
+            agenda[dia][at]["cliente"] = cliente
+            agenda[dia][at]["valor"] = valor
 
     return agenda
 
@@ -523,45 +578,38 @@ def salvar_agenda_rep(rep_code, agenda_dict):
     if not rep_code:
         raise RuntimeError("Representante da agenda não informado.")
 
-    os.makedirs(os.path.dirname(AGENDA_FILE), exist_ok=True)
+    sh_agenda = connect_agenda_gs()
+    ws_agenda = ensure_agenda_worksheet(sh_agenda)
 
-    linhas_existentes = []
-    if os.path.exists(AGENDA_FILE):
-        with open(AGENDA_FILE, "r", encoding="utf-8") as f:
-            linhas_existentes = f.readlines()
+    all_values = ws_agenda.get_all_values()
+    headers = [norm(x) for x in all_values[0]] if all_values else ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
 
-    novas_linhas = []
-    skip_bloco = False
+    rep_col = headers.index("REP") + 1
+    dia_col = headers.index("DIA") + 1
+    at_col = headers.index("ATENDIMENTO") + 1
+    cliente_col = headers.index("CLIENTE") + 1
+    valor_col = headers.index("VALOR") + 1
 
-    for linha in linhas_existentes:
-        linha_strip = linha.strip()
+    rows_to_delete = []
+    for idx, row in enumerate(all_values[1:], start=2):
+        rep_existente = safe_cell(row, rep_col)
+        if rep_existente == rep_code:
+            rows_to_delete.append(idx)
 
-        if linha_strip.startswith("REP="):
-            bloco_rep = norm(linha_strip.replace("REP=", ""))
-            if bloco_rep == rep_code:
-                skip_bloco = True
-                continue
-            else:
-                skip_bloco = False
+    for row_idx in reversed(rows_to_delete):
+        ws_agenda.delete_rows(row_idx)
 
-        if not skip_bloco:
-            novas_linhas.append(linha)
-
-    if novas_linhas and not novas_linhas[-1].endswith("\n"):
-        novas_linhas[-1] += "\n"
-
-    novas_linhas.append(f"REP={rep_code}\n")
-
+    linhas_novas = []
     for dia in DIAS_SEMANA:
         for at in ATENDIMENTOS:
             cliente = norm(agenda_dict.get(dia, {}).get(at, {}).get("cliente", ""))
             valor = norm(agenda_dict.get(dia, {}).get(at, {}).get("valor", ""))
 
             if cliente or valor:
-                novas_linhas.append(f"{dia}|{at}|{cliente}|{valor}\n")
+                linhas_novas.append([rep_code, dia, at, cliente, valor])
 
-    with open(AGENDA_FILE, "w", encoding="utf-8") as f:
-        f.writelines(novas_linhas)
+    if linhas_novas:
+        ws_agenda.append_rows(linhas_novas, value_input_option="USER_ENTERED")
 
 
 def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
@@ -671,7 +719,11 @@ def connect_gs_by_key(sheet_key_or_url):
     ]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(resolved_key)
+
+    try:
+        return gc.open_by_key(resolved_key)
+    except Exception as e:
+        raise RuntimeError(friendly_gspread_error(e))
 
 
 def connect_gs():
@@ -683,6 +735,16 @@ def connect_gs():
 def connect_municipios_gs():
     target_id = MUNICIPIOS_SHEET_ID or SHEET_ID
     return connect_gs_by_key(target_id)
+
+
+def connect_gold_gs():
+    gold_target = resolve_gold_sheet_target()
+    if not gold_target:
+        raise RuntimeError(
+            "Faltou configurar a planilha de CLIENTES GOLD. "
+            "Defina GOLD_SHEET_ID ou GOLD_SHEET_URL."
+        )
+    return connect_gs_by_key(gold_target)
 
 
 def safe_get_all_records(ws):
@@ -747,7 +809,7 @@ def ensure_edicoes_worksheet(sh):
             raise RuntimeError(
                 f"Não foi possível acessar/criar a aba '{WS_EDICOES}'. "
                 f"Crie essa aba manualmente na planilha ou conceda permissão de Editor à service account. "
-                f"Detalhe: {str(e)}"
+                f"Detalhe: {friendly_gspread_error(e)}"
             )
 
     ensure_headers(ws, headers)
@@ -831,6 +893,152 @@ def try_get_rep_name(rep_code):
         return ""
 
 
+def get_gold_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+
+    info = {
+        "total_gold": 0,
+        "gold_rows": [],
+        "sheet_title": "",
+        "worksheet_title": "",
+        "rep_col": "",
+        "codigo_col": "",
+        "cliente_col": "",
+        "grupo_col": "",
+        "supervisor_col": "",
+        "ok": False,
+        "error": "",
+        "resolved_sheet_id": resolve_gold_sheet_target(),
+    }
+
+    if not rep_code:
+        info["error"] = "Selecione um representante para consultar CLIENTES GOLD."
+        return info
+
+    try:
+        sh_gold = connect_gold_gs()
+        info["sheet_title"] = norm(getattr(sh_gold, "title", ""))
+
+        try:
+            ws_gold = sh_gold.worksheet(GOLD_WS)
+        except WorksheetNotFound:
+            raise RuntimeError(
+                f"A aba '{GOLD_WS}' não foi encontrada na planilha de CLIENTES GOLD."
+            )
+
+        info["worksheet_title"] = norm(getattr(ws_gold, "title", ""))
+
+        headers_gold, rows_gold = safe_get_raw_rows(ws_gold)
+        if not headers_gold:
+            raise RuntimeError("A aba de clientes gold está vazia ou sem cabeçalho.")
+
+        rep_gold_col = pick_col_flexible(headers_gold, [
+            "Cod. Representante",
+            "Cod Representante",
+            "Código Representante",
+            "Codigo Representante",
+            "Representante",
+            "COD_REP",
+            "REP"
+        ])
+
+        codigo_gold_col = pick_col_flexible(headers_gold, [
+            "Codigo",
+            "Código",
+            "Codigo Cliente",
+            "Código Cliente",
+            "Codigo Grupo Cliente",
+            "Código Grupo Cliente",
+            "Cod Cliente",
+            "Cod. Cliente",
+            "Cod Grupo Cliente",
+            "Cod. Grupo Cliente",
+            "Cliente Codigo",
+            "Cliente Código"
+        ])
+
+        cliente_gold_col = pick_col_flexible(headers_gold, [
+            "Cliente / Grupo",
+            "Cliente Grupo",
+            "Cliente",
+            "Nome Cliente",
+            "Razao Social",
+            "Razão Social",
+            "Fantasia",
+            "Nome"
+        ])
+
+        grupo_gold_col = pick_col_flexible(headers_gold, [
+            "Grupo Cliente / Cliente",
+            "Grupo Cliente Cliente",
+            "Grupo Cliente",
+            "Grupo",
+            "Cliente / Grupo"
+        ])
+
+        supervisor_gold_col = pick_col_flexible(headers_gold, [
+            "Supervisor",
+            "Cod. Supervisor",
+            "Código Supervisor",
+            "Codigo Supervisor"
+        ])
+
+        info["rep_col"] = rep_gold_col or ""
+        info["codigo_col"] = codigo_gold_col or ""
+        info["cliente_col"] = cliente_gold_col or ""
+        info["grupo_col"] = grupo_gold_col or ""
+        info["supervisor_col"] = supervisor_gold_col or ""
+
+        if not rep_gold_col:
+            raise RuntimeError(
+                "Não encontrei a coluna do representante na planilha GOLD. "
+                "Verifique o cabeçalho da aba informada em GOLD_WS."
+            )
+
+        gold_rows = []
+        for row in rows_gold:
+            rep_val = norm(row.get(rep_gold_col, ""))
+
+            rep_val_num = rep_val.lstrip("0") or "0"
+            rep_code_num = rep_code.lstrip("0") or "0"
+
+            if rep_val == rep_code or rep_val_num == rep_code_num:
+                codigo_val = norm(row.get(codigo_gold_col, "")) if codigo_gold_col else ""
+                cliente_val = norm(row.get(cliente_gold_col, "")) if cliente_gold_col else ""
+                grupo_val = norm(row.get(grupo_gold_col, "")) if grupo_gold_col else ""
+                supervisor_val = norm(row.get(supervisor_gold_col, "")) if supervisor_gold_col else ""
+
+                if not cliente_val and grupo_val:
+                    cliente_val = grupo_val
+                if not grupo_val and cliente_val:
+                    grupo_val = cliente_val
+
+                gold_rows.append({
+                    "codigo": codigo_val,
+                    "cliente_grupo": cliente_val,
+                    "grupo_cliente_cliente": grupo_val,
+                    "rep": rep_val,
+                    "supervisor": supervisor_val
+                })
+
+        gold_rows.sort(
+            key=lambda x: (
+                norm(x.get("cliente_grupo", "")),
+                norm(x.get("grupo_cliente_cliente", "")),
+                norm(x.get("codigo", ""))
+            )
+        )
+
+        info["gold_rows"] = gold_rows
+        info["total_gold"] = len(gold_rows)
+        info["ok"] = True
+        return info
+
+    except Exception as e:
+        info["error"] = friendly_gspread_error(e)
+        return info
+
+
 def build_debug_sheet_info(sh=None):
     try:
         if sh is None:
@@ -849,7 +1057,7 @@ def build_debug_sheet_info(sh=None):
             "spreadsheet_title": "",
             "worksheets": [],
             "ok": False,
-            "error": str(e),
+            "error": friendly_gspread_error(e),
         }
 
 
@@ -1114,7 +1322,7 @@ BASE_HTML = """
 
     .dash-right-stack {
       display: grid;
-      grid-template-rows: auto auto auto;
+      grid-template-rows: auto auto;
       gap: 8px;
     }
 
@@ -1211,6 +1419,8 @@ BASE_HTML = """
       border-radius: 6px;
       padding: 8px;
       box-sizing: border-box;
+      flex-direction: column;
+      gap: 4px;
     }
 
     .dash-coverage-box {
@@ -1547,7 +1757,7 @@ def salvar_agenda():
 
     try:
         salvar_agenda_rep(rep_code, agenda_dict)
-        flash(f"Agenda do representante {rep_code} salva com sucesso em {AGENDA_FILE}.", "ok")
+        flash(f"Agenda do representante {rep_code} salva com sucesso na planilha Google Sheets.", "ok")
     except Exception as e:
         flash(f"Erro ao salvar agenda: {norm(str(e))}", "err")
 
@@ -1710,104 +1920,15 @@ def admin_dashboard():
                 reverse=True
             )
 
-        agenda_rows = []
-
-        if key_col and grupo_col:
-            for r in filtered_rows:
-                data_ag = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
-                mes_ag = norm(r.get(mes_col, "")) if mes_col else ""
-                semana_ag = norm(r.get(semana_col, "")) if semana_col else ""
-                status_ag = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
-                obs_ag = norm(r.get(observacoes_col, "")) if observacoes_col else ""
-
-                tem_agenda = any([data_ag, mes_ag, semana_ag, status_ag, obs_ag])
-                if not tem_agenda:
-                    continue
-
-                status_cor_final, row_class, _ = resolve_status_cor_from_base(
-                    r,
-                    status_cor_col=status_cor_col,
-                    cliente_novo_col=cliente_novo_col
-                )
-
-                agenda_rows.append({
-                    "codigo": norm(r.get(key_col, "")),
-                    "grupo": norm(r.get(grupo_col, "")),
-                    "cidade": norm(r.get(cidade_col, "")) if cidade_col else "",
-                    "representante": norm(r.get(nome_rep_col, "")) if nome_rep_col else "",
-                    "data": data_ag,
-                    "mes": mes_ag,
-                    "semana": semana_ag,
-                    "status": status_ag,
-                    "obs": obs_ag,
-                    "status_cor": status_cor_final,
-                    "row_class": row_class
-                })
-
-        def agenda_sort_key(x):
-            data_txt = x.get("data", "")
-            m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", data_txt)
-            if m:
-                dd, mm, yyyy = m.groups()
-                data_ord = f"{yyyy}{mm}{dd}"
-            else:
-                data_ord = "99999999"
-            return (
-                data_ord,
-                x.get("mes", ""),
-                x.get("semana", ""),
-                x.get("grupo", "")
-            )
-
-        agenda_rows.sort(key=agenda_sort_key)
-
-        agenda_visitas_html = ""
-        if agenda_rows:
-            rows = []
-            for item in agenda_rows[:18]:
-                rows.append(f"""
-                <tr class="{h(item['row_class'])}">
-                  <td>{h(item['data'])}</td>
-                  <td>{h(item['mes'])}</td>
-                  <td>{h(item['semana'])}</td>
-                  <td>{h(item['codigo'])}</td>
-                  <td>{h(item['grupo'])}</td>
-                  <td>{h(item['cidade'])}</td>
-                  <td>{h(item['status'])}</td>
-                </tr>
-                """)
-            agenda_visitas_html = f"""
-            <table class="dash-table-big">
-              <thead>
-                <tr>
-                  <th>Data</th>
-                  <th>Mês</th>
-                  <th>Semana</th>
-                  <th>Código</th>
-                  <th>Grupo</th>
-                  <th>Cidade</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {''.join(rows)}
-              </tbody>
-            </table>
-            """
-        else:
-            agenda_visitas_html = """
-            <div class="dash-summary-box">
-              Nenhum registro de agenda encontrado para os filtros atuais.
-            </div>
-            """
-
         agenda_semanal_html = render_agenda_semana_html(
             rep_code=header_rep_code,
             sup_sel=sup_sel,
             rep_sel=rep_sel
         )
 
-        total_gold = 0
+        gold_info = get_gold_info_by_rep(header_rep_code)
+        total_gold = gold_info.get("total_gold", 0)
+
         total_carteira = len(filtered_rows)
         total_sem_compra = len(clientes_sem_compra)
         total_com_compra = max(total_carteira - total_sem_compra, 0)
@@ -2031,17 +2152,67 @@ def admin_dashboard():
             </div>
             """
         except Exception as e:
-            erro_txt = norm(str(e))
-            if "This operation is not supported for this document" in erro_txt:
-                erro_txt = (
-                    "O arquivo informado em MUNICIPIOS_SHEET_ID não é uma planilha Google Sheets válida. "
-                    "Converta o arquivo para Google Sheets e use o ID da planilha convertida."
-                )
-
+            erro_txt = friendly_gspread_error(e)
             mapa_svg_html = f"""
             <div class="dash-map-placeholder">
               Erro ao montar mapa.<br><br>
               {h(erro_txt)}
+            </div>
+            """
+
+        gold_subinfo = ""
+        gold_table_html = ""
+
+        if not header_rep_code:
+            gold_subinfo = """
+            <div style="font-size:10px; color:#92400e;">
+              Selecione um representante para consultar os clientes GOLD.
+            </div>
+            """
+        elif gold_info.get("ok"):
+            gold_subinfo = f"""
+            <div style="font-size:10px; color:#92400e;">
+              Rep: <b>{h(header_rep_code)}</b> | Aba GOLD: <b>{h(gold_info.get('worksheet_title', GOLD_WS))}</b>
+            </div>
+            """
+
+            if gold_info.get("gold_rows"):
+                gold_rows_html = []
+                for item in gold_info.get("gold_rows", [])[:20]:
+                    gold_rows_html.append(f"""
+                    <tr>
+                      <td>{h(item.get('codigo', ''))}</td>
+                      <td>{h(item.get('cliente_grupo', ''))}</td>
+                      <td>{h(item.get('grupo_cliente_cliente', ''))}</td>
+                    </tr>
+                    """)
+
+                gold_table_html = f"""
+                <div style="margin-top:8px; max-height:180px; overflow:auto; width:100%;">
+                  <table class="dash-table-mini">
+                    <thead>
+                      <tr>
+                        <th style="width:90px;">Código</th>
+                        <th>Cliente / Grupo</th>
+                        <th>Grupo Cliente / Cliente</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {''.join(gold_rows_html)}
+                    </tbody>
+                  </table>
+                </div>
+                """
+            else:
+                gold_table_html = """
+                <div style="margin-top:8px; font-size:10px; color:#92400e;">
+                  Nenhum cliente GOLD encontrado para este representante.
+                </div>
+                """
+        elif gold_info.get("error"):
+            gold_subinfo = f"""
+            <div style="font-size:10px; color:#b91c1c;">
+              Erro GOLD: {h(gold_info.get('error'))}
             </div>
             """
 
@@ -2162,8 +2333,10 @@ def admin_dashboard():
                   <div class="dash-panel">
                     <div class="dash-panel-title">Clientes Gold</div>
                     <div class="dash-panel-body">
-                      <div class="dash-gold-box">
-                        Total Clientes Gold: <b style="margin-left:6px;">{h(total_gold)}</b>
+                      <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
+                        <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                        {gold_subinfo}
+                        {gold_table_html}
                       </div>
                     </div>
                   </div>
@@ -2177,13 +2350,6 @@ def admin_dashboard():
                         Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
                         Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
                       </div>
-                    </div>
-                  </div>
-
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Agenda de Visitas</div>
-                    <div class="dash-panel-body">
-                      {agenda_visitas_html}
                     </div>
                   </div>
 
@@ -2216,8 +2382,8 @@ def admin_dashboard():
               <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
               <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
               <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
-              <div class="line"><b>AGENDA ROWS:</b> {h(len(agenda_rows))}</div>
-              <div class="line"><b>AGENDA FILE:</b> {h(AGENDA_FILE)}</div>
+              <div class="line"><b>AGENDA SHEET ID:</b> {h(extract_google_sheet_id(AGENDA_SHEET_URL))}</div>
+              <div class="line"><b>AGENDA ABA:</b> {h(WS_AGENDA)}</div>
               <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
               <div class="line"><b>MUNICIPIOS_SHEET_ID RESOLVIDO:</b> {h(map_debug['municipios_sheet_resolved'])}</div>
@@ -2232,6 +2398,19 @@ def admin_dashboard():
               <div class="line"><b>SEMANA COL:</b> {h(semana_col)}</div>
               <div class="line"><b>STATUS CLIENTE COL:</b> {h(status_cliente_col)}</div>
               <div class="line"><b>OBS COL:</b> {h(observacoes_col)}</div>
+              <hr style="border-color:#334155;">
+              <div class="line"><b>GOLD SHEET ID/URL RESOLVIDO:</b> {h(gold_info.get('resolved_sheet_id', ''))}</div>
+              <div class="line"><b>GOLD WS:</b> {h(GOLD_WS)}</div>
+              <div class="line"><b>GOLD SHEET TITLE:</b> {h(gold_info.get('sheet_title', ''))}</div>
+              <div class="line"><b>GOLD WORKSHEET TITLE:</b> {h(gold_info.get('worksheet_title', ''))}</div>
+              <div class="line"><b>GOLD REP COL:</b> {h(gold_info.get('rep_col', ''))}</div>
+              <div class="line"><b>GOLD CODIGO COL:</b> {h(gold_info.get('codigo_col', ''))}</div>
+              <div class="line"><b>GOLD CLIENTE COL:</b> {h(gold_info.get('cliente_col', ''))}</div>
+              <div class="line"><b>GOLD GRUPO COL:</b> {h(gold_info.get('grupo_col', ''))}</div>
+              <div class="line"><b>GOLD SUPERVISOR COL:</b> {h(gold_info.get('supervisor_col', ''))}</div>
+              <div class="line"><b>TOTAL GOLD:</b> {h(gold_info.get('total_gold', 0))}</div>
+              <div class="line"><b>GOLD OK:</b> {h(gold_info.get('ok', False))}</div>
+              <div class="line"><b>GOLD ERROR:</b> {h(gold_info.get('error', ''))}</div>
             </div>
             """
 
@@ -2812,4 +2991,8 @@ def salvar():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
+        debug=DEBUG_MODE
+    )
