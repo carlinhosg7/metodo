@@ -11,7 +11,7 @@ from flask import Flask, request, redirect, url_for, session, render_template_st
 
 import gspread
 from google.oauth2.service_account import Credentials
-from gspread.exceptions import WorksheetNotFound
+from gspread.exceptions import WorksheetNotFound, APIError
 from gspread.utils import rowcol_to_a1
 
 
@@ -34,8 +34,10 @@ WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 MUNICIPIOS_SHEET_ID = os.getenv("MUNICIPIOS_SHEET_ID", "").strip()
 WS_CIDADES = os.getenv("WS_CIDADES", "cidades").strip()
 
-# ===== NOVO: CLIENTES GOLD =====
-GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "1qmqkdFL5EnQowDL-n5Kbehch-H0CVLkU").strip()
+# ===== CLIENTES GOLD =====
+# Pode informar GOLD_SHEET_ID ou GOLD_SHEET_URL
+GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
+GOLD_SHEET_URL = os.getenv("GOLD_SHEET_URL", "").strip()
 GOLD_WS = os.getenv("GOLD_WS", "Tab").strip()
 
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
@@ -464,6 +466,38 @@ def build_city_map_svg(city_points, width=650, height=360):
     return svg
 
 
+def friendly_gspread_error(exc):
+    txt = norm(str(exc))
+
+    if isinstance(exc, WorksheetNotFound):
+        return "A aba informada não foi encontrada na planilha."
+
+    if "Response [404]" in txt or "Requested entity was not found" in txt:
+        return (
+            "Planilha Google Sheets não encontrada. "
+            "Verifique se o ID/URL está correto e se a planilha existe."
+        )
+
+    if "Response [403]" in txt or "PERMISSION_DENIED" in txt or "The caller does not have permission" in txt:
+        return (
+            "Sem permissão para acessar a planilha Google Sheets. "
+            "Compartilhe a planilha com o e-mail da service account como Editor."
+        )
+
+    if "This operation is not supported for this document" in txt:
+        return (
+            "O arquivo informado não é uma planilha Google Sheets válida. "
+            "Converta o arquivo para Google Sheets e use o ID/URL correto."
+        )
+
+    return txt or "Erro ao acessar Google Sheets."
+
+
+def resolve_gold_sheet_target():
+    target = GOLD_SHEET_ID or GOLD_SHEET_URL or SHEET_ID
+    return extract_google_sheet_id(target)
+
+
 # =========================
 # AGENDA - FUNÇÕES
 # =========================
@@ -497,7 +531,7 @@ def ensure_agenda_worksheet(sh_agenda):
         except Exception as e:
             raise RuntimeError(
                 f"Não foi possível acessar/criar a aba '{WS_AGENDA}' da agenda. "
-                f"Compartilhe a planilha da agenda com a service account. Detalhe: {str(e)}"
+                f"Compartilhe a planilha da agenda com a service account. Detalhe: {friendly_gspread_error(e)}"
             )
 
     ensure_headers(ws, headers)
@@ -686,7 +720,11 @@ def connect_gs_by_key(sheet_key_or_url):
     ]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(resolved_key)
+
+    try:
+        return gc.open_by_key(resolved_key)
+    except Exception as e:
+        raise RuntimeError(friendly_gspread_error(e))
 
 
 def connect_gs():
@@ -700,11 +738,14 @@ def connect_municipios_gs():
     return connect_gs_by_key(target_id)
 
 
-# ===== NOVO: CONEXÃO CLIENTES GOLD =====
 def connect_gold_gs():
-    if not GOLD_SHEET_ID:
-        raise RuntimeError("Faltou GOLD_SHEET_ID nas variáveis de ambiente.")
-    return connect_gs_by_key(GOLD_SHEET_ID)
+    gold_target = resolve_gold_sheet_target()
+    if not gold_target:
+        raise RuntimeError(
+            "Faltou configurar a planilha de CLIENTES GOLD. "
+            "Defina GOLD_SHEET_ID ou GOLD_SHEET_URL."
+        )
+    return connect_gs_by_key(gold_target)
 
 
 def safe_get_all_records(ws):
@@ -769,7 +810,7 @@ def ensure_edicoes_worksheet(sh):
             raise RuntimeError(
                 f"Não foi possível acessar/criar a aba '{WS_EDICOES}'. "
                 f"Crie essa aba manualmente na planilha ou conceda permissão de Editor à service account. "
-                f"Detalhe: {str(e)}"
+                f"Detalhe: {friendly_gspread_error(e)}"
             )
 
     ensure_headers(ws, headers)
@@ -853,7 +894,6 @@ def try_get_rep_name(rep_code):
         return ""
 
 
-# ===== NOVO: LEITURA CLIENTES GOLD =====
 def get_gold_info_by_rep(rep_code):
     rep_code = norm(rep_code)
     info = {
@@ -865,17 +905,25 @@ def get_gold_info_by_rep(rep_code):
         "grupo_col": "",
         "supervisor_col": "",
         "ok": False,
-        "error": ""
+        "error": "",
+        "resolved_sheet_id": resolve_gold_sheet_target(),
     }
 
     if not rep_code:
+        info["error"] = "Selecione um representante para consultar CLIENTES GOLD."
         return info
 
     try:
         sh_gold = connect_gold_gs()
         info["sheet_title"] = norm(getattr(sh_gold, "title", ""))
 
-        ws_gold = sh_gold.worksheet(GOLD_WS)
+        try:
+            ws_gold = sh_gold.worksheet(GOLD_WS)
+        except WorksheetNotFound:
+            raise RuntimeError(
+                f"A aba '{GOLD_WS}' não foi encontrada na planilha de CLIENTES GOLD."
+            )
+
         info["worksheet_title"] = norm(getattr(ws_gold, "title", ""))
 
         headers_gold, rows_gold = safe_get_raw_rows(ws_gold)
@@ -933,7 +981,7 @@ def get_gold_info_by_rep(rep_code):
         return info
 
     except Exception as e:
-        info["error"] = str(e)
+        info["error"] = friendly_gspread_error(e)
         return info
 
 
@@ -955,7 +1003,7 @@ def build_debug_sheet_info(sh=None):
             "spreadsheet_title": "",
             "worksheets": [],
             "ok": False,
-            "error": str(e),
+            "error": friendly_gspread_error(e),
         }
 
 
@@ -1824,18 +1872,7 @@ def admin_dashboard():
             rep_sel=rep_sel
         )
 
-        # ===== NOVO: TOTAL CLIENTES GOLD POR REPRESENTANTE =====
-        gold_info = get_gold_info_by_rep(header_rep_code) if header_rep_code else {
-            "total_gold": 0,
-            "gold_rows": [],
-            "sheet_title": "",
-            "worksheet_title": "",
-            "rep_col": "",
-            "grupo_col": "",
-            "supervisor_col": "",
-            "ok": False,
-            "error": ""
-        }
+        gold_info = get_gold_info_by_rep(header_rep_code)
         total_gold = gold_info.get("total_gold", 0)
 
         total_carteira = len(filtered_rows)
@@ -2061,13 +2098,7 @@ def admin_dashboard():
             </div>
             """
         except Exception as e:
-            erro_txt = norm(str(e))
-            if "This operation is not supported for this document" in erro_txt:
-                erro_txt = (
-                    "O arquivo informado em MUNICIPIOS_SHEET_ID não é uma planilha Google Sheets válida. "
-                    "Converta o arquivo para Google Sheets e use o ID da planilha convertida."
-                )
-
+            erro_txt = friendly_gspread_error(e)
             mapa_svg_html = f"""
             <div class="dash-map-placeholder">
               Erro ao montar mapa.<br><br>
@@ -2076,19 +2107,24 @@ def admin_dashboard():
             """
 
         gold_subinfo = ""
-        if header_rep_code:
-            if gold_info.get("ok"):
-                gold_subinfo = f"""
-                <div style="font-size:10px; color:#92400e;">
-                  Rep: <b>{h(header_rep_code)}</b> | Aba GOLD: <b>{h(gold_info.get('worksheet_title', GOLD_WS))}</b>
-                </div>
-                """
-            elif gold_info.get("error"):
-                gold_subinfo = f"""
-                <div style="font-size:10px; color:#b91c1c;">
-                  Erro GOLD: {h(gold_info.get('error'))}
-                </div>
-                """
+        if not header_rep_code:
+            gold_subinfo = """
+            <div style="font-size:10px; color:#92400e;">
+              Selecione um representante para consultar os clientes GOLD.
+            </div>
+            """
+        elif gold_info.get("ok"):
+            gold_subinfo = f"""
+            <div style="font-size:10px; color:#92400e;">
+              Rep: <b>{h(header_rep_code)}</b> | Aba GOLD: <b>{h(gold_info.get('worksheet_title', GOLD_WS))}</b>
+            </div>
+            """
+        elif gold_info.get("error"):
+            gold_subinfo = f"""
+            <div style="font-size:10px; color:#b91c1c;">
+              Erro GOLD: {h(gold_info.get('error'))}
+            </div>
+            """
 
         body = f"""
         <div class="dash-page">
@@ -2272,7 +2308,7 @@ def admin_dashboard():
               <div class="line"><b>STATUS CLIENTE COL:</b> {h(status_cliente_col)}</div>
               <div class="line"><b>OBS COL:</b> {h(observacoes_col)}</div>
               <hr style="border-color:#334155;">
-              <div class="line"><b>GOLD SHEET ID:</b> {h(GOLD_SHEET_ID)}</div>
+              <div class="line"><b>GOLD SHEET ID/URL RESOLVIDO:</b> {h(gold_info.get('resolved_sheet_id', ''))}</div>
               <div class="line"><b>GOLD WS:</b> {h(GOLD_WS)}</div>
               <div class="line"><b>GOLD SHEET TITLE:</b> {h(gold_info.get('sheet_title', ''))}</div>
               <div class="line"><b>GOLD WORKSHEET TITLE:</b> {h(gold_info.get('worksheet_title', ''))}</div>
@@ -2862,4 +2898,8 @@ def salvar():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
+        debug=DEBUG_MODE
+    )
