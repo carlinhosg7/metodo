@@ -4,6 +4,7 @@ import json
 import base64
 import traceback
 import html
+import time
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 from io import StringIO
@@ -46,7 +47,14 @@ MUNICIPIOS_URL = os.getenv(
 ).strip()
 
 PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
-DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").strip().lower() in ("1", "true", "sim", "yes")
+
+# ===== CACHE =====
+BASE_CACHE_TTL = int(os.getenv("BASE_CACHE_TTL", "180"))         # 3 min
+LISTAS_CACHE_TTL = int(os.getenv("LISTAS_CACHE_TTL", "600"))     # 10 min
+REP_NAME_CACHE_TTL = int(os.getenv("REP_NAME_CACHE_TTL", "1800"))  # 30 min
+MUNICIPIOS_CACHE_TTL = int(os.getenv("MUNICIPIOS_CACHE_TTL", "86400"))  # 24h
+DEBUG_SHEETINFO_CACHE_TTL = int(os.getenv("DEBUG_SHEETINFO_CACHE_TTL", "120"))
 
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
@@ -102,6 +110,36 @@ app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=7)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+
+# =========================
+# CACHE GLOBAL SIMPLES
+# =========================
+_MEM_CACHE = {}
+
+
+def cache_get(key):
+    item = _MEM_CACHE.get(key)
+    if not item:
+        return None
+    expires_at = item.get("expires_at", 0)
+    if expires_at < time.time():
+        _MEM_CACHE.pop(key, None)
+        return None
+    return item.get("value")
+
+
+def cache_set(key, value, ttl):
+    _MEM_CACHE[key] = {
+        "value": value,
+        "expires_at": time.time() + ttl
+    }
+
+
+def cache_del_prefix(prefix):
+    keys = [k for k in _MEM_CACHE.keys() if k.startswith(prefix)]
+    for k in keys:
+        _MEM_CACHE.pop(k, None)
 
 
 # =========================
@@ -432,7 +470,30 @@ def resolve_gold_sheet_target():
     return extract_google_sheet_id(target)
 
 
+def render_error_page(subtitle, message, user_photo_url=""):
+    body = f"<div class='card'><b>{h(message)}</b></div>"
+    return render_template_string(
+        BASE_HTML,
+        title=APP_TITLE,
+        subtitle=subtitle,
+        logged=require_login(),
+        user_login=session.get("user_login", ""),
+        user_name=session.get("rep_name", ""),
+        user_type=session.get("user_type", ""),
+        user_photo_url=user_photo_url,
+        body=body
+    )
+
+
+# =========================
+# MUNICÍPIOS CACHE
+# =========================
 def load_public_municipios():
+    cache_key = f"municipios::{MUNICIPIOS_URL}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached, ""
+
     try:
         resp = requests.get(MUNICIPIOS_URL, timeout=30)
         resp.raise_for_status()
@@ -450,6 +511,7 @@ def load_public_municipios():
                 clean_row[norm(k)] = norm(v)
             rows.append(clean_row)
 
+        cache_set(cache_key, rows, MUNICIPIOS_CACHE_TTL)
         return rows, ""
     except Exception as e:
         return [], f"Erro ao carregar municípios públicos: {norm(str(e))}"
@@ -634,30 +696,6 @@ def build_city_map_svg(city_points, width=760, height=420):
     </div>
     """
     return svg
-
-
-def get_optional_worksheet(sh, ws_name):
-    try:
-        return sh.worksheet(ws_name)
-    except WorksheetNotFound:
-        return None
-    except Exception:
-        return None
-
-
-def render_error_page(subtitle, message, user_photo_url=""):
-    body = f"<div class='card'><b>{h(message)}</b></div>"
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle=subtitle,
-        logged=require_login(),
-        user_login=session.get("user_login", ""),
-        user_name=session.get("rep_name", ""),
-        user_type=session.get("user_type", ""),
-        user_photo_url=user_photo_url,
-        body=body
-    )
 
 
 # =========================
@@ -996,12 +1034,29 @@ def ensure_base_tracking_columns(ws_base):
     return headers
 
 
-def get_base_structure(ws_base):
+def get_optional_worksheet(sh, ws_name):
+    try:
+        return sh.worksheet(ws_name)
+    except WorksheetNotFound:
+        return None
+    except Exception:
+        return None
+
+
+def get_base_structure_cached(sh):
+    cache_key = f"base_structure::{extract_google_sheet_id(SHEET_ID)}::{WS_BASE}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    ws_base = sh.worksheet(WS_BASE)
     headers = ensure_base_tracking_columns(ws_base)
     rows = ws_base.get_all_values()
 
     if not rows:
-        return headers, []
+        result = (headers, [])
+        cache_set(cache_key, result, BASE_CACHE_TTL)
+        return result
 
     final_headers = [norm(x) for x in rows[0]]
     data_rows = []
@@ -1014,7 +1069,27 @@ def get_base_structure(ws_base):
 
         data_rows.append({final_headers[i]: raw[i] for i in range(len(final_headers))})
 
-    return final_headers, data_rows
+    result = (final_headers, data_rows)
+    cache_set(cache_key, result, BASE_CACHE_TTL)
+    return result
+
+
+def get_listas_records_cached(sh):
+    cache_key = f"listas::{extract_google_sheet_id(SHEET_ID)}::{WS_LISTAS}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    ws_listas = get_optional_worksheet(sh, WS_LISTAS)
+    rows = safe_get_all_records(ws_listas) if ws_listas else []
+    cache_set(cache_key, rows, LISTAS_CACHE_TTL)
+    return rows
+
+
+def invalidate_main_sheet_cache():
+    cache_del_prefix(f"base_structure::{extract_google_sheet_id(SHEET_ID)}::{WS_BASE}")
+    cache_del_prefix(f"listas::{extract_google_sheet_id(SHEET_ID)}::{WS_LISTAS}")
+    cache_del_prefix(f"sheet_info::{extract_google_sheet_id(SHEET_ID)}")
 
 
 def try_get_rep_name(rep_code):
@@ -1022,10 +1097,14 @@ def try_get_rep_name(rep_code):
     if not rep_code:
         return ""
 
+    cache_key = f"rep_name::{extract_google_sheet_id(SHEET_ID)}::{rep_code}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         sh = connect_gs()
-        ws_base = sh.worksheet(WS_BASE)
-        headers, base_rows = safe_get_raw_rows(ws_base)
+        headers, base_rows = get_base_structure_cached(sh)
 
         rep_col = pick_col_flexible(headers, [
             "Codigo Representante", "Código Representante",
@@ -1036,12 +1115,16 @@ def try_get_rep_name(rep_code):
         ])
 
         if not rep_col or not nome_rep_col:
+            cache_set(cache_key, "", REP_NAME_CACHE_TTL)
             return ""
 
         for row in base_rows:
             if norm(row.get(rep_col, "")) == rep_code:
-                return norm(row.get(nome_rep_col, ""))
+                val = norm(row.get(nome_rep_col, ""))
+                cache_set(cache_key, val, REP_NAME_CACHE_TTL)
+                return val
 
+        cache_set(cache_key, "", REP_NAME_CACHE_TTL)
         return ""
     except Exception:
         return ""
@@ -1166,25 +1249,34 @@ def get_gold_info_by_rep(rep_code):
 
 
 def build_debug_sheet_info(sh=None):
+    cache_key = f"sheet_info::{extract_google_sheet_id(SHEET_ID)}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         if sh is None:
             sh = connect_gs()
 
         abas = [ws.title for ws in sh.worksheets()]
-        return {
+        result = {
             "sheet_id": extract_google_sheet_id(SHEET_ID),
             "spreadsheet_title": norm(getattr(sh, "title", "")),
             "worksheets": abas,
             "ok": True,
         }
+        cache_set(cache_key, result, DEBUG_SHEETINFO_CACHE_TTL)
+        return result
     except Exception as e:
-        return {
+        result = {
             "sheet_id": extract_google_sheet_id(SHEET_ID),
             "spreadsheet_title": "",
             "worksheets": [],
             "ok": False,
             "error": friendly_gspread_error(e),
         }
+        cache_set(cache_key, result, DEBUG_SHEETINFO_CACHE_TTL)
+        return result
 
 
 # =========================
@@ -1803,6 +1895,8 @@ LOGIN_BODY = """
 @app.route("/", methods=["GET", "POST"])
 def login():
     if require_login():
+        if session.get("user_type") == "admin":
+            return redirect(url_for("admin_dashboard"))
         return redirect(url_for("dashboard"))
 
     if request.method == "POST":
@@ -1819,7 +1913,7 @@ def login():
             session["rep_name"] = ""
             session["rep_code"] = ""
             flash("Logado como ADMIN.", "ok")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("admin_dashboard"))
         elif u.isdigit() and p.isdigit() and u == p:
             rep_nome = try_get_rep_name(u)
             session.clear()
@@ -1911,13 +2005,8 @@ def admin_dashboard():
         return render_error_page("Dashboard Admin", f"Erro ao conectar na planilha principal: {norm(str(e))}")
 
     try:
-        debug_info = build_debug_sheet_info(sh)
-
-        try:
-            ws_base = sh.worksheet(WS_BASE)
-            headers, base_rows = get_base_structure(ws_base)
-        except Exception as e:
-            return render_error_page("Dashboard Admin", f"Erro ao abrir a aba BASE: {norm(str(e))}")
+        debug_info = build_debug_sheet_info(sh) if DEBUG_MODE else {"worksheets": [], "sheet_id": "", "spreadsheet_title": ""}
+        headers, base_rows = get_base_structure_cached(sh)
 
         key_col = pick_col_flexible(headers, [
             "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -2584,29 +2673,17 @@ def dashboard():
     except Exception as e:
         return render_error_page("Erro", f"Erro ao conectar na planilha principal: {norm(str(e))}", current_user_photo)
 
-    debug_info = build_debug_sheet_info(sh)
+    debug_info = build_debug_sheet_info(sh) if DEBUG_MODE else {"worksheets": [], "sheet_id": "", "spreadsheet_title": ""}
     last_save = get_last_save_debug()
 
     try:
-        ws_base = sh.worksheet(WS_BASE)
+        headers, base_rows = get_base_structure_cached(sh)
     except WorksheetNotFound:
         return render_error_page("Erro", f"Aba não encontrada: {WS_BASE}", current_user_photo)
     except Exception as e:
-        return render_error_page("Erro", f"Erro ao abrir aba BASE: {norm(str(e))}", current_user_photo)
-
-    ws_listas = get_optional_worksheet(sh, WS_LISTAS)
-
-    try:
-        ensure_edicoes_worksheet(sh)
-    except Exception as e:
-        flash(str(e), "err")
-
-    try:
-        headers, base_rows = get_base_structure(ws_base)
-    except Exception as e:
         return render_error_page("Erro", f"Erro ao ler estrutura da BASE: {norm(str(e))}", current_user_photo)
 
-    lista_rows = safe_get_all_records(ws_listas) if ws_listas else []
+    lista_rows = get_listas_records_cached(sh)
 
     key_col = pick_col_flexible(headers, [
         "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -2654,6 +2731,8 @@ def dashboard():
 
     prepared_rows = []
 
+    q_lower = q.lower()
+
     for idx_base, r in enumerate(base_rows, start=2):
         repc = norm(r.get(rep_col, "")) if rep_col else ""
 
@@ -2663,9 +2742,14 @@ def dashboard():
             continue
         if is_admin() and rep_sel and repc != rep_sel:
             continue
-        if q:
-            hay = " ".join([norm(v) for v in r.values()])
-            if q.lower() not in hay.lower():
+        if q_lower:
+            grupo_val = norm(r.get(grupo_col, "")) if grupo_col else ""
+            cidade_val = norm(r.get(cidade_col, "")) if cidade_col else ""
+            ck_val = norm(r.get(key_col, "")) if key_col else ""
+            nome_rep_val = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+            sup_val = norm(r.get(sup_col, "")) if sup_col else ""
+            hay = f"{ck_val} {grupo_val} {cidade_val} {nome_rep_val} {sup_val}".lower()
+            if q_lower not in hay:
                 continue
 
         row_copy = dict(r)
@@ -2759,8 +2843,6 @@ def dashboard():
         last_obs = h(last_save.get("observacoes", ""))
         last_result = h(last_save.get("result", ""))
 
-        listas_status = "OK" if ws_listas else "FALLBACK DEFAULT"
-
         debug_html = f"""
         <div class="card debug-card">
           <div class="title">DEBUG CONEXÃO / GRAVAÇÃO</div>
@@ -2770,7 +2852,6 @@ def dashboard():
           <div class="line"><b>USUÁRIO:</b> {h(session.get("user_login", ""))} ({h(session.get("user_type", ""))})</div>
           <div class="line"><b>REPRESENTANTE LOGADO:</b> {h(session.get("rep_code", ""))}</div>
           <div class="line"><b>REPRESENTANTE FILTRADO:</b> {h(selected_rep_code)}</div>
-          <div class="line"><b>WS_LISTAS:</b> {h(WS_LISTAS)} ({h(listas_status)})</div>
           <hr style="border-color:#334155;">
           <div class="line"><b>ÚLTIMA LINHA GRAVADA:</b> {last_row}</div>
           <div class="line"><b>ÚLTIMO CLIENT_KEY:</b> {last_ck}</div>
@@ -3094,6 +3175,8 @@ def salvar():
             "observacoes": gravado_obs,
             "result": result_txt,
         })
+
+        invalidate_main_sheet_cache()
 
         flash(f"Gravado com sucesso na BASE na linha {row_num}.", "ok")
         if not edicoes_ok:
