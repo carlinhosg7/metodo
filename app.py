@@ -2812,8 +2812,29 @@ def dashboard():
     rep_sel = norm(request.args.get("rep", ""))
     q = norm(request.args.get("q", ""))
 
+    # NOVOS FILTROS
+    data_ini = norm(request.args.get("data_ini", ""))
+    data_fim = norm(request.args.get("data_fim", ""))
+    filtro_mes = norm(request.args.get("filtro_mes", ""))
+    filtro_semana = norm(request.args.get("filtro_semana", ""))
+
     sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if (is_admin() and sup_col) else []
     rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if is_admin() else []
+
+    def date_to_sortable(v):
+        v = norm(v)
+        if not v:
+            return ""
+
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+            return v
+
+        m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", v)
+        if m:
+            dd, mm, yyyy = m.groups()
+            return f"{yyyy}-{mm}-{dd}"
+
+        return ""
 
     prepared_rows = []
     q_lower = q.lower()
@@ -2844,6 +2865,24 @@ def dashboard():
         row_copy["Semana Atendimento"] = norm(r.get(semana_col, "")) if semana_col else ""
         row_copy["Status Cliente"] = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
         row_copy["Observações"] = norm(r.get(observacoes_col, "")) if observacoes_col else ""
+
+        # FILTRO POR DATA
+        data_row_sort = date_to_sortable(row_copy["Data Agenda Visita"])
+        if data_ini:
+            if not data_row_sort or data_row_sort < data_ini:
+                continue
+
+        if data_fim:
+            if not data_row_sort or data_row_sort > data_fim:
+                continue
+
+        # FILTRO POR MÊS
+        if filtro_mes and normalize_text_for_match(row_copy["Mês"]) != normalize_text_for_match(filtro_mes):
+            continue
+
+        # FILTRO POR SEMANA
+        if filtro_semana and normalize_text_for_match(row_copy["Semana Atendimento"]) != normalize_text_for_match(filtro_semana):
+            continue
 
         row_copy["_base_row_number"] = idx_base
 
@@ -2989,6 +3028,14 @@ def dashboard():
             hidden_filters += f'<input type="hidden" name="rep" value="{h(rep_sel)}">'
         if q:
             hidden_filters += f'<input type="hidden" name="q" value="{h(q)}">'
+        if data_ini:
+            hidden_filters += f'<input type="hidden" name="data_ini" value="{h(data_ini)}">'
+        if data_fim:
+            hidden_filters += f'<input type="hidden" name="data_fim" value="{h(data_fim)}">'
+        if filtro_mes:
+            hidden_filters += f'<input type="hidden" name="filtro_mes" value="{h(filtro_mes)}">'
+        if filtro_semana:
+            hidden_filters += f'<input type="hidden" name="filtro_semana" value="{h(filtro_semana)}">'
 
         row_html = f"""
         <tr class="{h(klass)}">
@@ -3077,6 +3124,31 @@ def dashboard():
             <label>Buscar</label>
             <input name="q" value="{h(q)}" placeholder="cliente/grupo/cidade...">
           </div>
+
+          <div>
+            <label>Data inicial</label>
+            <input type="date" name="data_ini" value="{h(data_ini)}">
+          </div>
+
+          <div>
+            <label>Data final</label>
+            <input type="date" name="data_fim" value="{h(data_fim)}">
+          </div>
+
+          <div>
+            <label>Filtrar por Mês</label>
+            <select name="filtro_mes">
+              {opt_html(meses, filtro_mes)}
+            </select>
+          </div>
+
+          <div>
+            <label>Filtrar por Semana</label>
+            <select name="filtro_semana">
+              {opt_html(semanas, filtro_semana)}
+            </select>
+          </div>
+
           <div style="display:flex;align-items:flex-end;gap:8px;">
             <button type="submit">Aplicar</button>
             <a href="{url_for('dashboard')}"><button type="button" class="secondary">Limpar</button></a>
@@ -3125,7 +3197,6 @@ def dashboard():
         body=body
     )
 
-
 @app.route("/salvar", methods=["POST"])
 def salvar():
     if not require_login():
@@ -3143,7 +3214,23 @@ def salvar():
     rep = norm(request.form.get("rep", ""))
     q = norm(request.form.get("q", ""))
 
-    redirect_args = {k: v for k, v in {"sup": sup, "rep": rep, "q": q}.items() if v}
+    # NOVOS FILTROS
+    data_ini = norm(request.form.get("data_ini", ""))
+    data_fim = norm(request.form.get("data_fim", ""))
+    filtro_mes = norm(request.form.get("filtro_mes", ""))
+    filtro_semana = norm(request.form.get("filtro_semana", ""))
+
+    redirect_args = {
+        k: v for k, v in {
+            "sup": sup,
+            "rep": rep,
+            "q": q,
+            "data_ini": data_ini,
+            "data_fim": data_fim,
+            "filtro_mes": filtro_mes,
+            "filtro_semana": filtro_semana
+        }.items() if v
+    }
 
     if not client_key:
         flash("client_key vazio.", "err")
@@ -3193,7 +3280,7 @@ def salvar():
                 {"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]},
                 {"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]},
             ],
-            value_input_option="USER_ENTERED"
+            value_input_option="RAW"
         )
 
         esperado_data = normalizar_data_comparacao(data_agenda)
@@ -3220,10 +3307,10 @@ def salvar():
 
             conferiu = (
                 normalizar_data_comparacao(gravado_data) == esperado_data and
-                gravado_mes == esperado_mes and
-                gravado_semana == esperado_semana and
-                gravado_status == esperado_status and
-                gravado_obs == esperado_obs
+                normalize_text_for_match(gravado_mes) == normalize_text_for_match(esperado_mes) and
+                normalize_text_for_match(gravado_semana) == normalize_text_for_match(esperado_semana) and
+                normalize_text_for_match(gravado_status) == normalize_text_for_match(esperado_status) and
+                norm(gravado_obs) == norm(esperado_obs)
             )
 
             if conferiu:
@@ -3236,6 +3323,7 @@ def salvar():
                 "data_agenda": gravado_data,
                 "mes": gravado_mes,
                 "semana": gravado_semana,
+                "semana_esperada": esperado_semana,
                 "status_cliente": gravado_status,
                 "observacoes": gravado_obs,
                 "result": "FALHA NA CONFIRMAÇÃO",
