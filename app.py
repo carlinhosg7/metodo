@@ -3169,7 +3169,7 @@ def salvar():
         col_status = headers_norm.index("Status Cliente") + 1
         col_obs = headers_norm.index("Observações") + 1
 
-        ws_base.batch_update(
+                ws_base.batch_update(
             [
                 {"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]},
                 {"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]},
@@ -3180,21 +3180,38 @@ def salvar():
             value_input_option="USER_ENTERED"
         )
 
-        row_values = ws_base.row_values(row_num)
+        esperado_data = norm(data_agenda)
+        esperado_mes = norm(mes)
+        esperado_semana = norm(semana)
+        esperado_status = norm(status_cliente)
+        esperado_obs = norm(observacoes)
 
-        gravado_data = safe_cell(row_values, col_data)
-        gravado_mes = safe_cell(row_values, col_mes)
-        gravado_semana = safe_cell(row_values, col_semana)
-        gravado_status = safe_cell(row_values, col_status)
-        gravado_obs = safe_cell(row_values, col_obs)
+        gravado_data = ""
+        gravado_mes = ""
+        gravado_semana = ""
+        gravado_status = ""
+        gravado_obs = ""
+        conferiu = False
 
-        conferiu = (
-            gravado_data == norm(data_agenda) and
-            gravado_mes == norm(mes) and
-            gravado_semana == norm(semana) and
-            gravado_status == norm(status_cliente) and
-            gravado_obs == norm(observacoes)
-        )
+        for tentativa in range(5):
+            time.sleep(0.35)
+
+            gravado_data = norm(ws_base.acell(rowcol_to_a1(row_num, col_data)).value or "")
+            gravado_mes = norm(ws_base.acell(rowcol_to_a1(row_num, col_mes)).value or "")
+            gravado_semana = norm(ws_base.acell(rowcol_to_a1(row_num, col_semana)).value or "")
+            gravado_status = norm(ws_base.acell(rowcol_to_a1(row_num, col_status)).value or "")
+            gravado_obs = norm(ws_base.acell(rowcol_to_a1(row_num, col_obs)).value or "")
+
+            conferiu = (
+                gravado_data == esperado_data and
+                gravado_mes == esperado_mes and
+                gravado_semana == esperado_semana and
+                gravado_status == esperado_status and
+                gravado_obs == esperado_obs
+            )
+
+            if conferiu:
+                break
 
         if not conferiu:
             set_last_save_debug({
