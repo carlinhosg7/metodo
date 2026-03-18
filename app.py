@@ -59,6 +59,14 @@ DEBUG_SHEETINFO_CACHE_TTL = int(os.getenv("DEBUG_SHEETINFO_CACHE_TTL", "120"))
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
 
+# ===== PLANILHA VENDAS (cabeçalho do painel) =====
+VENDAS_SHEET_URL = os.getenv(
+    "VENDAS_SHEET_URL",
+    "https://docs.google.com/spreadsheets/d/1vLoJ755IpcRuW2NgvbejSw-1iUA5ZP7EHINVT9nXYig/edit?usp=sharing"
+).strip()
+VENDAS_WS = os.getenv("VENDAS_WS", "Tab").strip()
+VENDAS_CACHE_TTL = int(os.getenv("VENDAS_CACHE_TTL", "600"))  # 10 min
+
 # =========================
 # AGENDA SEMANAL
 # =========================
@@ -496,6 +504,100 @@ def render_error_page(subtitle, message, user_photo_url=""):
         user_photo_url=user_photo_url,
         body=body
     )
+def connect_vendas_gs():
+    vendas_sheet_id = extract_google_sheet_id(VENDAS_SHEET_URL)
+    if not vendas_sheet_id:
+        raise RuntimeError("URL/ID da planilha VENDAS não informado.")
+    return connect_gs_by_key(vendas_sheet_id)
+
+
+def get_vendas_rows_cached():
+    cache_key = f"vendas::{extract_google_sheet_id(VENDAS_SHEET_URL)}::{VENDAS_WS}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    sh_vendas = connect_vendas_gs()
+
+    try:
+        ws_vendas = sh_vendas.worksheet(VENDAS_WS)
+    except WorksheetNotFound:
+        raise RuntimeError(f"A aba '{VENDAS_WS}' não foi encontrada na planilha VENDAS.")
+
+    headers, rows = safe_get_raw_rows(ws_vendas)
+    payload = (headers, rows)
+    cache_set(cache_key, payload, VENDAS_CACHE_TTL)
+    return payload
+
+
+def invalidate_vendas_cache():
+    cache_del_prefix(f"vendas::{extract_google_sheet_id(VENDAS_SHEET_URL)}::{VENDAS_WS}")
+
+
+def get_vendas_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+
+    info = {
+        "ok": False,
+        "error": "",
+        "rep_code": rep_code,
+        "representante": "",
+        "supervisor": "",
+        "meta": 0.0,
+        "realizado": 0.0,
+        "percentual": 0.0,
+    }
+
+    if not rep_code:
+        info["error"] = "Representante não informado."
+        return info
+
+    try:
+        headers, rows = get_vendas_rows_cached()
+
+        col_rep = pick_col_flexible(headers, [
+            "Codigo Representante", "Código Representante", "Cod Representante", "COD_REP"
+        ])
+        col_nome = pick_col_flexible(headers, [
+            "Representante", "Nome Representante"
+        ])
+        col_sup = pick_col_flexible(headers, [
+            "Supervisor", "Supervisão"
+        ])
+        col_meta = pick_col_flexible(headers, [
+            "Vlr Meta Entrega", "Meta Entrega", "Vlr Meta", "Meta"
+        ])
+        col_venda = pick_col_flexible(headers, [
+            "Vlr Venda", "Valor Venda", "Venda"
+        ])
+
+        if not col_rep:
+            raise RuntimeError("Coluna de representante não encontrada na planilha VENDAS.")
+
+        for row in rows:
+            rep_val = norm(row.get(col_rep, ""))
+            rep_val_num = rep_val.lstrip("0") or "0"
+            rep_code_num = rep_code.lstrip("0") or "0"
+
+            if rep_val == rep_code or rep_val_num == rep_code_num:
+                meta = parse_number_br(row.get(col_meta, "")) if col_meta else 0.0
+                realizado = parse_number_br(row.get(col_venda, "")) if col_venda else 0.0
+                percentual = (realizado / meta * 100.0) if meta > 0 else 0.0
+
+                info["representante"] = norm(row.get(col_nome, "")) if col_nome else ""
+                info["supervisor"] = norm(row.get(col_sup, "")) if col_sup else ""
+                info["meta"] = meta
+                info["realizado"] = realizado
+                info["percentual"] = percentual
+                info["ok"] = True
+                return info
+
+        info["error"] = f"Representante {rep_code} não encontrado na planilha VENDAS."
+        return info
+
+    except Exception as e:
+        info["error"] = norm(str(e))
+        return info
 
 
 # =========================
@@ -2147,20 +2249,39 @@ def admin_dashboard():
         header_meta = "R$ 0,00"
         header_realizado = "R$ 0,00"
         header_percentual = "0,00%"
-
-        if header_rep_code and rep_col:
-            for r in filtered_rows:
-                if norm(r.get(rep_col, "")) == header_rep_code:
-                    header_rep_name = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-                    if not header_sup and sup_col:
-                        header_sup = norm(r.get(sup_col, ""))
-                    break
-
-        total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
-        header_realizado = format_money_br(total_realizado_2026)
-
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
 
+        vendas_info = {
+            "ok": False,
+            "error": "",
+            "representante": "",
+            "supervisor": "",
+            "meta": 0.0,
+            "realizado": 0.0,
+            "percentual": 0.0,
+        }
+
+        if header_rep_code:
+            vendas_info = get_vendas_info_by_rep(header_rep_code)
+
+            if vendas_info.get("ok"):
+                header_rep_name = vendas_info.get("representante", "") or header_rep_name
+                header_sup = vendas_info.get("supervisor", "") or header_sup
+                header_meta = format_money_br(vendas_info.get("meta", 0.0))
+                header_realizado = format_money_br(vendas_info.get("realizado", 0.0))
+                header_percentual = f"{format_number_br(vendas_info.get('percentual', 0.0))}%"
+            else:
+                if rep_col:
+                    for r in filtered_rows:
+                        if norm(r.get(rep_col, "")) == header_rep_code:
+                            header_rep_name = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+                            if not header_sup and sup_col:
+                                header_sup = norm(r.get(sup_col, ""))
+                            break
+
+                total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
+                header_realizado = format_money_br(total_realizado_2026)
+                
         ranking_2026 = []
         if grupo_col and t2026_col:
             for r in filtered_rows:
@@ -2916,13 +3037,19 @@ def dashboard():
         rep_sup_base = ""
         rep_reg_base = ""
 
-        for r in base_rows:
-            if norm(r.get(rep_col, "")) == selected_rep_code:
-                rep_name_base = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-                rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
-                rep_reg_base = ""
-                if rep_name_base:
-                    break
+        vendas_info_rep = get_vendas_info_by_rep(selected_rep_code)
+
+        if vendas_info_rep.get("ok"):
+            rep_name_base = vendas_info_rep.get("representante", "") or ""
+            rep_sup_base = vendas_info_rep.get("supervisor", "") or ""
+        else:
+            for r in base_rows:
+                if norm(r.get(rep_col, "")) == selected_rep_code:
+                    rep_name_base = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+                    rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
+                    rep_reg_base = ""
+                    if rep_name_base:
+                        break
 
         foto_url = get_rep_photo_src(selected_rep_code)
         nome_card = rep_name_base or f"Representante {selected_rep_code}"
