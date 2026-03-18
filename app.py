@@ -1594,12 +1594,32 @@ BASE_HTML = """
     .row-green { background: rgba(34,197,94,0.16); }
     .row-blue { background: rgba(56,189,248,0.14); }
 
-    .debug-card { background: #0f172a; color: #e2e8f0; border: 1px solid #1e293b; }
-    .debug-card .line { margin-bottom: 6px; word-break: break-word; }
-    .debug-card .title { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
+    .debug-card {
+      background: #0f172a;
+      color: #e2e8f0;
+      border: 1px solid #1e293b;
+    }
+    .debug-card .line {
+      margin-bottom: 6px;
+      word-break: break-word;
+    }
+    .debug-card .title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
 
-    .dash-page { display: flex; flex-direction: column; gap: 12px; align-items: center; }
-    .a3-page { width: min(100%, 1560px); background: #ffffff; }
+    .dash-page {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .a3-page {
+      width: min(100%, 1560px);
+      background: #ffffff;
+    }
 
     .dash-shell {
       background: #ffffff;
@@ -1698,21 +1718,39 @@ BASE_HTML = """
       justify-self: end;
     }
 
-    .dash-row-top {
+    .dash-layout-main {
       display: grid;
-      grid-template-columns: 1fr 1fr 1.08fr;
+      grid-template-columns: 1.45fr 1fr;
       gap: 8px;
-      margin-bottom: 8px;
+      align-items: stretch;
     }
 
-    .dash-row-bottom {
+    .dash-left-col {
       display: grid;
-      grid-template-columns: 1.22fr 0.92fr;
+      grid-template-rows: auto 1fr;
       gap: 8px;
-      align-items: start;
+      min-height: 0;
     }
 
-    .dash-right-stack {
+    .dash-top-ranking {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    .dash-left-bottom {
+      min-height: 0;
+    }
+
+    .dash-right-col {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      gap: 8px;
+      min-height: 0;
+    }
+
+    .dash-right-bottom {
       display: grid;
       grid-template-rows: auto auto;
       gap: 8px;
@@ -1722,6 +1760,9 @@ BASE_HTML = """
       border: 1px solid #9ca3af;
       background: #ffffff;
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
     }
 
     .dash-panel-title {
@@ -1738,6 +1779,15 @@ BASE_HTML = """
     .dash-panel-body {
       padding: 6px;
       box-sizing: border-box;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .dash-panel-body-map {
+      padding: 4px;
+      box-sizing: border-box;
+      flex: 1;
+      min-height: 520px;
     }
 
     .dash-table-mini {
@@ -1852,7 +1902,10 @@ BASE_HTML = """
       flex-wrap: wrap;
     }
 
-    .print-note { font-size: 11px; color: #6b7280; }
+    .print-note {
+      font-size: 11px;
+      color: #6b7280;
+    }
 
     .status-chip {
       display: inline-block;
@@ -1897,7 +1950,10 @@ BASE_HTML = """
       font-size:10px;
       box-sizing:border-box;
     }
-    .agenda-valor { min-width:58px; text-align:center; }
+    .agenda-valor {
+      min-width:58px;
+      text-align:center;
+    }
     .agenda-topbar {
       display:flex;
       justify-content:space-between;
@@ -1923,7 +1979,10 @@ BASE_HTML = """
 
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
-    @page { size: A3 landscape; margin: 4mm; }
+    @page {
+      size: A3 landscape;
+      margin: 4mm;
+    }
 
     @media print {
       html, body {
@@ -1932,7 +1991,11 @@ BASE_HTML = """
         background: #ffffff !important;
       }
 
-      .topbar, .no-print, .msg { display: none !important; }
+      .topbar,
+      .no-print,
+      .msg {
+        display: none !important;
+      }
 
       .container {
         padding: 0 !important;
@@ -1940,7 +2003,10 @@ BASE_HTML = """
         width: 100%;
       }
 
-      .dash-page { gap: 0 !important; width: 100%; }
+      .dash-page {
+        gap: 0 !important;
+        width: 100%;
+      }
 
       .a3-page {
         width: 412mm !important;
@@ -1958,12 +2024,29 @@ BASE_HTML = """
         overflow: hidden !important;
       }
 
-      .dash-header, .dash-row-top, .dash-row-bottom, .dash-right-stack, .dash-panel, .dash-panel-body {
+      .dash-layout-main {
+        grid-template-columns: 1.45fr 1fr !important;
+      }
+
+      .dash-panel-body-map {
+        min-height: 470px !important;
+      }
+
+      .dash-header,
+      .dash-layout-main,
+      .dash-left-col,
+      .dash-right-col,
+      .dash-top-ranking,
+      .dash-right-bottom,
+      .dash-panel,
+      .dash-panel-body {
         break-inside: avoid !important;
         page-break-inside: avoid !important;
       }
 
-      .dash-table-mini, .dash-table-big, .agenda-table {
+      .dash-table-mini,
+      .dash-table-big,
+      .agenda-table {
         font-size: 8px !important;
       }
 
@@ -1978,8 +2061,22 @@ BASE_HTML = """
       .dash-header { grid-template-columns: 74px 1fr; }
       .dash-meta-box { grid-column: 1 / -1; }
       .dash-kidy-logo { justify-self: start; }
-      .dash-row-top { grid-template-columns: 1fr; }
-      .dash-row-bottom { grid-template-columns: 1fr; }
+
+      .dash-layout-main {
+        grid-template-columns: 1fr;
+      }
+
+      .dash-top-ranking {
+        grid-template-columns: 1fr;
+      }
+
+      .dash-right-bottom {
+        grid-template-rows: auto auto;
+      }
+
+      .dash-panel-body-map {
+        min-height: 340px;
+      }
     }
   </style>
 </head>
@@ -2011,32 +2108,6 @@ BASE_HTML = """
   </div>
 </body>
 </html>
-"""
-
-LOGIN_BODY = """
-<div class="login-wrap">
-  <div class="card login-card">
-    <img src="{{ logo_url }}" alt="Logo Kidy" class="login-logo">
-    <h2 class="login-title">Acompanhamento de clientes</h2>
-    <p class="login-subtitle">Faça login para acessar a carteira comercial</p>
-
-    <form method="post">
-      <div class="grid-2">
-        <div>
-          <label>Usuário</label>
-          <input name="user" placeholder="admin ou código do representante" required>
-        </div>
-        <div>
-          <label>Senha</label>
-          <input name="pass" type="password" placeholder="admin123 ou o mesmo código" required>
-        </div>
-      </div>
-      <div style="margin-top:12px;">
-        <button type="submit">Entrar</button>
-      </div>
-    </form>
-  </div>
-</div>
 """
 
 
@@ -2613,150 +2684,161 @@ def admin_dashboard():
         body = f"""
         <div class="dash-page">
 
-          <div class="card no-print a3-page">
+        <div class="card no-print a3-page">
             <form method="get">
-              <div class="grid">
+            <div class="grid">
                 <div>
-                  <label>Supervisor</label>
-                  <select name="sup">
+                <label>Supervisor</label>
+                <select name="sup">
                     <option value="">(Todos)</option>
                     {''.join([f"<option value='{h(s)}' {'selected' if norm(s) == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
-                  </select>
+                </select>
                 </div>
 
                 <div>
-                  <label>Representante</label>
-                  <select name="rep">
+                <label>Representante</label>
+                <select name="rep">
                     <option value="">(Todos)</option>
                     {''.join([f"<option value='{h(r)}' {'selected' if norm(r) == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
-                  </select>
+                </select>
                 </div>
 
                 <div class="print-toolbar">
-                  <button type="submit">Aplicar</button>
-                  <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
-                  <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
+                <button type="submit">Aplicar</button>
+                <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
+                <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
                 </div>
 
                 <div class="print-note">
-                  Ajustado para sair em uma única página A3 horizontal.
+                Layout ajustado com mapa maior e blocos alinhados.
                 </div>
-              </div>
+            </div>
             </form>
-          </div>
+        </div>
 
-          <div class="a3-page no-break">
+        <div class="a3-page no-break">
             <div class="dash-shell">
 
-              <div class="dash-header">
+            <div class="dash-header">
                 <div>
-                  {f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">' if rep_photo else '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'}
+                {
+                    f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
+                    if rep_photo else
+                    '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
+                }
                 </div>
 
                 <div class="dash-title-wrap">
-                  <div class="dash-main-title">Acompanhamento de Representante</div>
-                  <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                  <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
-                  <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
+                <div class="dash-main-title">Acompanhamento de Representante</div>
+                <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
                 </div>
 
                 <div class="dash-meta-box">
-                  <div class="dash-metric">
+                <div class="dash-metric">
                     <div class="dash-metric-label">Meta</div>
                     <div class="dash-metric-value">{h(header_meta)}</div>
-                  </div>
-                  <div class="dash-metric">
+                </div>
+                <div class="dash-metric">
                     <div class="dash-metric-label">Realizado</div>
                     <div class="dash-metric-value">{h(header_realizado)}</div>
-                  </div>
-                  <div class="dash-metric">
+                </div>
+                <div class="dash-metric">
                     <div class="dash-metric-label">% Realizado</div>
                     <div class="dash-metric-value">{h(header_percentual)}</div>
-                  </div>
+                </div>
                 </div>
 
                 <div>
-                  <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
+                <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
                 </div>
-              </div>
+            </div>
 
-              <div class="dash-row-top">
+            <div class="dash-layout-main">
+
+                <div class="dash-left-col">
+
+                <div class="dash-top-ranking">
+                    <div class="dash-panel">
+                    <div class="dash-panel-title">10 Maiores Clientes</div>
+                    <div class="dash-panel-body">
+                        {ranking_2026_html}
+                    </div>
+                    </div>
+
+                    <div class="dash-panel">
+                    <div class="dash-panel-title">10 Maiores Clientes 2025</div>
+                    <div class="dash-panel-body">
+                        {ranking_2025_html}
+                    </div>
+                    </div>
+                </div>
+
+                <div class="dash-left-bottom">
+                    <div class="dash-panel">
+                    <div class="dash-panel-title">Clientes sem Compra</div>
+                    <div class="dash-panel-body">
+                        {clientes_sem_compra_html}
+                    </div>
+                    </div>
+                </div>
+
+                </div>
+
+                <div class="dash-right-col">
 
                 <div class="dash-panel">
-                  <div class="dash-panel-title">10 Maiores Clientes</div>
-                  <div class="dash-panel-body">
-                    {ranking_2026_html}
-                  </div>
-                </div>
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">10 Maiores Clientes 2025</div>
-                  <div class="dash-panel-body">
-                    {ranking_2025_html}
-                  </div>
-                </div>
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">Cidades da Região</div>
-                  <div class="dash-panel-body">
+                    <div class="dash-panel-title">Cidades da Região</div>
+                    <div class="dash-panel-body-map">
                     {mapa_svg_html}
                     <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
-                      Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
-                      {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
+                        Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
+                        {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                     </div>
-                  </div>
+                    </div>
                 </div>
 
-              </div>
-
-              <div class="dash-row-bottom">
-
-                <div class="dash-panel">
-                  <div class="dash-panel-title">Clientes sem Compra</div>
-                  <div class="dash-panel-body">
-                    {clientes_sem_compra_html}
-                  </div>
-                </div>
-
-                <div class="dash-right-stack">
-
-                  <div class="dash-panel">
+                <div class="dash-right-bottom">
+                    <div class="dash-panel">
                     <div class="dash-panel-title">Clientes Gold</div>
                     <div class="dash-panel-body">
-                      <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
+                        <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
                         <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
                         {gold_subinfo}
                         {gold_table_html}
-                      </div>
+                        </div>
                     </div>
-                  </div>
+                    </div>
 
-                  <div class="dash-panel">
+                    <div class="dash-panel">
                     <div class="dash-panel-title">Cobertura da Carteira</div>
                     <div class="dash-panel-body">
-                      <div class="dash-coverage-box">
+                        <div class="dash-coverage-box">
                         Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
                         Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
                         Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
                         Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
-                      </div>
+                        </div>
                     </div>
-                  </div>
+                    </div>
+                </div>
 
                 </div>
-              </div>
-
-              <div style="margin-top:8px;">
-                <div class="dash-panel">
-                  <div class="dash-panel-title">Agenda Semanal do Representante</div>
-                  <div class="dash-panel-body">
-                    {agenda_semanal_html}
-                  </div>
-                </div>
-              </div>
 
             </div>
-          </div>
+
+            <div style="margin-top:8px;">
+                <div class="dash-panel">
+                <div class="dash-panel-title">Agenda Semanal do Representante</div>
+                <div class="dash-panel-body">
+                    {agenda_semanal_html}
+                </div>
+                </div>
+            </div>
+
+            </div>
+        </div>
         </div>
         """
 

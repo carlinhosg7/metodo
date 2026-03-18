@@ -4,6 +4,7 @@ import json
 import base64
 import traceback
 import html
+import time
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 from io import StringIO
@@ -45,11 +46,26 @@ MUNICIPIOS_URL = os.getenv(
     "https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/main/csv/municipios.csv"
 ).strip()
 
-PAGE_SIZE = int(os.getenv("PAGE_SIZE", "200"))
-DEBUG_MODE = os.getenv("DEBUG_MODE", "true").strip().lower() in ("1", "true", "sim", "yes")
+PAGE_SIZE = int(os.getenv("PAGE_SIZE", "100"))
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").strip().lower() in ("1", "true", "sim", "yes")
+
+# ===== CACHE =====
+BASE_CACHE_TTL = int(os.getenv("BASE_CACHE_TTL", "300"))
+LISTAS_CACHE_TTL = int(os.getenv("LISTAS_CACHE_TTL", "900"))
+REP_NAME_CACHE_TTL = int(os.getenv("REP_NAME_CACHE_TTL", "1800"))
+MUNICIPIOS_CACHE_TTL = int(os.getenv("MUNICIPIOS_CACHE_TTL", "86400"))
+DEBUG_SHEETINFO_CACHE_TTL = int(os.getenv("DEBUG_SHEETINFO_CACHE_TTL", "120"))
 
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
+
+# ===== PLANILHA VENDAS =====
+VENDAS_SHEET_URL = os.getenv(
+    "VENDAS_SHEET_URL",
+    "https://docs.google.com/spreadsheets/d/1vLoJ755IpcRuW2NgvbejSw-1iUA5ZP7EHINVT9nXYig/edit?usp=sharing"
+).strip()
+VENDAS_WS = os.getenv("VENDAS_WS", "Tab").strip()
+VENDAS_CACHE_TTL = int(os.getenv("VENDAS_CACHE_TTL", "600"))
 
 # =========================
 # AGENDA SEMANAL
@@ -60,19 +76,11 @@ AGENDA_SHEET_URL = os.getenv(
 ).strip()
 WS_AGENDA = os.getenv("WS_AGENDA", "AGENDA_SEMANAL").strip()
 
-DIAS_SEMANA = [
-    "SEGUNDA",
-    "TERCA",
-    "QUARTA",
-    "QUINTA",
-    "SEXTA"
-]
-
+DIAS_SEMANA = ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA"]
 ATENDIMENTOS = [1, 2, 3, 4]
 
-
 # =========================
-# LISTAS FIXAS (fallback)
+# LISTAS FIXAS
 # =========================
 DEFAULT_MESES = [
     "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -93,7 +101,6 @@ DEFAULT_STATUS = [
     "CLIENTE VAI MANDAR O PEDIDO",
 ]
 
-
 # =========================
 # APP
 # =========================
@@ -102,6 +109,35 @@ app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=7)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+# =========================
+# CACHE GLOBAL
+# =========================
+_MEM_CACHE = {}
+
+
+def cache_get(key):
+    item = _MEM_CACHE.get(key)
+    if not item:
+        return None
+    expires_at = item.get("expires_at", 0)
+    if expires_at < time.time():
+        _MEM_CACHE.pop(key, None)
+        return None
+    return item.get("value")
+
+
+def cache_set(key, value, ttl):
+    _MEM_CACHE[key] = {
+        "value": value,
+        "expires_at": time.time() + ttl
+    }
+
+
+def cache_del_prefix(prefix):
+    keys = [k for k in list(_MEM_CACHE.keys()) if k.startswith(prefix)]
+    for k in keys:
+        _MEM_CACHE.pop(k, None)
 
 
 # =========================
@@ -143,17 +179,17 @@ def normalize_header(s):
     s = norm(s).lower()
     s = (
         s.replace("á", "a")
-         .replace("à", "a")
-         .replace("ã", "a")
-         .replace("â", "a")
-         .replace("é", "e")
-         .replace("ê", "e")
-         .replace("í", "i")
-         .replace("ó", "o")
-         .replace("ô", "o")
-         .replace("õ", "o")
-         .replace("ú", "u")
-         .replace("ç", "c")
+        .replace("à", "a")
+        .replace("ã", "a")
+        .replace("â", "a")
+        .replace("é", "e")
+        .replace("ê", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ô", "o")
+        .replace("õ", "o")
+        .replace("ú", "u")
+        .replace("ç", "c")
     )
     return s
 
@@ -162,17 +198,17 @@ def normalize_text_for_match(v):
     s = norm(v).upper()
     s = (
         s.replace("Á", "A")
-         .replace("À", "A")
-         .replace("Ã", "A")
-         .replace("Â", "A")
-         .replace("É", "E")
-         .replace("Ê", "E")
-         .replace("Í", "I")
-         .replace("Ó", "O")
-         .replace("Ô", "O")
-         .replace("Õ", "O")
-         .replace("Ú", "U")
-         .replace("Ç", "C")
+        .replace("À", "A")
+        .replace("Ã", "A")
+        .replace("Â", "A")
+        .replace("É", "E")
+        .replace("Ê", "E")
+        .replace("Í", "I")
+        .replace("Ó", "O")
+        .replace("Ô", "O")
+        .replace("Õ", "O")
+        .replace("Ú", "U")
+        .replace("Ç", "C")
     )
     return s
 
@@ -302,6 +338,22 @@ def from_input_date(v):
     return v
 
 
+def normalizar_data_comparacao(v):
+    v = norm(v)
+    if not v:
+        return ""
+
+    if re.fullmatch(r"\d{2}/\d{2}/\d{4}", v):
+        return v
+
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v)
+    if m:
+        yyyy, mm, dd = m.groups()
+        return f"{dd}/{mm}/{yyyy}"
+
+    return v
+
+
 def safe_cell(vals, idx_1_based):
     pos = idx_1_based - 1
     return norm(vals[pos]) if pos < len(vals) else ""
@@ -407,22 +459,13 @@ def friendly_gspread_error(exc):
         return "A aba informada não foi encontrada na planilha."
 
     if "Response [404]" in txt or "Requested entity was not found" in txt:
-        return (
-            "Planilha Google Sheets não encontrada. "
-            "Verifique se o ID/URL está correto e se a planilha existe."
-        )
+        return "Planilha Google Sheets não encontrada. Verifique se o ID/URL está correto e se a planilha existe."
 
     if "Response [403]" in txt or "PERMISSION_DENIED" in txt or "The caller does not have permission" in txt:
-        return (
-            "Sem permissão para acessar a planilha Google Sheets. "
-            "Compartilhe a planilha com o e-mail da service account como Editor."
-        )
+        return "Sem permissão para acessar a planilha Google Sheets. Compartilhe a planilha com o e-mail da service account como Editor."
 
     if "This operation is not supported for this document" in txt:
-        return (
-            "O arquivo informado não é uma planilha Google Sheets válida. "
-            "Converta o arquivo para Google Sheets e use o ID/URL correto."
-        )
+        return "O arquivo informado não é uma planilha Google Sheets válida. Converta o arquivo para Google Sheets e use o ID/URL correto."
 
     return txt or "Erro ao acessar Google Sheets."
 
@@ -432,48 +475,651 @@ def resolve_gold_sheet_target():
     return extract_google_sheet_id(target)
 
 
+def render_error_page(subtitle, message, user_photo_url=""):
+    body = f"<div class='card'><b>{h(message)}</b></div>"
+    return render_template_string(
+        BASE_HTML,
+        title=APP_TITLE,
+        subtitle=subtitle,
+        logged=require_login(),
+        user_login=session.get("user_login", ""),
+        user_name=session.get("rep_name", ""),
+        user_type=session.get("user_type", ""),
+        user_photo_url=user_photo_url,
+        body=body
+    )
+
+
+# =========================
+# GOOGLE SHEETS
+# =========================
+def _load_service_account_info():
+    if GOOGLE_SERVICE_ACCOUNT_JSON:
+        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    elif GOOGLE_SA_JSON_B64:
+        b64 = GOOGLE_SA_JSON_B64.strip()
+        b64 += "=" * (-len(b64) % 4)
+        info = json.loads(base64.b64decode(b64).decode("utf-8"))
+    else:
+        raise RuntimeError("Faltou GOOGLE_SERVICE_ACCOUNT_JSON (ou GOOGLE_SA_JSON_B64) nas variáveis de ambiente.")
+
+    if "private_key" in info and isinstance(info["private_key"], str):
+        info["private_key"] = info["private_key"].replace("\\n", "\n")
+
+    return info
+
+
+def connect_gs_by_key(sheet_key_or_url):
+    resolved_key = extract_google_sheet_id(sheet_key_or_url)
+    if not resolved_key:
+        raise RuntimeError("Sheet ID não informado.")
+
+    info = _load_service_account_info()
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    gc = gspread.authorize(creds)
+
+    try:
+        return gc.open_by_key(resolved_key)
+    except Exception as e:
+        raise RuntimeError(friendly_gspread_error(e))
+
+
+def connect_gs():
+    if not SHEET_ID:
+        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
+    return connect_gs_by_key(SHEET_ID)
+
+
+def connect_gold_gs():
+    gold_target = resolve_gold_sheet_target()
+    if not gold_target:
+        raise RuntimeError("Faltou configurar a planilha de CLIENTES GOLD. Defina GOLD_SHEET_ID ou GOLD_SHEET_URL.")
+    return connect_gs_by_key(gold_target)
+
+
+def connect_vendas_gs():
+    vendas_sheet_id = extract_google_sheet_id(VENDAS_SHEET_URL)
+    if not vendas_sheet_id:
+        raise RuntimeError("URL/ID da planilha VENDAS não informado.")
+    return connect_gs_by_key(vendas_sheet_id)
+
+
+def connect_agenda_gs():
+    agenda_sheet_id = extract_google_sheet_id(AGENDA_SHEET_URL)
+    if not agenda_sheet_id:
+        raise RuntimeError("URL/ID da planilha da agenda não informado.")
+    return connect_gs_by_key(agenda_sheet_id)
+
+
+def safe_get_all_records(ws):
+    try:
+        return ws.get_all_records()
+    except Exception:
+        return []
+
+
+def safe_get_raw_rows(ws):
+    try:
+        values = ws.get_all_values()
+    except Exception:
+        return [], []
+
+    if not values:
+        return [], []
+
+    headers = [norm(x) for x in values[0]]
+    rows = []
+
+    for raw in values[1:]:
+        if len(raw) < len(headers):
+            raw = raw + [""] * (len(headers) - len(raw))
+        elif len(raw) > len(headers):
+            raw = raw[:len(headers)]
+
+        row = {headers[i]: raw[i] for i in range(len(headers))}
+        rows.append(row)
+
+    return headers, rows
+
+
+def ensure_headers(ws, headers):
+    current = [norm(x) for x in ws.row_values(1)]
+    if not current:
+        ws.append_row(headers, value_input_option="USER_ENTERED")
+    elif current != headers:
+        ws.update("A1", [headers], value_input_option="USER_ENTERED")
+
+
+def ensure_edicoes_worksheet(sh):
+    headers = [
+        "timestamp",
+        "user_type",
+        "user_login",
+        "rep_code",
+        "client_key",
+        "Data Agenda Visita",
+        "Mês",
+        "Semana Atendimento",
+        "Status Cliente",
+        "Observações"
+    ]
+
+    try:
+        ws = sh.worksheet(WS_EDICOES)
+    except WorksheetNotFound:
+        try:
+            ws = sh.add_worksheet(title=WS_EDICOES, rows="5000", cols="30")
+        except Exception as e:
+            raise RuntimeError(
+                f"Não foi possível acessar/criar a aba '{WS_EDICOES}'. "
+                f"Crie essa aba manualmente na planilha ou conceda permissão de Editor à service account. "
+                f"Detalhe: {friendly_gspread_error(e)}"
+            )
+
+    ensure_headers(ws, headers)
+    return ws
+
+
+def ensure_base_tracking_columns(ws_base):
+    headers = [norm(x) for x in ws_base.row_values(1)]
+    if not headers:
+        raise RuntimeError("A aba BASE está sem cabeçalho na linha 1.")
+
+    required = [
+        "Data Agenda Visita",
+        "Mês",
+        "Semana Atendimento",
+        "Status Cliente",
+        "Observações"
+    ]
+
+    changed = False
+    for col in required:
+        if col not in headers:
+            headers.append(col)
+            changed = True
+
+    if changed:
+        ws_base.update("A1", [headers], value_input_option="USER_ENTERED")
+        headers = [norm(x) for x in ws_base.row_values(1)]
+
+    return headers
+
+
+def get_optional_worksheet(sh, ws_name):
+    try:
+        return sh.worksheet(ws_name)
+    except WorksheetNotFound:
+        return None
+    except Exception:
+        return None
+
+
+def get_base_structure_cached(sh):
+    cache_key = f"base_structure::{extract_google_sheet_id(SHEET_ID)}::{WS_BASE}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    ws_base = sh.worksheet(WS_BASE)
+    headers = ensure_base_tracking_columns(ws_base)
+    rows = ws_base.get_all_values()
+
+    if not rows:
+        result = (headers, [])
+        cache_set(cache_key, result, BASE_CACHE_TTL)
+        return result
+
+    final_headers = [norm(x) for x in rows[0]]
+    data_rows = []
+
+    for raw in rows[1:]:
+        if len(raw) < len(final_headers):
+            raw = raw + [""] * (len(final_headers) - len(raw))
+        elif len(raw) > len(final_headers):
+            raw = raw[:len(final_headers)]
+
+        data_rows.append({final_headers[i]: raw[i] for i in range(len(final_headers))})
+
+    result = (final_headers, data_rows)
+    cache_set(cache_key, result, BASE_CACHE_TTL)
+    return result
+
+
+def get_listas_records_cached(sh):
+    cache_key = f"listas::{extract_google_sheet_id(SHEET_ID)}::{WS_LISTAS}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    ws_listas = get_optional_worksheet(sh, WS_LISTAS)
+    rows = safe_get_all_records(ws_listas) if ws_listas else []
+    cache_set(cache_key, rows, LISTAS_CACHE_TTL)
+    return rows
+
+
+def get_vendas_rows_cached():
+    cache_key = f"vendas::{extract_google_sheet_id(VENDAS_SHEET_URL)}::{VENDAS_WS}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    sh_vendas = connect_vendas_gs()
+
+    try:
+        ws_vendas = sh_vendas.worksheet(VENDAS_WS)
+    except WorksheetNotFound:
+        raise RuntimeError(f"A aba '{VENDAS_WS}' não foi encontrada na planilha VENDAS.")
+
+    headers, rows = safe_get_raw_rows(ws_vendas)
+    payload = (headers, rows)
+    cache_set(cache_key, payload, VENDAS_CACHE_TTL)
+    return payload
+
+
+def invalidate_vendas_cache():
+    cache_del_prefix(f"vendas::{extract_google_sheet_id(VENDAS_SHEET_URL)}::{VENDAS_WS}")
+
+
+def invalidate_main_sheet_cache():
+    cache_del_prefix(f"base_structure::{extract_google_sheet_id(SHEET_ID)}::{WS_BASE}")
+    cache_del_prefix(f"listas::{extract_google_sheet_id(SHEET_ID)}::{WS_LISTAS}")
+    cache_del_prefix(f"sheet_info::{extract_google_sheet_id(SHEET_ID)}")
+    cache_del_prefix(f"rep_name::{extract_google_sheet_id(SHEET_ID)}::")
+
+
+def try_get_rep_name(rep_code):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        return ""
+
+    cache_key = f"rep_name::{extract_google_sheet_id(SHEET_ID)}::{rep_code}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        sh = connect_gs()
+        headers, base_rows = get_base_structure_cached(sh)
+
+        rep_col = pick_col_flexible(headers, [
+            "Codigo Representante", "Código Representante",
+            "CODIGO REPRESENTANTE", "COD_REP"
+        ])
+        nome_rep_col = pick_col_flexible(headers, [
+            "Representante", "Nome Representante", "REPRESENTANTE"
+        ])
+
+        if not rep_col or not nome_rep_col:
+            cache_set(cache_key, "", REP_NAME_CACHE_TTL)
+            return ""
+
+        for row in base_rows:
+            if norm(row.get(rep_col, "")) == rep_code:
+                val = norm(row.get(nome_rep_col, ""))
+                cache_set(cache_key, val, REP_NAME_CACHE_TTL)
+                return val
+
+        cache_set(cache_key, "", REP_NAME_CACHE_TTL)
+        return ""
+    except Exception:
+        return ""
+
+
+def get_vendas_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+
+    info = {
+        "ok": False,
+        "error": "",
+        "rep_code": rep_code,
+        "representante": "",
+        "supervisor": "",
+        "meta": 0.0,
+        "realizado": 0.0,
+        "percentual": 0.0,
+    }
+
+    if not rep_code:
+        info["error"] = "Representante não informado."
+        return info
+
+    try:
+        headers, rows = get_vendas_rows_cached()
+
+        col_rep = pick_col_flexible(headers, [
+            "Codigo Representante",
+            "Código Representante",
+            "Cod Representante",
+            "COD_REP",
+            "Rep",
+            "Representante Codigo"
+        ])
+
+        col_nome = pick_col_exact(headers, [
+            "Nome Representante",
+            "Representante Nome",
+            "Nome Rep"
+        ])
+        if not col_nome:
+            col_nome = pick_col_flexible(headers, [
+                "Nome Representante",
+                "Representante Nome",
+                "Nome Rep",
+                "Representante"
+            ])
+
+        col_sup = pick_col_flexible(headers, [
+            "Supervisor",
+            "Supervisão",
+            "Nome Supervisor",
+            "Supervisor Nome"
+        ])
+
+        col_meta = pick_col_flexible(headers, [
+            "Vlr Meta Entrega",
+            "Meta Entrega",
+            "Vlr Meta",
+            "Meta",
+            "Meta Venda",
+            "Valor Meta"
+        ])
+
+        col_venda = pick_col_flexible(headers, [
+            "Vlr Venda",
+            "Valor Venda",
+            "Venda",
+            "Realizado",
+            "Vlr Realizado"
+        ])
+
+        if not col_rep:
+            raise RuntimeError("Coluna de representante não encontrada na planilha VENDAS.")
+
+        rep_code_num = rep_code.lstrip("0") or "0"
+
+        meta_total = 0.0
+        realizado_total = 0.0
+        representante_nome = ""
+        supervisor_nome = ""
+        encontrou = False
+
+        for row in rows:
+            rep_val = norm(row.get(col_rep, ""))
+            rep_val_num = rep_val.lstrip("0") or "0"
+
+            if rep_val == rep_code or rep_val_num == rep_code_num:
+                encontrou = True
+
+                if col_meta:
+                    meta_total += parse_number_br(row.get(col_meta, ""))
+
+                if col_venda:
+                    realizado_total += parse_number_br(row.get(col_venda, ""))
+
+                if not representante_nome and col_nome:
+                    representante_nome = norm(row.get(col_nome, ""))
+
+                if not supervisor_nome and col_sup:
+                    supervisor_nome = norm(row.get(col_sup, ""))
+
+        if not encontrou:
+            info["error"] = f"Representante {rep_code} não encontrado na planilha VENDAS."
+            return info
+
+        percentual = (realizado_total / meta_total * 100.0) if meta_total > 0 else 0.0
+
+        info["representante"] = representante_nome
+        info["supervisor"] = supervisor_nome
+        info["meta"] = meta_total
+        info["realizado"] = realizado_total
+        info["percentual"] = percentual
+        info["ok"] = True
+        return info
+
+    except Exception as e:
+        info["error"] = norm(str(e))
+        return info
+
+
+def get_gold_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+
+    info = {
+        "total_gold": 0,
+        "gold_rows": [],
+        "sheet_title": "",
+        "worksheet_title": "",
+        "rep_col": "",
+        "codigo_col": "",
+        "cliente_col": "",
+        "grupo_col": "",
+        "supervisor_col": "",
+        "ok": False,
+        "error": "",
+        "resolved_sheet_id": resolve_gold_sheet_target(),
+    }
+
+    if not rep_code:
+        info["error"] = "Selecione um representante para consultar CLIENTES GOLD."
+        return info
+
+    try:
+        sh_gold = connect_gold_gs()
+        info["sheet_title"] = norm(getattr(sh_gold, "title", ""))
+
+        try:
+            ws_gold = sh_gold.worksheet(GOLD_WS)
+        except WorksheetNotFound:
+            raise RuntimeError(f"A aba '{GOLD_WS}' não foi encontrada na planilha de CLIENTES GOLD.")
+
+        info["worksheet_title"] = norm(getattr(ws_gold, "title", ""))
+
+        headers_gold, rows_gold = safe_get_raw_rows(ws_gold)
+        if not headers_gold:
+            raise RuntimeError("A aba de clientes gold está vazia ou sem cabeçalho.")
+
+        rep_gold_col = pick_col_flexible(headers_gold, [
+            "Cod. Representante", "Cod Representante", "Código Representante",
+            "Codigo Representante", "Representante", "COD_REP", "REP"
+        ])
+
+        codigo_gold_col = pick_col_flexible(headers_gold, [
+            "Codigo", "Código", "Codigo Cliente", "Código Cliente",
+            "Codigo Grupo Cliente", "Código Grupo Cliente",
+            "Cod Cliente", "Cod. Cliente", "Cod Grupo Cliente", "Cod. Grupo Cliente"
+        ])
+
+        cliente_gold_col = pick_col_flexible(headers_gold, [
+            "Cliente / Grupo", "Cliente Grupo", "Cliente", "Nome Cliente",
+            "Razao Social", "Razão Social", "Fantasia", "Nome"
+        ])
+
+        grupo_gold_col = pick_col_flexible(headers_gold, [
+            "Grupo Cliente / Cliente", "Grupo Cliente Cliente", "Grupo Cliente", "Grupo", "Cliente / Grupo"
+        ])
+
+        supervisor_gold_col = pick_col_flexible(headers_gold, [
+            "Supervisor", "Cod. Supervisor", "Código Supervisor", "Codigo Supervisor"
+        ])
+
+        info["rep_col"] = rep_gold_col or ""
+        info["codigo_col"] = codigo_gold_col or ""
+        info["cliente_col"] = cliente_gold_col or ""
+        info["grupo_col"] = grupo_gold_col or ""
+        info["supervisor_col"] = supervisor_gold_col or ""
+
+        if not rep_gold_col:
+            raise RuntimeError(
+                "Não encontrei a coluna do representante na planilha GOLD. Verifique o cabeçalho da aba informada em GOLD_WS."
+            )
+
+        gold_rows = []
+        rep_code_num = rep_code.lstrip("0") or "0"
+
+        for row in rows_gold:
+            rep_val = norm(row.get(rep_gold_col, ""))
+            rep_val_num = rep_val.lstrip("0") or "0"
+
+            if rep_val == rep_code or rep_val_num == rep_code_num:
+                codigo_val = norm(row.get(codigo_gold_col, "")) if codigo_gold_col else ""
+                cliente_val = norm(row.get(cliente_gold_col, "")) if cliente_gold_col else ""
+                grupo_val = norm(row.get(grupo_gold_col, "")) if grupo_gold_col else ""
+                supervisor_val = norm(row.get(supervisor_gold_col, "")) if supervisor_gold_col else ""
+
+                if not cliente_val and grupo_val:
+                    cliente_val = grupo_val
+                if not grupo_val and cliente_val:
+                    grupo_val = cliente_val
+
+                gold_rows.append({
+                    "codigo": codigo_val,
+                    "cliente_grupo": cliente_val,
+                    "grupo_cliente_cliente": grupo_val,
+                    "rep": rep_val,
+                    "supervisor": supervisor_val
+                })
+
+        gold_rows.sort(
+            key=lambda x: (
+                norm(x.get("cliente_grupo", "")),
+                norm(x.get("grupo_cliente_cliente", "")),
+                norm(x.get("codigo", ""))
+            )
+        )
+
+        info["gold_rows"] = gold_rows
+        info["total_gold"] = len(gold_rows)
+        info["ok"] = True
+        return info
+
+    except Exception as e:
+        info["error"] = friendly_gspread_error(e)
+        return info
+
+
+def build_debug_sheet_info(sh=None):
+    cache_key = f"sheet_info::{extract_google_sheet_id(SHEET_ID)}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        if sh is None:
+            sh = connect_gs()
+
+        abas = [ws.title for ws in sh.worksheets()]
+        result = {
+            "sheet_id": extract_google_sheet_id(SHEET_ID),
+            "spreadsheet_title": norm(getattr(sh, "title", "")),
+            "worksheets": abas,
+            "ok": True,
+        }
+        cache_set(cache_key, result, DEBUG_SHEETINFO_CACHE_TTL)
+        return result
+    except Exception as e:
+        result = {
+            "sheet_id": extract_google_sheet_id(SHEET_ID),
+            "spreadsheet_title": "",
+            "worksheets": [],
+            "ok": False,
+            "error": friendly_gspread_error(e),
+        }
+        cache_set(cache_key, result, DEBUG_SHEETINFO_CACHE_TTL)
+        return result
+
+
+# =========================
+# MUNICÍPIOS
+# =========================
 def load_public_municipios():
+    cache_key = f"municipios::{MUNICIPIOS_URL}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached["rows"], cached["index"], ""
+
     try:
         resp = requests.get(MUNICIPIOS_URL, timeout=30)
         resp.raise_for_status()
 
         csv_text = resp.text
         if not csv_text.strip():
-            return [], "Arquivo público de municípios vazio."
+            return [], {}, "Arquivo público de municípios vazio."
 
         reader = csvlib.DictReader(StringIO(csv_text))
         rows = []
+        index_exato = {}
+        index_simplificado = {}
+
+        def simplificar(txt):
+            txt = normalize_city_key(txt)
+            txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
+            txt = re.sub(r"\s+", " ", txt).strip()
+            return txt
 
         for row in reader:
             clean_row = {}
             for k, v in row.items():
                 clean_row[norm(k)] = norm(v)
+
             rows.append(clean_row)
 
-        return rows, ""
+            nome = norm(
+                clean_row.get("nome", "") or
+                clean_row.get("cidade", "") or
+                clean_row.get("municipio", "") or
+                clean_row.get("município", "")
+            )
+
+            if nome:
+                nome_key = normalize_city_key(nome)
+                nome_simpl = simplificar(nome)
+
+                if nome_key and nome_key not in index_exato:
+                    index_exato[nome_key] = clean_row
+
+                if nome_simpl and nome_simpl not in index_simplificado:
+                    index_simplificado[nome_simpl] = clean_row
+
+        payload = {
+            "rows": rows,
+            "index": {
+                "exato": index_exato,
+                "simplificado": index_simplificado
+            }
+        }
+        cache_set(cache_key, payload, MUNICIPIOS_CACHE_TTL)
+
+        return rows, payload["index"], ""
     except Exception as e:
-        return [], f"Erro ao carregar municípios públicos: {norm(str(e))}"
+        return [], {}, f"Erro ao carregar municípios públicos: {norm(str(e))}"
 
 
-def find_city_coords_public(rows_cidades, cidade_base_norm, cidade_original=""):
-    if not rows_cidades or not cidade_base_norm:
+def find_city_coords_public(rows_cidades, municipios_index, cidade_base_norm, cidade_original=""):
+    if not cidade_base_norm:
         return None, None, ""
 
-    melhor_row = None
+    municipios_index = municipios_index or {}
+    index_exato = municipios_index.get("exato", {})
+    index_simplificado = municipios_index.get("simplificado", {})
 
-    for r in rows_cidades:
-        nome = norm(
-            r.get("nome", "") or
-            r.get("cidade", "") or
-            r.get("municipio", "") or
-            r.get("município", "")
-        )
-        nome_norm = normalize_city_key(nome)
-        if nome_norm == cidade_base_norm:
-            melhor_row = r
-            break
+    def simplificar(txt):
+        txt = normalize_city_key(txt)
+        txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt
+
+    melhor_row = index_exato.get(cidade_base_norm)
 
     if melhor_row is None:
+        base_simpl = simplificar(cidade_original or cidade_base_norm)
+        melhor_row = index_simplificado.get(base_simpl)
+
+    if melhor_row is None and rows_cidades:
         for r in rows_cidades:
             nome = norm(
                 r.get("nome", "") or
@@ -483,36 +1129,7 @@ def find_city_coords_public(rows_cidades, cidade_base_norm, cidade_original=""):
             )
             nome_norm = normalize_city_key(nome)
 
-            if nome_norm and (
-                cidade_base_norm in nome_norm or
-                nome_norm in cidade_base_norm
-            ):
-                melhor_row = r
-                break
-
-    if melhor_row is None:
-        def simplificar(txt):
-            txt = normalize_city_key(txt)
-            txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
-            txt = re.sub(r"\s+", " ", txt).strip()
-            return txt
-
-        base_simpl = simplificar(cidade_original or cidade_base_norm)
-
-        for r in rows_cidades:
-            nome = norm(
-                r.get("nome", "") or
-                r.get("cidade", "") or
-                r.get("municipio", "") or
-                r.get("município", "")
-            )
-            nome_simpl = simplificar(nome)
-
-            if nome_simpl and (
-                nome_simpl == base_simpl or
-                base_simpl in nome_simpl or
-                nome_simpl in base_simpl
-            ):
+            if nome_norm and (cidade_base_norm in nome_norm or nome_norm in cidade_base_norm):
                 melhor_row = r
                 break
 
@@ -540,10 +1157,7 @@ def build_city_map_svg(city_points, width=760, height=420):
         </div>
         """
 
-    valid_points = [
-        p for p in city_points
-        if p.get("lat") is not None and p.get("lon") is not None
-    ]
+    valid_points = [p for p in city_points if p.get("lat") is not None and p.get("lon") is not None]
 
     if not valid_points:
         return """
@@ -601,21 +1215,36 @@ def build_city_map_svg(city_points, width=760, height=420):
 
         circles.append(
             f'<circle cx="{x:.2f}" cy="{y:.2f}" r="6.2" fill="{fill}" stroke="#ffffff" stroke-width="1.4">'
-            f'<title>{title}</title></circle>'
+            f"<title>{title}</title></circle>"
         )
 
         labels.append(
-            f'<text x="{x + 7:.2f}" y="{y - 7:.2f}" font-size="9" fill="#334155">{h(cidade[:18])}</text>'
+            f'<text class="map-label" x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="10" fill="#1f2937">{h(cidade[:22])}</text>'
         )
 
-    svg = f"""
-    <div style="width:100%; height:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
-      <svg viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px;">
-        <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
-        <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
-        {''.join(circles)}
-        {''.join(labels)}
-      </svg>
+    map_uid = f"map_{int(time.time() * 1000)}_{len(valid_points)}"
+
+    return f"""
+    <div style="width:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; flex-wrap:wrap;">
+        <div style="font-size:10px; color:#334155; font-weight:700;">Use os botões para zoom</div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button type="button" onclick="zoomMap('{map_uid}', 1.2)" title="Aumentar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">+</button>
+          <button type="button" onclick="zoomMap('{map_uid}', 0.83)" title="Diminuir zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">−</button>
+          <button type="button" onclick="resetMapZoom('{map_uid}')" title="Resetar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:700; font-size:12px;">Reset</button>
+        </div>
+      </div>
+
+      <div style="width:100%; height:100%; overflow:auto; background:#dff3f1; border-radius:4px;">
+        <svg id="{map_uid}" viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px; transform-origin:center center; transition:transform .15s ease;">
+          <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
+          <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
+          {''.join(circles)}
+          <g class="map-labels" style="display:none;">
+            {''.join(labels)}
+          </g>
+        </svg>
+      </div>
 
       <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
         <span style="display:flex; align-items:center; gap:6px;">
@@ -623,39 +1252,64 @@ def build_city_map_svg(city_points, width=760, height=420):
           Vendas em 2026
         </span>
         <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#eab308; display:inline-block;"></span>
-          Vendas em outros períodos
-        </span>
-        <span style="display:flex; align-items:center; gap:6px;">
           <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
-          Sem vendas
+          Sem vendas em 2026
         </span>
       </div>
     </div>
+
+    <script>
+      window._mapZoomLevels = window._mapZoomLevels || {{}};
+
+      function applyMapLabelVisibility(mapId) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        const zoom = window._mapZoomLevels[mapId] || 1;
+        const labels = el.querySelector('.map-labels');
+        if (!labels) return;
+        labels.style.display = zoom > 1.05 ? 'block' : 'none';
+      }}
+
+      function zoomMap(mapId, factor) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        if (!window._mapZoomLevels[mapId]) window._mapZoomLevels[mapId] = 1;
+        let next = window._mapZoomLevels[mapId] * factor;
+        if (next < 1) next = 1;
+        if (next > 8) next = 8;
+        window._mapZoomLevels[mapId] = next;
+        el.style.transform = 'scale(' + next + ')';
+        applyMapLabelVisibility(mapId);
+      }}
+
+      function resetMapZoom(mapId) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        window._mapZoomLevels[mapId] = 1;
+        el.style.transform = 'scale(1)';
+        applyMapLabelVisibility(mapId);
+      }}
+
+      setTimeout(function() {{
+        if (!window._mapZoomLevels['{map_uid}']) {{
+          window._mapZoomLevels['{map_uid}'] = 1;
+        }}
+        applyMapLabelVisibility('{map_uid}');
+      }}, 0);
+    </script>
     """
-    return svg
 
 
 # =========================
-# AGENDA - FUNÇÕES
+# AGENDA
 # =========================
 def _agenda_vazia():
     agenda = {}
     for dia in DIAS_SEMANA:
         agenda[dia] = {}
         for at in ATENDIMENTOS:
-            agenda[dia][at] = {
-                "cliente": "",
-                "valor": ""
-            }
+            agenda[dia][at] = {"cliente": "", "valor": ""}
     return agenda
-
-
-def connect_agenda_gs():
-    agenda_sheet_id = extract_google_sheet_id(AGENDA_SHEET_URL)
-    if not agenda_sheet_id:
-        raise RuntimeError("URL/ID da planilha da agenda não informado.")
-    return connect_gs_by_key(agenda_sheet_id)
 
 
 def ensure_agenda_worksheet(sh_agenda):
@@ -758,16 +1412,12 @@ def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
 
     agenda = carregar_agenda_rep(rep_code)
 
-    header_top = []
-    header_top.append("<tr>")
-    header_top.append('<th style="width:90px;">DIA</th>')
+    header_top = ["<tr>", '<th style="width:90px;">DIA</th>']
     for at in ATENDIMENTOS:
         header_top.append(f'<th colspan="2" style="text-align:center;">ATENDIMENTO {at:02d}</th>')
     header_top.append("</tr>")
 
-    header_sub = []
-    header_sub.append("<tr>")
-    header_sub.append("<th></th>")
+    header_sub = ["<tr>", "<th></th>"]
     for _ in ATENDIMENTOS:
         header_sub.append('<th style="width:150px;">CLIENTE</th>')
         header_sub.append('<th style="width:80px;">VALOR</th>')
@@ -821,346 +1471,6 @@ def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
       </div>
     </form>
     """
-
-
-# =========================
-# GOOGLE SHEETS
-# =========================
-def _load_service_account_info():
-    if GOOGLE_SERVICE_ACCOUNT_JSON:
-        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-    elif GOOGLE_SA_JSON_B64:
-        b64 = GOOGLE_SA_JSON_B64.strip()
-        b64 += "=" * (-len(b64) % 4)
-        info = json.loads(base64.b64decode(b64).decode("utf-8"))
-    else:
-        raise RuntimeError("Faltou GOOGLE_SERVICE_ACCOUNT_JSON (ou GOOGLE_SA_JSON_B64) nas variáveis de ambiente.")
-
-    if "private_key" in info and isinstance(info["private_key"], str):
-        info["private_key"] = info["private_key"].replace("\\n", "\n")
-
-    return info
-
-
-def connect_gs_by_key(sheet_key_or_url):
-    resolved_key = extract_google_sheet_id(sheet_key_or_url)
-    if not resolved_key:
-        raise RuntimeError("Sheet ID não informado.")
-
-    info = _load_service_account_info()
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    gc = gspread.authorize(creds)
-
-    try:
-        return gc.open_by_key(resolved_key)
-    except Exception as e:
-        raise RuntimeError(friendly_gspread_error(e))
-
-
-def connect_gs():
-    if not SHEET_ID:
-        raise RuntimeError("Faltou SHEET_ID nas variáveis de ambiente.")
-    return connect_gs_by_key(SHEET_ID)
-
-
-def connect_gold_gs():
-    gold_target = resolve_gold_sheet_target()
-    if not gold_target:
-        raise RuntimeError(
-            "Faltou configurar a planilha de CLIENTES GOLD. "
-            "Defina GOLD_SHEET_ID ou GOLD_SHEET_URL."
-        )
-    return connect_gs_by_key(gold_target)
-
-
-def safe_get_all_records(ws):
-    try:
-        return ws.get_all_records()
-    except Exception:
-        return []
-
-
-def safe_get_raw_rows(ws):
-    try:
-        values = ws.get_all_values()
-    except Exception:
-        return [], []
-
-    if not values:
-        return [], []
-
-    headers = [norm(x) for x in values[0]]
-    rows = []
-
-    for raw in values[1:]:
-        if len(raw) < len(headers):
-            raw = raw + [""] * (len(headers) - len(raw))
-        elif len(raw) > len(headers):
-            raw = raw[:len(headers)]
-
-        row = {headers[i]: raw[i] for i in range(len(headers))}
-        rows.append(row)
-
-    return headers, rows
-
-
-def ensure_headers(ws, headers):
-    current = [norm(x) for x in ws.row_values(1)]
-    if not current:
-        ws.append_row(headers, value_input_option="USER_ENTERED")
-    elif current != headers:
-        ws.update("A1", [headers], value_input_option="USER_ENTERED")
-
-
-def ensure_edicoes_worksheet(sh):
-    headers = [
-        "timestamp",
-        "user_type",
-        "user_login",
-        "rep_code",
-        "client_key",
-        "Data Agenda Visita",
-        "Mês",
-        "Semana Atendimento",
-        "Status Cliente",
-        "Observações"
-    ]
-
-    try:
-        ws = sh.worksheet(WS_EDICOES)
-    except WorksheetNotFound:
-        try:
-            ws = sh.add_worksheet(title=WS_EDICOES, rows="5000", cols="30")
-        except Exception as e:
-            raise RuntimeError(
-                f"Não foi possível acessar/criar a aba '{WS_EDICOES}'. "
-                f"Crie essa aba manualmente na planilha ou conceda permissão de Editor à service account. "
-                f"Detalhe: {friendly_gspread_error(e)}"
-            )
-
-    ensure_headers(ws, headers)
-    return ws
-
-
-def ensure_base_tracking_columns(ws_base):
-    headers = [norm(x) for x in ws_base.row_values(1)]
-    if not headers:
-        raise RuntimeError("A aba BASE está sem cabeçalho na linha 1.")
-
-    required = [
-        "Data Agenda Visita",
-        "Mês",
-        "Semana Atendimento",
-        "Status Cliente",
-        "Observações"
-    ]
-
-    changed = False
-    for col in required:
-        if col not in headers:
-            headers.append(col)
-            changed = True
-
-    if changed:
-        ws_base.update("A1", [headers], value_input_option="USER_ENTERED")
-        headers = [norm(x) for x in ws_base.row_values(1)]
-
-    return headers
-
-
-def get_base_structure(ws_base):
-    headers = ensure_base_tracking_columns(ws_base)
-    rows = ws_base.get_all_values()
-
-    if not rows:
-        return headers, []
-
-    final_headers = [norm(x) for x in rows[0]]
-    data_rows = []
-
-    for raw in rows[1:]:
-        if len(raw) < len(final_headers):
-            raw = raw + [""] * (len(final_headers) - len(raw))
-        elif len(raw) > len(final_headers):
-            raw = raw[:len(final_headers)]
-
-        data_rows.append({final_headers[i]: raw[i] for i in range(len(final_headers))})
-
-    return final_headers, data_rows
-
-
-def try_get_rep_name(rep_code):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        return ""
-
-    try:
-        sh = connect_gs()
-        ws_base = sh.worksheet(WS_BASE)
-        headers, base_rows = safe_get_raw_rows(ws_base)
-
-        rep_col = pick_col_flexible(headers, [
-            "Codigo Representante", "Código Representante",
-            "CODIGO REPRESENTANTE", "COD_REP"
-        ])
-        nome_rep_col = pick_col_flexible(headers, [
-            "Representante", "Nome Representante", "REPRESENTANTE"
-        ])
-
-        if not rep_col or not nome_rep_col:
-            return ""
-
-        for row in base_rows:
-            if norm(row.get(rep_col, "")) == rep_code:
-                return norm(row.get(nome_rep_col, ""))
-
-        return ""
-    except Exception:
-        return ""
-
-
-def get_gold_info_by_rep(rep_code):
-    rep_code = norm(rep_code)
-
-    info = {
-        "total_gold": 0,
-        "gold_rows": [],
-        "sheet_title": "",
-        "worksheet_title": "",
-        "rep_col": "",
-        "codigo_col": "",
-        "cliente_col": "",
-        "grupo_col": "",
-        "supervisor_col": "",
-        "ok": False,
-        "error": "",
-        "resolved_sheet_id": resolve_gold_sheet_target(),
-    }
-
-    if not rep_code:
-        info["error"] = "Selecione um representante para consultar CLIENTES GOLD."
-        return info
-
-    try:
-        sh_gold = connect_gold_gs()
-        info["sheet_title"] = norm(getattr(sh_gold, "title", ""))
-
-        try:
-            ws_gold = sh_gold.worksheet(GOLD_WS)
-        except WorksheetNotFound:
-            raise RuntimeError(
-                f"A aba '{GOLD_WS}' não foi encontrada na planilha de CLIENTES GOLD."
-            )
-
-        info["worksheet_title"] = norm(getattr(ws_gold, "title", ""))
-
-        headers_gold, rows_gold = safe_get_raw_rows(ws_gold)
-        if not headers_gold:
-            raise RuntimeError("A aba de clientes gold está vazia ou sem cabeçalho.")
-
-        rep_gold_col = pick_col_flexible(headers_gold, [
-            "Cod. Representante", "Cod Representante", "Código Representante",
-            "Codigo Representante", "Representante", "COD_REP", "REP"
-        ])
-
-        codigo_gold_col = pick_col_flexible(headers_gold, [
-            "Codigo", "Código", "Codigo Cliente", "Código Cliente",
-            "Codigo Grupo Cliente", "Código Grupo Cliente",
-            "Cod Cliente", "Cod. Cliente", "Cod Grupo Cliente", "Cod. Grupo Cliente"
-        ])
-
-        cliente_gold_col = pick_col_flexible(headers_gold, [
-            "Cliente / Grupo", "Cliente Grupo", "Cliente", "Nome Cliente",
-            "Razao Social", "Razão Social", "Fantasia", "Nome"
-        ])
-
-        grupo_gold_col = pick_col_flexible(headers_gold, [
-            "Grupo Cliente / Cliente", "Grupo Cliente Cliente", "Grupo Cliente", "Grupo", "Cliente / Grupo"
-        ])
-
-        supervisor_gold_col = pick_col_flexible(headers_gold, [
-            "Supervisor", "Cod. Supervisor", "Código Supervisor", "Codigo Supervisor"
-        ])
-
-        info["rep_col"] = rep_gold_col or ""
-        info["codigo_col"] = codigo_gold_col or ""
-        info["cliente_col"] = cliente_gold_col or ""
-        info["grupo_col"] = grupo_gold_col or ""
-        info["supervisor_col"] = supervisor_gold_col or ""
-
-        if not rep_gold_col:
-            raise RuntimeError(
-                "Não encontrei a coluna do representante na planilha GOLD. "
-                "Verifique o cabeçalho da aba informada em GOLD_WS."
-            )
-
-        gold_rows = []
-        for row in rows_gold:
-            rep_val = norm(row.get(rep_gold_col, ""))
-            rep_val_num = rep_val.lstrip("0") or "0"
-            rep_code_num = rep_code.lstrip("0") or "0"
-
-            if rep_val == rep_code or rep_val_num == rep_code_num:
-                codigo_val = norm(row.get(codigo_gold_col, "")) if codigo_gold_col else ""
-                cliente_val = norm(row.get(cliente_gold_col, "")) if cliente_gold_col else ""
-                grupo_val = norm(row.get(grupo_gold_col, "")) if grupo_gold_col else ""
-                supervisor_val = norm(row.get(supervisor_gold_col, "")) if supervisor_gold_col else ""
-
-                if not cliente_val and grupo_val:
-                    cliente_val = grupo_val
-                if not grupo_val and cliente_val:
-                    grupo_val = cliente_val
-
-                gold_rows.append({
-                    "codigo": codigo_val,
-                    "cliente_grupo": cliente_val,
-                    "grupo_cliente_cliente": grupo_val,
-                    "rep": rep_val,
-                    "supervisor": supervisor_val
-                })
-
-        gold_rows.sort(
-            key=lambda x: (
-                norm(x.get("cliente_grupo", "")),
-                norm(x.get("grupo_cliente_cliente", "")),
-                norm(x.get("codigo", ""))
-            )
-        )
-
-        info["gold_rows"] = gold_rows
-        info["total_gold"] = len(gold_rows)
-        info["ok"] = True
-        return info
-
-    except Exception as e:
-        info["error"] = friendly_gspread_error(e)
-        return info
-
-
-def build_debug_sheet_info(sh=None):
-    try:
-        if sh is None:
-            sh = connect_gs()
-
-        abas = [ws.title for ws in sh.worksheets()]
-        return {
-            "sheet_id": extract_google_sheet_id(SHEET_ID),
-            "spreadsheet_title": norm(getattr(sh, "title", "")),
-            "worksheets": abas,
-            "ok": True,
-        }
-    except Exception as e:
-        return {
-            "sheet_id": extract_google_sheet_id(SHEET_ID),
-            "spreadsheet_title": "",
-            "worksheets": [],
-            "ok": False,
-            "error": friendly_gspread_error(e),
-        }
 
 
 # =========================
@@ -1284,32 +1594,12 @@ BASE_HTML = """
     .row-green { background: rgba(34,197,94,0.16); }
     .row-blue { background: rgba(56,189,248,0.14); }
 
-    .debug-card {
-      background: #0f172a;
-      color: #e2e8f0;
-      border: 1px solid #1e293b;
-    }
-    .debug-card .line {
-      margin-bottom: 6px;
-      word-break: break-word;
-    }
-    .debug-card .title {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 12px;
-    }
+    .debug-card { background: #0f172a; color: #e2e8f0; border: 1px solid #1e293b; }
+    .debug-card .line { margin-bottom: 6px; word-break: break-word; }
+    .debug-card .title { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
 
-    .dash-page {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      align-items: center;
-    }
-
-    .a3-page {
-      width: min(100%, 1560px);
-      background: #ffffff;
-    }
+    .dash-page { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+    .a3-page { width: min(100%, 1560px); background: #ffffff; }
 
     .dash-shell {
       background: #ffffff;
@@ -1562,10 +1852,7 @@ BASE_HTML = """
       flex-wrap: wrap;
     }
 
-    .print-note {
-      font-size: 11px;
-      color: #6b7280;
-    }
+    .print-note { font-size: 11px; color: #6b7280; }
 
     .status-chip {
       display: inline-block;
@@ -1610,10 +1897,7 @@ BASE_HTML = """
       font-size:10px;
       box-sizing:border-box;
     }
-    .agenda-valor {
-      min-width:58px;
-      text-align:center;
-    }
+    .agenda-valor { min-width:58px; text-align:center; }
     .agenda-topbar {
       display:flex;
       justify-content:space-between;
@@ -1639,10 +1923,7 @@ BASE_HTML = """
 
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
-    @page {
-      size: A3 landscape;
-      margin: 4mm;
-    }
+    @page { size: A3 landscape; margin: 4mm; }
 
     @media print {
       html, body {
@@ -1651,11 +1932,7 @@ BASE_HTML = """
         background: #ffffff !important;
       }
 
-      .topbar,
-      .no-print,
-      .msg {
-        display: none !important;
-      }
+      .topbar, .no-print, .msg { display: none !important; }
 
       .container {
         padding: 0 !important;
@@ -1663,10 +1940,7 @@ BASE_HTML = """
         width: 100%;
       }
 
-      .dash-page {
-        gap: 0 !important;
-        width: 100%;
-      }
+      .dash-page { gap: 0 !important; width: 100%; }
 
       .a3-page {
         width: 412mm !important;
@@ -1684,19 +1958,12 @@ BASE_HTML = """
         overflow: hidden !important;
       }
 
-      .dash-header,
-      .dash-row-top,
-      .dash-row-bottom,
-      .dash-right-stack,
-      .dash-panel,
-      .dash-panel-body {
+      .dash-header, .dash-row-top, .dash-row-bottom, .dash-right-stack, .dash-panel, .dash-panel-body {
         break-inside: avoid !important;
         page-break-inside: avoid !important;
       }
 
-      .dash-table-mini,
-      .dash-table-big,
-      .agenda-table {
+      .dash-table-mini, .dash-table-big, .agenda-table {
         font-size: 8px !important;
       }
 
@@ -1779,6 +2046,8 @@ LOGIN_BODY = """
 @app.route("/", methods=["GET", "POST"])
 def login():
     if require_login():
+        if session.get("user_type") == "admin":
+            return redirect(url_for("admin_dashboard"))
         return redirect(url_for("dashboard"))
 
     if request.method == "POST":
@@ -1795,7 +2064,7 @@ def login():
             session["rep_name"] = ""
             session["rep_code"] = ""
             flash("Logado como ADMIN.", "ok")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("admin_dashboard"))
         elif u.isdigit() and p.isdigit() and u == p:
             rep_nome = try_get_rep_name(u)
             session.clear()
@@ -1883,13 +2152,12 @@ def admin_dashboard():
 
     try:
         sh = connect_gs()
-        debug_info = build_debug_sheet_info(sh)
+    except Exception as e:
+        return render_error_page("Dashboard Admin", f"Erro ao conectar na planilha principal: {norm(str(e))}")
 
-        try:
-            ws_base = sh.worksheet(WS_BASE)
-            headers, base_rows = get_base_structure(ws_base)
-        except Exception:
-            headers, base_rows = [], []
+    try:
+        debug_info = build_debug_sheet_info(sh) if DEBUG_MODE else {"worksheets": [], "sheet_id": "", "spreadsheet_title": ""}
+        headers, base_rows = get_base_structure_cached(sh)
 
         key_col = pick_col_flexible(headers, [
             "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -1945,19 +2213,38 @@ def admin_dashboard():
         header_meta = "R$ 0,00"
         header_realizado = "R$ 0,00"
         header_percentual = "0,00%"
-
-        if header_rep_code and rep_col:
-            for r in filtered_rows:
-                if norm(r.get(rep_col, "")) == header_rep_code:
-                    header_rep_name = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-                    if not header_sup and sup_col:
-                        header_sup = norm(r.get(sup_col, ""))
-                    break
-
-        total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
-        header_realizado = format_money_br(total_realizado_2026)
-
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
+
+        vendas_info = {
+            "ok": False,
+            "error": "",
+            "representante": "",
+            "supervisor": "",
+            "meta": 0.0,
+            "realizado": 0.0,
+            "percentual": 0.0,
+        }
+
+        if header_rep_code:
+            vendas_info = get_vendas_info_by_rep(header_rep_code)
+
+            if vendas_info.get("ok"):
+                header_rep_name = vendas_info.get("representante", "") or header_rep_name
+                header_sup = vendas_info.get("supervisor", "") or header_sup
+                header_meta = format_money_br(vendas_info.get("meta", 0.0))
+                header_realizado = format_money_br(vendas_info.get("realizado", 0.0))
+                header_percentual = f"{format_number_br(vendas_info.get('percentual', 0.0))}%"
+            else:
+                if rep_col:
+                    for r in filtered_rows:
+                        if norm(r.get(rep_col, "")) == header_rep_code:
+                            header_rep_name = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+                            if not header_sup and sup_col:
+                                header_sup = norm(r.get(sup_col, ""))
+                            break
+
+                total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
+                header_realizado = format_money_br(total_realizado_2026)
 
         ranking_2026 = []
         if grupo_col and t2026_col:
@@ -2050,7 +2337,6 @@ def admin_dashboard():
                 return "chip-blue"
             return "chip-gray"
 
-        ranking_2026_html = ""
         if ranking_2026:
             rows = []
             for i, item in enumerate(ranking_2026, start=1):
@@ -2086,7 +2372,6 @@ def admin_dashboard():
             </div>
             """
 
-        ranking_2025_html = ""
         if ranking_2025:
             rows = []
             for i, item in enumerate(ranking_2025, start=1):
@@ -2122,7 +2407,6 @@ def admin_dashboard():
             </div>
             """
 
-        clientes_sem_compra_html = ""
         if clientes_sem_compra:
             rows = []
             for item in clientes_sem_compra[:24]:
@@ -2176,10 +2460,12 @@ def admin_dashboard():
             "cidade_muni_col": "nome",
             "lat_col": "latitude",
             "lon_col": "longitude",
+            "labels": "aparecem no zoom",
+            "zoom": "ativo"
         }
 
         try:
-            rows_cidades, erro_muni = load_public_municipios()
+            rows_cidades, municipios_index, erro_muni = load_public_municipios()
             if erro_muni:
                 raise RuntimeError(erro_muni)
 
@@ -2220,6 +2506,7 @@ def admin_dashboard():
 
                 lat, lon, nome_municipio = find_city_coords_public(
                     rows_cidades,
+                    municipios_index,
                     cidade_key,
                     cidade_original
                 )
@@ -2231,17 +2518,13 @@ def admin_dashboard():
                 total_2024 = dados_cidade["total_2024"]
                 total_2025 = dados_cidade["total_2025"]
                 total_2026 = dados_cidade["total_2026"]
-                total_outros = total_2024 + total_2025
 
                 if total_2026 > 0:
                     fill = "#16a34a"
                     status_txt = "Vendas em 2026"
-                elif total_outros > 0:
-                    fill = "#eab308"
-                    status_txt = "Vendas em outros períodos"
                 else:
                     fill = "#dc2626"
-                    status_txt = "Sem vendas"
+                    status_txt = "Sem vendas em 2026"
 
                 city_points.append({
                     "cidade": cidade_original or nome_municipio,
@@ -2367,11 +2650,7 @@ def admin_dashboard():
 
               <div class="dash-header">
                 <div>
-                  {
-                      f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
-                      if rep_photo else
-                      '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
-                  }
+                  {f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">' if rep_photo else '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'}
                 </div>
 
                 <div class="dash-title-wrap">
@@ -2503,6 +2782,8 @@ def admin_dashboard():
               <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
               <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
               <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
+              <div class="line"><b>LABELS MAPA:</b> {h(map_debug['labels'])}</div>
+              <div class="line"><b>ZOOM MAPA:</b> {h(map_debug['zoom'])}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
               <div class="line"><b>DATA AGENDA COL:</b> {h(data_agenda_col)}</div>
               <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
@@ -2538,8 +2819,7 @@ def admin_dashboard():
         )
 
     except Exception as e:
-        flash(f"Erro ao abrir dashboard admin: {norm(str(e))}", "err")
-        return redirect(url_for("dashboard"))
+        return render_error_page("Dashboard Admin", f"Erro ao abrir dashboard admin: {norm(str(e))}")
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -2548,47 +2828,26 @@ def dashboard():
         flash("Faça login para continuar.", "err")
         return redirect(url_for("login"))
 
-    sh = connect_gs()
-    debug_info = build_debug_sheet_info(sh)
+    current_user_photo = ""
+    if session.get("user_type") == "rep":
+        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
+
+    try:
+        sh = connect_gs()
+    except Exception as e:
+        return render_error_page("Erro", f"Erro ao conectar na planilha principal: {norm(str(e))}", current_user_photo)
+
+    debug_info = build_debug_sheet_info(sh) if DEBUG_MODE else {"worksheets": [], "sheet_id": "", "spreadsheet_title": ""}
     last_save = get_last_save_debug()
 
     try:
-        ws_base = sh.worksheet(WS_BASE)
+        headers, base_rows = get_base_structure_cached(sh)
     except WorksheetNotFound:
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_BASE)}</div>"
-        )
-
-    try:
-        ws_listas = sh.worksheet(WS_LISTAS)
-    except WorksheetNotFound:
-        return render_template_string(
-            BASE_HTML,
-            title=APP_TITLE,
-            subtitle="Erro",
-            logged=True,
-            user_login=session.get("user_login"),
-            user_name=session.get("rep_name", ""),
-            user_type=session.get("user_type"),
-            user_photo_url=get_rep_photo_src(session.get("rep_code", "")) if session.get("user_type") == "rep" else "",
-            body=f"<div class='card'><b>Aba não encontrada:</b> {h(WS_LISTAS)}</div>"
-        )
-
-    try:
-        ensure_edicoes_worksheet(sh)
+        return render_error_page("Erro", f"Aba não encontrada: {WS_BASE}", current_user_photo)
     except Exception as e:
-        flash(str(e), "err")
+        return render_error_page("Erro", f"Erro ao ler estrutura da BASE: {norm(str(e))}", current_user_photo)
 
-    headers, base_rows = get_base_structure(ws_base)
-    lista_rows = safe_get_all_records(ws_listas)
+    lista_rows = get_listas_records_cached(sh)
 
     key_col = pick_col_flexible(headers, [
         "Codigo Grupo Cliente", "Código Grupo Cliente",
@@ -2631,10 +2890,31 @@ def dashboard():
     rep_sel = norm(request.args.get("rep", ""))
     q = norm(request.args.get("q", ""))
 
+    data_ini = norm(request.args.get("data_ini", ""))
+    data_fim = norm(request.args.get("data_fim", ""))
+    filtro_mes = norm(request.args.get("filtro_mes", ""))
+    filtro_semana = norm(request.args.get("filtro_semana", ""))
+
     sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if (is_admin() and sup_col) else []
     rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if is_admin() else []
 
+    def date_to_sortable(v):
+        v = norm(v)
+        if not v:
+            return ""
+
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+            return v
+
+        m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", v)
+        if m:
+            dd, mm, yyyy = m.groups()
+            return f"{yyyy}-{mm}-{dd}"
+
+        return ""
+
     prepared_rows = []
+    q_lower = q.lower()
 
     for idx_base, r in enumerate(base_rows, start=2):
         repc = norm(r.get(rep_col, "")) if rep_col else ""
@@ -2645,9 +2925,15 @@ def dashboard():
             continue
         if is_admin() and rep_sel and repc != rep_sel:
             continue
-        if q:
-            hay = " ".join([norm(v) for v in r.values()])
-            if q.lower() not in hay.lower():
+
+        if q_lower:
+            grupo_val = norm(r.get(grupo_col, "")) if grupo_col else ""
+            cidade_val = norm(r.get(cidade_col, "")) if cidade_col else ""
+            ck_val = norm(r.get(key_col, "")) if key_col else ""
+            nome_rep_val = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+            sup_val = norm(r.get(sup_col, "")) if sup_col else ""
+            hay = f"{ck_val} {grupo_val} {cidade_val} {nome_rep_val} {sup_val}".lower()
+            if q_lower not in hay:
                 continue
 
         row_copy = dict(r)
@@ -2656,6 +2942,21 @@ def dashboard():
         row_copy["Semana Atendimento"] = norm(r.get(semana_col, "")) if semana_col else ""
         row_copy["Status Cliente"] = norm(r.get(status_cliente_col, "")) if status_cliente_col else ""
         row_copy["Observações"] = norm(r.get(observacoes_col, "")) if observacoes_col else ""
+
+        data_row_sort = date_to_sortable(row_copy["Data Agenda Visita"])
+        if data_ini:
+            if not data_row_sort or data_row_sort < data_ini:
+                continue
+
+        if data_fim:
+            if not data_row_sort or data_row_sort > data_fim:
+                continue
+
+        if filtro_mes and normalize_text_for_match(row_copy["Mês"]) != normalize_text_for_match(filtro_mes):
+            continue
+
+        if filtro_semana and normalize_text_for_match(row_copy["Semana Atendimento"]) != normalize_text_for_match(filtro_semana):
+            continue
 
         row_copy["_base_row_number"] = idx_base
 
@@ -2681,10 +2982,6 @@ def dashboard():
 
     out_rows = prepared_rows[:PAGE_SIZE]
 
-    current_user_photo = ""
-    if session.get("user_type") == "rep":
-        current_user_photo = get_rep_photo_src(session.get("rep_code", ""))
-
     rep_card_html = ""
     selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
 
@@ -2693,13 +2990,19 @@ def dashboard():
         rep_sup_base = ""
         rep_reg_base = ""
 
-        for r in base_rows:
-            if norm(r.get(rep_col, "")) == selected_rep_code:
-                rep_name_base = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-                rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
-                rep_reg_base = ""
-                if rep_name_base:
-                    break
+        vendas_info_rep = get_vendas_info_by_rep(selected_rep_code)
+
+        if vendas_info_rep.get("ok"):
+            rep_name_base = vendas_info_rep.get("representante", "") or ""
+            rep_sup_base = vendas_info_rep.get("supervisor", "") or ""
+        else:
+            for r in base_rows:
+                if norm(r.get(rep_col, "")) == selected_rep_code:
+                    rep_name_base = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+                    rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
+                    rep_reg_base = ""
+                    if rep_name_base:
+                        break
 
         foto_url = get_rep_photo_src(selected_rep_code)
         nome_card = rep_name_base or f"Representante {selected_rep_code}"
@@ -2712,8 +3015,7 @@ def dashboard():
             '<div class="rep-photo-placeholder">Sem foto</div>'
         )
 
-        infos = []
-        infos.append(f"<div><b>Código:</b> {h(selected_rep_code)}</div>")
+        infos = [f"<div><b>Código:</b> {h(selected_rep_code)}</div>"]
         if nome_card:
             infos.append(f"<div><b>Representante:</b> {h(nome_card)}</div>")
         if sup_card:
@@ -2805,6 +3107,14 @@ def dashboard():
             hidden_filters += f'<input type="hidden" name="rep" value="{h(rep_sel)}">'
         if q:
             hidden_filters += f'<input type="hidden" name="q" value="{h(q)}">'
+        if data_ini:
+            hidden_filters += f'<input type="hidden" name="data_ini" value="{h(data_ini)}">'
+        if data_fim:
+            hidden_filters += f'<input type="hidden" name="data_fim" value="{h(data_fim)}">'
+        if filtro_mes:
+            hidden_filters += f'<input type="hidden" name="filtro_mes" value="{h(filtro_mes)}">'
+        if filtro_semana:
+            hidden_filters += f'<input type="hidden" name="filtro_semana" value="{h(filtro_semana)}">'
 
         row_html = f"""
         <tr class="{h(klass)}">
@@ -2893,6 +3203,31 @@ def dashboard():
             <label>Buscar</label>
             <input name="q" value="{h(q)}" placeholder="cliente/grupo/cidade...">
           </div>
+
+          <div>
+            <label>Data inicial</label>
+            <input type="date" name="data_ini" value="{h(data_ini)}">
+          </div>
+
+          <div>
+            <label>Data final</label>
+            <input type="date" name="data_fim" value="{h(data_fim)}">
+          </div>
+
+          <div>
+            <label>Filtrar por Mês</label>
+            <select name="filtro_mes">
+              {opt_html(meses, filtro_mes)}
+            </select>
+          </div>
+
+          <div>
+            <label>Filtrar por Semana</label>
+            <select name="filtro_semana">
+              {opt_html(semanas, filtro_semana)}
+            </select>
+          </div>
+
           <div style="display:flex;align-items:flex-end;gap:8px;">
             <button type="submit">Aplicar</button>
             <a href="{url_for('dashboard')}"><button type="button" class="secondary">Limpar</button></a>
@@ -2959,7 +3294,22 @@ def salvar():
     rep = norm(request.form.get("rep", ""))
     q = norm(request.form.get("q", ""))
 
-    redirect_args = {k: v for k, v in {"sup": sup, "rep": rep, "q": q}.items() if v}
+    data_ini = norm(request.form.get("data_ini", ""))
+    data_fim = norm(request.form.get("data_fim", ""))
+    filtro_mes = norm(request.form.get("filtro_mes", ""))
+    filtro_semana = norm(request.form.get("filtro_semana", ""))
+
+    redirect_args = {
+        k: v for k, v in {
+            "sup": sup,
+            "rep": rep,
+            "q": q,
+            "data_ini": data_ini,
+            "data_fim": data_fim,
+            "filtro_mes": filtro_mes,
+            "filtro_semana": filtro_semana
+        }.items() if v
+    }
 
     if not client_key:
         flash("client_key vazio.", "err")
@@ -3009,24 +3359,41 @@ def salvar():
                 {"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]},
                 {"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]},
             ],
-            value_input_option="USER_ENTERED"
+            value_input_option="RAW"
         )
 
-        row_values = ws_base.row_values(row_num)
+        esperado_data = normalizar_data_comparacao(data_agenda)
+        esperado_mes = norm(mes)
+        esperado_semana = norm(semana)
+        esperado_status = norm(status_cliente)
+        esperado_obs = norm(observacoes)
 
-        gravado_data = safe_cell(row_values, col_data)
-        gravado_mes = safe_cell(row_values, col_mes)
-        gravado_semana = safe_cell(row_values, col_semana)
-        gravado_status = safe_cell(row_values, col_status)
-        gravado_obs = safe_cell(row_values, col_obs)
+        gravado_data = ""
+        gravado_mes = ""
+        gravado_semana = ""
+        gravado_status = ""
+        gravado_obs = ""
+        conferiu = False
 
-        conferiu = (
-            gravado_data == norm(data_agenda) and
-            gravado_mes == norm(mes) and
-            gravado_semana == norm(semana) and
-            gravado_status == norm(status_cliente) and
-            gravado_obs == norm(observacoes)
-        )
+        for _ in range(5):
+            time.sleep(0.35)
+
+            gravado_data = norm(ws_base.acell(rowcol_to_a1(row_num, col_data)).value or "")
+            gravado_mes = norm(ws_base.acell(rowcol_to_a1(row_num, col_mes)).value or "")
+            gravado_semana = norm(ws_base.acell(rowcol_to_a1(row_num, col_semana)).value or "")
+            gravado_status = norm(ws_base.acell(rowcol_to_a1(row_num, col_status)).value or "")
+            gravado_obs = norm(ws_base.acell(rowcol_to_a1(row_num, col_obs)).value or "")
+
+            conferiu = (
+                normalizar_data_comparacao(gravado_data) == esperado_data and
+                normalize_text_for_match(gravado_mes) == normalize_text_for_match(esperado_mes) and
+                normalize_text_for_match(gravado_semana) == normalize_text_for_match(esperado_semana) and
+                normalize_text_for_match(gravado_status) == normalize_text_for_match(esperado_status) and
+                norm(gravado_obs) == norm(esperado_obs)
+            )
+
+            if conferiu:
+                break
 
         if not conferiu:
             set_last_save_debug({
@@ -3035,6 +3402,7 @@ def salvar():
                 "data_agenda": gravado_data,
                 "mes": gravado_mes,
                 "semana": gravado_semana,
+                "semana_esperada": esperado_semana,
                 "status_cliente": gravado_status,
                 "observacoes": gravado_obs,
                 "result": "FALHA NA CONFIRMAÇÃO",
@@ -3077,6 +3445,8 @@ def salvar():
             "observacoes": gravado_obs,
             "result": result_txt,
         })
+
+        invalidate_main_sheet_cache()
 
         flash(f"Gravado com sucesso na BASE na linha {row_num}.", "ok")
         if not edicoes_ok:
