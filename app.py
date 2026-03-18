@@ -337,6 +337,22 @@ def from_input_date(v):
     return v
 
 
+def normalizar_data_comparacao(v):
+    v = norm(v)
+    if not v:
+        return ""
+
+    if re.fullmatch(r"\d{2}/\d{2}/\d{4}", v):
+        return v
+
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v)
+    if m:
+        yyyy, mm, dd = m.groups()
+        return f"{dd}/{mm}/{yyyy}"
+
+    return v
+
+
 def safe_cell(vals, idx_1_based):
     pos = idx_1_based - 1
     return norm(vals[pos]) if pos < len(vals) else ""
@@ -3169,7 +3185,7 @@ def salvar():
         col_status = headers_norm.index("Status Cliente") + 1
         col_obs = headers_norm.index("Observações") + 1
 
-                ws_base.batch_update(
+        ws_base.batch_update(
             [
                 {"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]},
                 {"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]},
@@ -3180,7 +3196,7 @@ def salvar():
             value_input_option="USER_ENTERED"
         )
 
-        esperado_data = norm(data_agenda)
+        esperado_data = normalizar_data_comparacao(data_agenda)
         esperado_mes = norm(mes)
         esperado_semana = norm(semana)
         esperado_status = norm(status_cliente)
@@ -3193,7 +3209,7 @@ def salvar():
         gravado_obs = ""
         conferiu = False
 
-        for tentativa in range(5):
+        for _ in range(5):
             time.sleep(0.35)
 
             gravado_data = norm(ws_base.acell(rowcol_to_a1(row_num, col_data)).value or "")
@@ -3203,7 +3219,7 @@ def salvar():
             gravado_obs = norm(ws_base.acell(rowcol_to_a1(row_num, col_obs)).value or "")
 
             conferiu = (
-                gravado_data == esperado_data and
+                normalizar_data_comparacao(gravado_data) == esperado_data and
                 gravado_mes == esperado_mes and
                 gravado_semana == esperado_semana and
                 gravado_status == esperado_status and
