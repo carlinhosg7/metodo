@@ -50,22 +50,22 @@ PAGE_SIZE = int(os.getenv("PAGE_SIZE", "100"))
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").strip().lower() in ("1", "true", "sim", "yes")
 
 # ===== CACHE =====
-BASE_CACHE_TTL = int(os.getenv("BASE_CACHE_TTL", "300"))
-LISTAS_CACHE_TTL = int(os.getenv("LISTAS_CACHE_TTL", "900"))
-REP_NAME_CACHE_TTL = int(os.getenv("REP_NAME_CACHE_TTL", "1800"))
-MUNICIPIOS_CACHE_TTL = int(os.getenv("MUNICIPIOS_CACHE_TTL", "86400"))
+BASE_CACHE_TTL = int(os.getenv("BASE_CACHE_TTL", "300"))               # 5 min
+LISTAS_CACHE_TTL = int(os.getenv("LISTAS_CACHE_TTL", "900"))           # 15 min
+REP_NAME_CACHE_TTL = int(os.getenv("REP_NAME_CACHE_TTL", "1800"))      # 30 min
+MUNICIPIOS_CACHE_TTL = int(os.getenv("MUNICIPIOS_CACHE_TTL", "86400")) # 24h
 DEBUG_SHEETINFO_CACHE_TTL = int(os.getenv("DEBUG_SHEETINFO_CACHE_TTL", "120"))
 
 APP_TITLE = "Acompanhamento de clientes"
 LOGO_URL = "https://raw.githubusercontent.com/carlinhosg7/metodo/main/logo_kidy.png"
 
-# ===== PLANILHA VENDAS =====
+# ===== PLANILHA VENDAS (cabeçalho do painel) =====
 VENDAS_SHEET_URL = os.getenv(
     "VENDAS_SHEET_URL",
     "https://docs.google.com/spreadsheets/d/1vLoJ755IpcRuW2NgvbejSw-1iUA5ZP7EHINVT9nXYig/edit?usp=sharing"
 ).strip()
 VENDAS_WS = os.getenv("VENDAS_WS", "Tab").strip()
-VENDAS_CACHE_TTL = int(os.getenv("VENDAS_CACHE_TTL", "600"))
+VENDAS_CACHE_TTL = int(os.getenv("VENDAS_CACHE_TTL", "600"))  # 10 min
 
 # =========================
 # AGENDA SEMANAL
@@ -76,11 +76,18 @@ AGENDA_SHEET_URL = os.getenv(
 ).strip()
 WS_AGENDA = os.getenv("WS_AGENDA", "AGENDA_SEMANAL").strip()
 
-DIAS_SEMANA = ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA"]
+DIAS_SEMANA = [
+    "SEGUNDA",
+    "TERCA",
+    "QUARTA",
+    "QUINTA",
+    "SEXTA"
+]
+
 ATENDIMENTOS = [1, 2, 3, 4]
 
 # =========================
-# LISTAS FIXAS
+# LISTAS FIXAS (fallback)
 # =========================
 DEFAULT_MESES = [
     "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -111,7 +118,7 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 # =========================
-# CACHE GLOBAL
+# CACHE GLOBAL SIMPLES
 # =========================
 _MEM_CACHE = {}
 
@@ -179,17 +186,17 @@ def normalize_header(s):
     s = norm(s).lower()
     s = (
         s.replace("á", "a")
-        .replace("à", "a")
-        .replace("ã", "a")
-        .replace("â", "a")
-        .replace("é", "e")
-        .replace("ê", "e")
-        .replace("í", "i")
-        .replace("ó", "o")
-        .replace("ô", "o")
-        .replace("õ", "o")
-        .replace("ú", "u")
-        .replace("ç", "c")
+         .replace("à", "a")
+         .replace("ã", "a")
+         .replace("â", "a")
+         .replace("é", "e")
+         .replace("ê", "e")
+         .replace("í", "i")
+         .replace("ó", "o")
+         .replace("ô", "o")
+         .replace("õ", "o")
+         .replace("ú", "u")
+         .replace("ç", "c")
     )
     return s
 
@@ -198,17 +205,17 @@ def normalize_text_for_match(v):
     s = norm(v).upper()
     s = (
         s.replace("Á", "A")
-        .replace("À", "A")
-        .replace("Ã", "A")
-        .replace("Â", "A")
-        .replace("É", "E")
-        .replace("Ê", "E")
-        .replace("Í", "I")
-        .replace("Ó", "O")
-        .replace("Ô", "O")
-        .replace("Õ", "O")
-        .replace("Ú", "U")
-        .replace("Ç", "C")
+         .replace("À", "A")
+         .replace("Ã", "A")
+         .replace("Â", "A")
+         .replace("É", "E")
+         .replace("Ê", "E")
+         .replace("Í", "I")
+         .replace("Ó", "O")
+         .replace("Ô", "O")
+         .replace("Õ", "O")
+         .replace("Ú", "U")
+         .replace("Ç", "C")
     )
     return s
 
@@ -459,13 +466,22 @@ def friendly_gspread_error(exc):
         return "A aba informada não foi encontrada na planilha."
 
     if "Response [404]" in txt or "Requested entity was not found" in txt:
-        return "Planilha Google Sheets não encontrada. Verifique se o ID/URL está correto e se a planilha existe."
+        return (
+            "Planilha Google Sheets não encontrada. "
+            "Verifique se o ID/URL está correto e se a planilha existe."
+        )
 
     if "Response [403]" in txt or "PERMISSION_DENIED" in txt or "The caller does not have permission" in txt:
-        return "Sem permissão para acessar a planilha Google Sheets. Compartilhe a planilha com o e-mail da service account como Editor."
+        return (
+            "Sem permissão para acessar a planilha Google Sheets. "
+            "Compartilhe a planilha com o e-mail da service account como Editor."
+        )
 
     if "This operation is not supported for this document" in txt:
-        return "O arquivo informado não é uma planilha Google Sheets válida. Converta o arquivo para Google Sheets e use o ID/URL correto."
+        return (
+            "O arquivo informado não é uma planilha Google Sheets válida. "
+            "Converta o arquivo para Google Sheets e use o ID/URL correto."
+        )
 
     return txt or "Erro ao acessar Google Sheets."
 
@@ -488,6 +504,573 @@ def render_error_page(subtitle, message, user_photo_url=""):
         user_photo_url=user_photo_url,
         body=body
     )
+
+
+def connect_vendas_gs():
+    vendas_sheet_id = extract_google_sheet_id(VENDAS_SHEET_URL)
+    if not vendas_sheet_id:
+        raise RuntimeError("URL/ID da planilha VENDAS não informado.")
+    return connect_gs_by_key(vendas_sheet_id)
+
+
+def get_vendas_rows_cached():
+    cache_key = f"vendas::{extract_google_sheet_id(VENDAS_SHEET_URL)}::{VENDAS_WS}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    sh_vendas = connect_vendas_gs()
+
+    try:
+        ws_vendas = sh_vendas.worksheet(VENDAS_WS)
+    except WorksheetNotFound:
+        raise RuntimeError(f"A aba '{VENDAS_WS}' não foi encontrada na planilha VENDAS.")
+
+    headers, rows = safe_get_raw_rows(ws_vendas)
+    payload = (headers, rows)
+    cache_set(cache_key, payload, VENDAS_CACHE_TTL)
+    return payload
+
+
+def invalidate_vendas_cache():
+    cache_del_prefix(f"vendas::{extract_google_sheet_id(VENDAS_SHEET_URL)}::{VENDAS_WS}")
+
+
+def get_vendas_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+
+    info = {
+        "ok": False,
+        "error": "",
+        "rep_code": rep_code,
+        "representante": "",
+        "supervisor": "",
+        "meta": 0.0,
+        "realizado": 0.0,
+        "percentual": 0.0,
+    }
+
+    if not rep_code:
+        info["error"] = "Representante não informado."
+        return info
+
+    try:
+        headers, rows = get_vendas_rows_cached()
+
+        col_rep = pick_col_flexible(headers, [
+            "Codigo Representante", "Código Representante", "Cod Representante", "COD_REP"
+        ])
+        col_nome = pick_col_flexible(headers, [
+            "Representante", "Nome Representante"
+        ])
+        col_sup = pick_col_flexible(headers, [
+            "Supervisor", "Supervisão"
+        ])
+        col_meta = pick_col_flexible(headers, [
+            "Vlr Meta Entrega", "Meta Entrega", "Vlr Meta", "Meta"
+        ])
+        col_venda = pick_col_flexible(headers, [
+            "Vlr Venda", "Valor Venda", "Venda"
+        ])
+
+        if not col_rep:
+            raise RuntimeError("Coluna de representante não encontrada na planilha VENDAS.")
+
+        for row in rows:
+            rep_val = norm(row.get(col_rep, ""))
+            rep_val_num = rep_val.lstrip("0") or "0"
+            rep_code_num = rep_code.lstrip("0") or "0"
+
+            if rep_val == rep_code or rep_val_num == rep_code_num:
+                meta = parse_number_br(row.get(col_meta, "")) if col_meta else 0.0
+                realizado = parse_number_br(row.get(col_venda, "")) if col_venda else 0.0
+                percentual = (realizado / meta * 100.0) if meta > 0 else 0.0
+
+                info["representante"] = norm(row.get(col_nome, "")) if col_nome else ""
+                info["supervisor"] = norm(row.get(col_sup, "")) if col_sup else ""
+                info["meta"] = meta
+                info["realizado"] = realizado
+                info["percentual"] = percentual
+                info["ok"] = True
+                return info
+
+        info["error"] = f"Representante {rep_code} não encontrado na planilha VENDAS."
+        return info
+
+    except Exception as e:
+        info["error"] = norm(str(e))
+        return info
+
+
+# =========================
+# MUNICÍPIOS CACHE + ÍNDICE
+# =========================
+def load_public_municipios():
+    cache_key = f"municipios::{MUNICIPIOS_URL}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached["rows"], cached["index"], ""
+
+    try:
+        resp = requests.get(MUNICIPIOS_URL, timeout=30)
+        resp.raise_for_status()
+
+        csv_text = resp.text
+        if not csv_text.strip():
+            return [], {}, "Arquivo público de municípios vazio."
+
+        reader = csvlib.DictReader(StringIO(csv_text))
+        rows = []
+        index_exato = {}
+        index_simplificado = {}
+
+        def simplificar(txt):
+            txt = normalize_city_key(txt)
+            txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
+            txt = re.sub(r"\s+", " ", txt).strip()
+            return txt
+
+        for row in reader:
+            clean_row = {}
+            for k, v in row.items():
+                clean_row[norm(k)] = norm(v)
+
+            rows.append(clean_row)
+
+            nome = norm(
+                clean_row.get("nome", "") or
+                clean_row.get("cidade", "") or
+                clean_row.get("municipio", "") or
+                clean_row.get("município", "")
+            )
+
+            if nome:
+                nome_key = normalize_city_key(nome)
+                nome_simpl = simplificar(nome)
+
+                if nome_key and nome_key not in index_exato:
+                    index_exato[nome_key] = clean_row
+
+                if nome_simpl and nome_simpl not in index_simplificado:
+                    index_simplificado[nome_simpl] = clean_row
+
+        payload = {
+            "rows": rows,
+            "index": {
+                "exato": index_exato,
+                "simplificado": index_simplificado
+            }
+        }
+        cache_set(cache_key, payload, MUNICIPIOS_CACHE_TTL)
+
+        return rows, payload["index"], ""
+    except Exception as e:
+        return [], {}, f"Erro ao carregar municípios públicos: {norm(str(e))}"
+
+
+def find_city_coords_public(rows_cidades, municipios_index, cidade_base_norm, cidade_original=""):
+    if not cidade_base_norm:
+        return None, None, ""
+
+    municipios_index = municipios_index or {}
+    index_exato = municipios_index.get("exato", {})
+    index_simplificado = municipios_index.get("simplificado", {})
+
+    def simplificar(txt):
+        txt = normalize_city_key(txt)
+        txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt
+
+    melhor_row = index_exato.get(cidade_base_norm)
+
+    if melhor_row is None:
+        base_simpl = simplificar(cidade_original or cidade_base_norm)
+        melhor_row = index_simplificado.get(base_simpl)
+
+    if melhor_row is None and rows_cidades:
+        for r in rows_cidades:
+            nome = norm(
+                r.get("nome", "") or
+                r.get("cidade", "") or
+                r.get("municipio", "") or
+                r.get("município", "")
+            )
+            nome_norm = normalize_city_key(nome)
+
+            if nome_norm and (
+                cidade_base_norm in nome_norm or
+                nome_norm in cidade_base_norm
+            ):
+                melhor_row = r
+                break
+
+    if melhor_row is None:
+        return None, None, ""
+
+    nome_final = norm(
+        melhor_row.get("nome", "") or
+        melhor_row.get("cidade", "") or
+        melhor_row.get("municipio", "") or
+        melhor_row.get("município", "")
+    )
+    lat = parse_float_any(melhor_row.get("latitude", "") or melhor_row.get("lat", ""))
+    lon = parse_float_any(melhor_row.get("longitude", "") or melhor_row.get("lon", "") or melhor_row.get("lng", ""))
+
+    return lat, lon, nome_final
+
+
+def build_city_map_svg(city_points, width=900, height=520):
+    if not city_points:
+        return """
+        <div class="dash-map-placeholder">
+          Não foi possível montar o mapa.<br><br>
+          Verifique o cruzamento das cidades e as colunas de latitude e longitude.
+        </div>
+        """
+
+    valid_points = [
+        p for p in city_points
+        if p.get("lat") is not None and p.get("lon") is not None
+    ]
+
+    if not valid_points:
+        return """
+        <div class="dash-map-placeholder">
+          Nenhuma coordenada válida encontrada.
+        </div>
+        """
+
+    min_lon = min(p["lon"] for p in valid_points)
+    max_lon = max(p["lon"] for p in valid_points)
+    min_lat = min(p["lat"] for p in valid_points)
+    max_lat = max(p["lat"] for p in valid_points)
+
+    lon_span = max_lon - min_lon
+    lat_span = max_lat - min_lat
+
+    if lon_span == 0:
+        lon_span = 0.3
+    if lat_span == 0:
+        lat_span = 0.3
+
+    lon_margin = lon_span * 0.08
+    lat_margin = lat_span * 0.08
+
+    min_lon -= lon_margin
+    max_lon += lon_margin
+    min_lat -= lat_margin
+    max_lat += lat_margin
+
+    pad = 10
+
+    def project(lon, lat):
+        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
+        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
+        return x, y
+
+    circles = []
+    labels = []
+
+    for p in valid_points:
+        x, y = project(p["lon"], p["lat"])
+        fill = p["fill"]
+        cidade = p.get("cidade", "")
+        status_txt = p.get("status_txt", "")
+        total_2024 = p.get("total_2024", 0)
+        total_2025 = p.get("total_2025", 0)
+        total_2026 = p.get("total_2026", 0)
+
+        title = h(
+            f"{cidade} | {status_txt} | "
+            f"2024: {format_number_br(total_2024)} | "
+            f"2025: {format_number_br(total_2025)} | "
+            f"2026: {format_number_br(total_2026)}"
+        )
+
+        circles.append(
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="6.2" fill="{fill}" stroke="#ffffff" stroke-width="1.4">'
+            f'<title>{title}</title></circle>'
+        )
+
+        labels.append(
+            f'<text class="map-label" x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="10" fill="#1f2937">{h(cidade[:22])}</text>'
+        )
+
+    map_uid = f"map_{int(time.time() * 1000)}_{len(valid_points)}"
+
+    svg = f"""
+    <div style="width:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; flex-wrap:wrap;">
+        <div style="font-size:10px; color:#334155; font-weight:700;">
+          Use os botões para zoom
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button type="button" onclick="zoomMap('{map_uid}', 1.2)" title="Aumentar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">+</button>
+          <button type="button" onclick="zoomMap('{map_uid}', 0.83)" title="Diminuir zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">−</button>
+          <button type="button" onclick="resetMapZoom('{map_uid}')" title="Resetar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:700; font-size:12px;">Reset</button>
+        </div>
+      </div>
+
+      <div style="width:100%; height:100%; overflow:auto; background:#dff3f1; border-radius:4px;">
+        <svg id="{map_uid}" viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px; transform-origin:center center; transition:transform .15s ease;">
+          <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
+          <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
+          {''.join(circles)}
+          <g class="map-labels" style="display:none;">
+            {''.join(labels)}
+          </g>
+        </svg>
+      </div>
+
+      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
+          Vendas em 2026
+        </span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
+          Sem vendas em 2026
+        </span>
+      </div>
+    </div>
+
+    <script>
+      window._mapZoomLevels = window._mapZoomLevels || {{}};
+
+      function applyMapLabelVisibility(mapId) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+
+        const zoom = window._mapZoomLevels[mapId] || 1;
+        const labels = el.querySelector('.map-labels');
+        if (!labels) return;
+
+        if (zoom > 1.05) {{
+          labels.style.display = 'block';
+        }} else {{
+          labels.style.display = 'none';
+        }}
+      }}
+
+      function zoomMap(mapId, factor) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        if (!window._mapZoomLevels[mapId]) window._mapZoomLevels[mapId] = 1;
+
+        let next = window._mapZoomLevels[mapId] * factor;
+        if (next < 1) next = 1;
+        if (next > 8) next = 8;
+
+        window._mapZoomLevels[mapId] = next;
+        el.style.transform = 'scale(' + next + ')';
+        applyMapLabelVisibility(mapId);
+      }}
+
+      function resetMapZoom(mapId) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        window._mapZoomLevels[mapId] = 1;
+        el.style.transform = 'scale(1)';
+        applyMapLabelVisibility(mapId);
+      }}
+
+      setTimeout(function() {{
+        if (!window._mapZoomLevels['{map_uid}']) {{
+          window._mapZoomLevels['{map_uid}'] = 1;
+        }}
+        applyMapLabelVisibility('{map_uid}');
+      }}, 0);
+    </script>
+    """
+    return svg
+
+
+# =========================
+# AGENDA - FUNÇÕES
+# =========================
+def _agenda_vazia():
+    agenda = {}
+    for dia in DIAS_SEMANA:
+        agenda[dia] = {}
+        for at in ATENDIMENTOS:
+            agenda[dia][at] = {
+                "cliente": "",
+                "valor": ""
+            }
+    return agenda
+
+
+def connect_agenda_gs():
+    agenda_sheet_id = extract_google_sheet_id(AGENDA_SHEET_URL)
+    if not agenda_sheet_id:
+        raise RuntimeError("URL/ID da planilha da agenda não informado.")
+    return connect_gs_by_key(agenda_sheet_id)
+
+
+def ensure_agenda_worksheet(sh_agenda):
+    headers = ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
+
+    try:
+        ws = sh_agenda.worksheet(WS_AGENDA)
+    except WorksheetNotFound:
+        try:
+            ws = sh_agenda.add_worksheet(title=WS_AGENDA, rows="5000", cols="10")
+        except Exception as e:
+            raise RuntimeError(
+                f"Não foi possível acessar/criar a aba '{WS_AGENDA}' da agenda. "
+                f"Compartilhe a planilha da agenda com a service account. Detalhe: {friendly_gspread_error(e)}"
+            )
+
+    ensure_headers(ws, headers)
+    return ws
+
+
+def carregar_agenda_rep(rep_code):
+    rep_code = norm(rep_code)
+    agenda = _agenda_vazia()
+
+    if not rep_code:
+        return agenda
+
+    try:
+        sh_agenda = connect_agenda_gs()
+        ws_agenda = ensure_agenda_worksheet(sh_agenda)
+        registros = safe_get_all_records(ws_agenda)
+    except Exception:
+        return agenda
+
+    for row in registros:
+        rep = norm(row.get("REP", ""))
+        dia = normalize_text_for_match(row.get("DIA", ""))
+        at_txt = norm(row.get("ATENDIMENTO", ""))
+        cliente = norm(row.get("CLIENTE", ""))
+        valor = norm(row.get("VALOR", ""))
+
+        if rep != rep_code:
+            continue
+
+        try:
+            at = int(at_txt)
+        except Exception:
+            continue
+
+        if dia in agenda and at in agenda[dia]:
+            agenda[dia][at]["cliente"] = cliente
+            agenda[dia][at]["valor"] = valor
+
+    return agenda
+
+
+def salvar_agenda_rep(rep_code, agenda_dict):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        raise RuntimeError("Representante da agenda não informado.")
+
+    sh_agenda = connect_agenda_gs()
+    ws_agenda = ensure_agenda_worksheet(sh_agenda)
+
+    all_values = ws_agenda.get_all_values()
+    headers = [norm(x) for x in all_values[0]] if all_values else ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
+
+    rep_col = headers.index("REP") + 1
+
+    rows_to_delete = []
+    for idx, row in enumerate(all_values[1:], start=2):
+        rep_existente = safe_cell(row, rep_col)
+        if rep_existente == rep_code:
+            rows_to_delete.append(idx)
+
+    for row_idx in reversed(rows_to_delete):
+        ws_agenda.delete_rows(row_idx)
+
+    linhas_novas = []
+    for dia in DIAS_SEMANA:
+        for at in ATENDIMENTOS:
+            cliente = norm(agenda_dict.get(dia, {}).get(at, {}).get("cliente", ""))
+            valor = norm(agenda_dict.get(dia, {}).get(at, {}).get("valor", ""))
+
+            if cliente or valor:
+                linhas_novas.append([rep_code, dia, at, cliente, valor])
+
+    if linhas_novas:
+        ws_agenda.append_rows(linhas_novas, value_input_option="USER_ENTERED")
+
+
+def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
+    rep_code = norm(rep_code)
+    if not rep_code:
+        return """
+        <div class="dash-summary-box">
+          Selecione um representante para exibir e salvar a agenda semanal.
+        </div>
+        """
+
+    agenda = carregar_agenda_rep(rep_code)
+
+    header_top = []
+    header_top.append("<tr>")
+    header_top.append('<th style="width:90px;">DIA</th>')
+    for at in ATENDIMENTOS:
+        header_top.append(f'<th colspan="2" style="text-align:center;">ATENDIMENTO {at:02d}</th>')
+    header_top.append("</tr>")
+
+    header_sub = []
+    header_sub.append("<tr>")
+    header_sub.append("<th></th>")
+    for _ in ATENDIMENTOS:
+        header_sub.append('<th style="width:150px;">CLIENTE</th>')
+        header_sub.append('<th style="width:80px;">VALOR</th>')
+    header_sub.append("</tr>")
+
+    body_rows = []
+
+    for dia in DIAS_SEMANA:
+        row = [f"<tr><td><b>{h(dia)}</b></td>"]
+        for at in ATENDIMENTOS:
+            cliente = agenda[dia][at]["cliente"]
+            valor = agenda[dia][at]["valor"]
+
+            row.append(
+                f'<td><input class="agenda-input" type="text" name="{h(dia)}_{at}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
+            )
+            row.append(
+                f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor"></td>'
+            )
+        row.append("</tr>")
+        body_rows.append("".join(row))
+
+    hidden_sup = f'<input type="hidden" name="sup" value="{h(sup_sel)}">' if sup_sel else ""
+    hidden_rep = f'<input type="hidden" name="rep" value="{h(rep_sel)}">' if rep_sel else ""
+
+    return f"""
+    <form method="post" action="{url_for('salvar_agenda')}">
+      <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
+      {hidden_sup}
+      {hidden_rep}
+
+      <div class="agenda-topbar">
+        <div class="agenda-rep-label">
+          Agenda semanal do representante <b>{h(rep_code)}</b>
+        </div>
+        <div>
+          <button type="submit" class="agenda-save-btn">Salvar Agenda</button>
+        </div>
+      </div>
+
+      <div class="agenda-wrapper">
+        <table class="agenda-table">
+          <thead>
+            {''.join(header_top)}
+            {''.join(header_sub)}
+          </thead>
+          <tbody>
+            {''.join(body_rows)}
+          </tbody>
+        </table>
+      </div>
+    </form>
+    """
 
 
 # =========================
@@ -537,22 +1120,11 @@ def connect_gs():
 def connect_gold_gs():
     gold_target = resolve_gold_sheet_target()
     if not gold_target:
-        raise RuntimeError("Faltou configurar a planilha de CLIENTES GOLD. Defina GOLD_SHEET_ID ou GOLD_SHEET_URL.")
+        raise RuntimeError(
+            "Faltou configurar a planilha de CLIENTES GOLD. "
+            "Defina GOLD_SHEET_ID ou GOLD_SHEET_URL."
+        )
     return connect_gs_by_key(gold_target)
-
-
-def connect_vendas_gs():
-    vendas_sheet_id = extract_google_sheet_id(VENDAS_SHEET_URL)
-    if not vendas_sheet_id:
-        raise RuntimeError("URL/ID da planilha VENDAS não informado.")
-    return connect_gs_by_key(vendas_sheet_id)
-
-
-def connect_agenda_gs():
-    agenda_sheet_id = extract_google_sheet_id(AGENDA_SHEET_URL)
-    if not agenda_sheet_id:
-        raise RuntimeError("URL/ID da planilha da agenda não informado.")
-    return connect_gs_by_key(agenda_sheet_id)
 
 
 def safe_get_all_records(ws):
@@ -702,29 +1274,6 @@ def get_listas_records_cached(sh):
     return rows
 
 
-def get_vendas_rows_cached():
-    cache_key = f"vendas::{extract_google_sheet_id(VENDAS_SHEET_URL)}::{VENDAS_WS}"
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return cached
-
-    sh_vendas = connect_vendas_gs()
-
-    try:
-        ws_vendas = sh_vendas.worksheet(VENDAS_WS)
-    except WorksheetNotFound:
-        raise RuntimeError(f"A aba '{VENDAS_WS}' não foi encontrada na planilha VENDAS.")
-
-    headers, rows = safe_get_raw_rows(ws_vendas)
-    payload = (headers, rows)
-    cache_set(cache_key, payload, VENDAS_CACHE_TTL)
-    return payload
-
-
-def invalidate_vendas_cache():
-    cache_del_prefix(f"vendas::{extract_google_sheet_id(VENDAS_SHEET_URL)}::{VENDAS_WS}")
-
-
 def invalidate_main_sheet_cache():
     cache_del_prefix(f"base_structure::{extract_google_sheet_id(SHEET_ID)}::{WS_BASE}")
     cache_del_prefix(f"listas::{extract_google_sheet_id(SHEET_ID)}::{WS_LISTAS}")
@@ -770,122 +1319,6 @@ def try_get_rep_name(rep_code):
         return ""
 
 
-def get_vendas_info_by_rep(rep_code):
-    rep_code = norm(rep_code)
-
-    info = {
-        "ok": False,
-        "error": "",
-        "rep_code": rep_code,
-        "representante": "",
-        "supervisor": "",
-        "meta": 0.0,
-        "realizado": 0.0,
-        "percentual": 0.0,
-    }
-
-    if not rep_code:
-        info["error"] = "Representante não informado."
-        return info
-
-    try:
-        headers, rows = get_vendas_rows_cached()
-
-        col_rep = pick_col_flexible(headers, [
-            "Codigo Representante",
-            "Código Representante",
-            "Cod Representante",
-            "COD_REP",
-            "Rep",
-            "Representante Codigo"
-        ])
-
-        col_nome = pick_col_exact(headers, [
-            "Nome Representante",
-            "Representante Nome",
-            "Nome Rep"
-        ])
-        if not col_nome:
-            col_nome = pick_col_flexible(headers, [
-                "Nome Representante",
-                "Representante Nome",
-                "Nome Rep",
-                "Representante"
-            ])
-
-        col_sup = pick_col_flexible(headers, [
-            "Supervisor",
-            "Supervisão",
-            "Nome Supervisor",
-            "Supervisor Nome"
-        ])
-
-        col_meta = pick_col_flexible(headers, [
-            "Vlr Meta Entrega",
-            "Meta Entrega",
-            "Vlr Meta",
-            "Meta",
-            "Meta Venda",
-            "Valor Meta"
-        ])
-
-        col_venda = pick_col_flexible(headers, [
-            "Vlr Venda",
-            "Valor Venda",
-            "Venda",
-            "Realizado",
-            "Vlr Realizado"
-        ])
-
-        if not col_rep:
-            raise RuntimeError("Coluna de representante não encontrada na planilha VENDAS.")
-
-        rep_code_num = rep_code.lstrip("0") or "0"
-
-        meta_total = 0.0
-        realizado_total = 0.0
-        representante_nome = ""
-        supervisor_nome = ""
-        encontrou = False
-
-        for row in rows:
-            rep_val = norm(row.get(col_rep, ""))
-            rep_val_num = rep_val.lstrip("0") or "0"
-
-            if rep_val == rep_code or rep_val_num == rep_code_num:
-                encontrou = True
-
-                if col_meta:
-                    meta_total += parse_number_br(row.get(col_meta, ""))
-
-                if col_venda:
-                    realizado_total += parse_number_br(row.get(col_venda, ""))
-
-                if not representante_nome and col_nome:
-                    representante_nome = norm(row.get(col_nome, ""))
-
-                if not supervisor_nome and col_sup:
-                    supervisor_nome = norm(row.get(col_sup, ""))
-
-        if not encontrou:
-            info["error"] = f"Representante {rep_code} não encontrado na planilha VENDAS."
-            return info
-
-        percentual = (realizado_total / meta_total * 100.0) if meta_total > 0 else 0.0
-
-        info["representante"] = representante_nome
-        info["supervisor"] = supervisor_nome
-        info["meta"] = meta_total
-        info["realizado"] = realizado_total
-        info["percentual"] = percentual
-        info["ok"] = True
-        return info
-
-    except Exception as e:
-        info["error"] = norm(str(e))
-        return info
-
-
 def get_gold_info_by_rep(rep_code):
     rep_code = norm(rep_code)
 
@@ -915,7 +1348,9 @@ def get_gold_info_by_rep(rep_code):
         try:
             ws_gold = sh_gold.worksheet(GOLD_WS)
         except WorksheetNotFound:
-            raise RuntimeError(f"A aba '{GOLD_WS}' não foi encontrada na planilha de CLIENTES GOLD.")
+            raise RuntimeError(
+                f"A aba '{GOLD_WS}' não foi encontrada na planilha de CLIENTES GOLD."
+            )
 
         info["worksheet_title"] = norm(getattr(ws_gold, "title", ""))
 
@@ -955,15 +1390,15 @@ def get_gold_info_by_rep(rep_code):
 
         if not rep_gold_col:
             raise RuntimeError(
-                "Não encontrei a coluna do representante na planilha GOLD. Verifique o cabeçalho da aba informada em GOLD_WS."
+                "Não encontrei a coluna do representante na planilha GOLD. "
+                "Verifique o cabeçalho da aba informada em GOLD_WS."
             )
 
         gold_rows = []
-        rep_code_num = rep_code.lstrip("0") or "0"
-
         for row in rows_gold:
             rep_val = norm(row.get(rep_gold_col, ""))
             rep_val_num = rep_val.lstrip("0") or "0"
+            rep_code_num = rep_code.lstrip("0") or "0"
 
             if rep_val == rep_code or rep_val_num == rep_code_num:
                 codigo_val = norm(row.get(codigo_gold_col, "")) if codigo_gold_col else ""
@@ -1031,446 +1466,6 @@ def build_debug_sheet_info(sh=None):
         }
         cache_set(cache_key, result, DEBUG_SHEETINFO_CACHE_TTL)
         return result
-
-
-# =========================
-# MUNICÍPIOS
-# =========================
-def load_public_municipios():
-    cache_key = f"municipios::{MUNICIPIOS_URL}"
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return cached["rows"], cached["index"], ""
-
-    try:
-        resp = requests.get(MUNICIPIOS_URL, timeout=30)
-        resp.raise_for_status()
-
-        csv_text = resp.text
-        if not csv_text.strip():
-            return [], {}, "Arquivo público de municípios vazio."
-
-        reader = csvlib.DictReader(StringIO(csv_text))
-        rows = []
-        index_exato = {}
-        index_simplificado = {}
-
-        def simplificar(txt):
-            txt = normalize_city_key(txt)
-            txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
-            txt = re.sub(r"\s+", " ", txt).strip()
-            return txt
-
-        for row in reader:
-            clean_row = {}
-            for k, v in row.items():
-                clean_row[norm(k)] = norm(v)
-
-            rows.append(clean_row)
-
-            nome = norm(
-                clean_row.get("nome", "") or
-                clean_row.get("cidade", "") or
-                clean_row.get("municipio", "") or
-                clean_row.get("município", "")
-            )
-
-            if nome:
-                nome_key = normalize_city_key(nome)
-                nome_simpl = simplificar(nome)
-
-                if nome_key and nome_key not in index_exato:
-                    index_exato[nome_key] = clean_row
-
-                if nome_simpl and nome_simpl not in index_simplificado:
-                    index_simplificado[nome_simpl] = clean_row
-
-        payload = {
-            "rows": rows,
-            "index": {
-                "exato": index_exato,
-                "simplificado": index_simplificado
-            }
-        }
-        cache_set(cache_key, payload, MUNICIPIOS_CACHE_TTL)
-
-        return rows, payload["index"], ""
-    except Exception as e:
-        return [], {}, f"Erro ao carregar municípios públicos: {norm(str(e))}"
-
-
-def find_city_coords_public(rows_cidades, municipios_index, cidade_base_norm, cidade_original=""):
-    if not cidade_base_norm:
-        return None, None, ""
-
-    municipios_index = municipios_index or {}
-    index_exato = municipios_index.get("exato", {})
-    index_simplificado = municipios_index.get("simplificado", {})
-
-    def simplificar(txt):
-        txt = normalize_city_key(txt)
-        txt = re.sub(r"\b(DO|DA|DE|DOS|DAS)\b", " ", txt)
-        txt = re.sub(r"\s+", " ", txt).strip()
-        return txt
-
-    melhor_row = index_exato.get(cidade_base_norm)
-
-    if melhor_row is None:
-        base_simpl = simplificar(cidade_original or cidade_base_norm)
-        melhor_row = index_simplificado.get(base_simpl)
-
-    if melhor_row is None and rows_cidades:
-        for r in rows_cidades:
-            nome = norm(
-                r.get("nome", "") or
-                r.get("cidade", "") or
-                r.get("municipio", "") or
-                r.get("município", "")
-            )
-            nome_norm = normalize_city_key(nome)
-
-            if nome_norm and (cidade_base_norm in nome_norm or nome_norm in cidade_base_norm):
-                melhor_row = r
-                break
-
-    if melhor_row is None:
-        return None, None, ""
-
-    nome_final = norm(
-        melhor_row.get("nome", "") or
-        melhor_row.get("cidade", "") or
-        melhor_row.get("municipio", "") or
-        melhor_row.get("município", "")
-    )
-    lat = parse_float_any(melhor_row.get("latitude", "") or melhor_row.get("lat", ""))
-    lon = parse_float_any(melhor_row.get("longitude", "") or melhor_row.get("lon", "") or melhor_row.get("lng", ""))
-
-    return lat, lon, nome_final
-
-
-def build_city_map_svg(city_points, width=760, height=420):
-    if not city_points:
-        return """
-        <div class="dash-map-placeholder">
-          Não foi possível montar o mapa.<br><br>
-          Verifique o cruzamento das cidades e as colunas de latitude e longitude.
-        </div>
-        """
-
-    valid_points = [p for p in city_points if p.get("lat") is not None and p.get("lon") is not None]
-
-    if not valid_points:
-        return """
-        <div class="dash-map-placeholder">
-          Nenhuma coordenada válida encontrada.
-        </div>
-        """
-
-    min_lon = min(p["lon"] for p in valid_points)
-    max_lon = max(p["lon"] for p in valid_points)
-    min_lat = min(p["lat"] for p in valid_points)
-    max_lat = max(p["lat"] for p in valid_points)
-
-    lon_span = max_lon - min_lon
-    lat_span = max_lat - min_lat
-
-    if lon_span == 0:
-        lon_span = 0.3
-    if lat_span == 0:
-        lat_span = 0.3
-
-    lon_margin = lon_span * 0.08
-    lat_margin = lat_span * 0.08
-
-    min_lon -= lon_margin
-    max_lon += lon_margin
-    min_lat -= lat_margin
-    max_lat += lat_margin
-
-    pad = 10
-
-    def project(lon, lat):
-        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
-        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
-        return x, y
-
-    circles = []
-    labels = []
-
-    for p in valid_points:
-        x, y = project(p["lon"], p["lat"])
-        fill = p["fill"]
-        cidade = p.get("cidade", "")
-        status_txt = p.get("status_txt", "")
-        total_2024 = p.get("total_2024", 0)
-        total_2025 = p.get("total_2025", 0)
-        total_2026 = p.get("total_2026", 0)
-
-        title = h(
-            f"{cidade} | {status_txt} | "
-            f"2024: {format_number_br(total_2024)} | "
-            f"2025: {format_number_br(total_2025)} | "
-            f"2026: {format_number_br(total_2026)}"
-        )
-
-        circles.append(
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="6.2" fill="{fill}" stroke="#ffffff" stroke-width="1.4">'
-            f"<title>{title}</title></circle>"
-        )
-
-        labels.append(
-            f'<text class="map-label" x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="10" fill="#1f2937">{h(cidade[:22])}</text>'
-        )
-
-    map_uid = f"map_{int(time.time() * 1000)}_{len(valid_points)}"
-
-    return f"""
-    <div style="width:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; flex-wrap:wrap;">
-        <div style="font-size:10px; color:#334155; font-weight:700;">Use os botões para zoom</div>
-        <div style="display:flex; gap:6px; align-items:center;">
-          <button type="button" onclick="zoomMap('{map_uid}', 1.2)" title="Aumentar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">+</button>
-          <button type="button" onclick="zoomMap('{map_uid}', 0.83)" title="Diminuir zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">−</button>
-          <button type="button" onclick="resetMapZoom('{map_uid}')" title="Resetar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:700; font-size:12px;">Reset</button>
-        </div>
-      </div>
-
-      <div style="width:100%; height:100%; overflow:auto; background:#dff3f1; border-radius:4px;">
-        <svg id="{map_uid}" viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px; transform-origin:center center; transition:transform .15s ease;">
-          <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
-          <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
-          {''.join(circles)}
-          <g class="map-labels" style="display:none;">
-            {''.join(labels)}
-          </g>
-        </svg>
-      </div>
-
-      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
-          Vendas em 2026
-        </span>
-        <span style="display:flex; align-items:center; gap:6px;">
-          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
-          Sem vendas em 2026
-        </span>
-      </div>
-    </div>
-
-    <script>
-      window._mapZoomLevels = window._mapZoomLevels || {{}};
-
-      function applyMapLabelVisibility(mapId) {{
-        const el = document.getElementById(mapId);
-        if (!el) return;
-        const zoom = window._mapZoomLevels[mapId] || 1;
-        const labels = el.querySelector('.map-labels');
-        if (!labels) return;
-        labels.style.display = zoom > 1.05 ? 'block' : 'none';
-      }}
-
-      function zoomMap(mapId, factor) {{
-        const el = document.getElementById(mapId);
-        if (!el) return;
-        if (!window._mapZoomLevels[mapId]) window._mapZoomLevels[mapId] = 1;
-        let next = window._mapZoomLevels[mapId] * factor;
-        if (next < 1) next = 1;
-        if (next > 8) next = 8;
-        window._mapZoomLevels[mapId] = next;
-        el.style.transform = 'scale(' + next + ')';
-        applyMapLabelVisibility(mapId);
-      }}
-
-      function resetMapZoom(mapId) {{
-        const el = document.getElementById(mapId);
-        if (!el) return;
-        window._mapZoomLevels[mapId] = 1;
-        el.style.transform = 'scale(1)';
-        applyMapLabelVisibility(mapId);
-      }}
-
-      setTimeout(function() {{
-        if (!window._mapZoomLevels['{map_uid}']) {{
-          window._mapZoomLevels['{map_uid}'] = 1;
-        }}
-        applyMapLabelVisibility('{map_uid}');
-      }}, 0);
-    </script>
-    """
-
-
-# =========================
-# AGENDA
-# =========================
-def _agenda_vazia():
-    agenda = {}
-    for dia in DIAS_SEMANA:
-        agenda[dia] = {}
-        for at in ATENDIMENTOS:
-            agenda[dia][at] = {"cliente": "", "valor": ""}
-    return agenda
-
-
-def ensure_agenda_worksheet(sh_agenda):
-    headers = ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
-
-    try:
-        ws = sh_agenda.worksheet(WS_AGENDA)
-    except WorksheetNotFound:
-        try:
-            ws = sh_agenda.add_worksheet(title=WS_AGENDA, rows="5000", cols="10")
-        except Exception as e:
-            raise RuntimeError(
-                f"Não foi possível acessar/criar a aba '{WS_AGENDA}' da agenda. "
-                f"Compartilhe a planilha da agenda com a service account. Detalhe: {friendly_gspread_error(e)}"
-            )
-
-    ensure_headers(ws, headers)
-    return ws
-
-
-def carregar_agenda_rep(rep_code):
-    rep_code = norm(rep_code)
-    agenda = _agenda_vazia()
-
-    if not rep_code:
-        return agenda
-
-    try:
-        sh_agenda = connect_agenda_gs()
-        ws_agenda = ensure_agenda_worksheet(sh_agenda)
-        registros = safe_get_all_records(ws_agenda)
-    except Exception:
-        return agenda
-
-    for row in registros:
-        rep = norm(row.get("REP", ""))
-        dia = normalize_text_for_match(row.get("DIA", ""))
-        at_txt = norm(row.get("ATENDIMENTO", ""))
-        cliente = norm(row.get("CLIENTE", ""))
-        valor = norm(row.get("VALOR", ""))
-
-        if rep != rep_code:
-            continue
-
-        try:
-            at = int(at_txt)
-        except Exception:
-            continue
-
-        if dia in agenda and at in agenda[dia]:
-            agenda[dia][at]["cliente"] = cliente
-            agenda[dia][at]["valor"] = valor
-
-    return agenda
-
-
-def salvar_agenda_rep(rep_code, agenda_dict):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        raise RuntimeError("Representante da agenda não informado.")
-
-    sh_agenda = connect_agenda_gs()
-    ws_agenda = ensure_agenda_worksheet(sh_agenda)
-
-    all_values = ws_agenda.get_all_values()
-    headers = [norm(x) for x in all_values[0]] if all_values else ["REP", "DIA", "ATENDIMENTO", "CLIENTE", "VALOR"]
-
-    rep_col = headers.index("REP") + 1
-
-    rows_to_delete = []
-    for idx, row in enumerate(all_values[1:], start=2):
-        rep_existente = safe_cell(row, rep_col)
-        if rep_existente == rep_code:
-            rows_to_delete.append(idx)
-
-    for row_idx in reversed(rows_to_delete):
-        ws_agenda.delete_rows(row_idx)
-
-    linhas_novas = []
-    for dia in DIAS_SEMANA:
-        for at in ATENDIMENTOS:
-            cliente = norm(agenda_dict.get(dia, {}).get(at, {}).get("cliente", ""))
-            valor = norm(agenda_dict.get(dia, {}).get(at, {}).get("valor", ""))
-
-            if cliente or valor:
-                linhas_novas.append([rep_code, dia, at, cliente, valor])
-
-    if linhas_novas:
-        ws_agenda.append_rows(linhas_novas, value_input_option="USER_ENTERED")
-
-
-def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
-    rep_code = norm(rep_code)
-    if not rep_code:
-        return """
-        <div class="dash-summary-box">
-          Selecione um representante para exibir e salvar a agenda semanal.
-        </div>
-        """
-
-    agenda = carregar_agenda_rep(rep_code)
-
-    header_top = ["<tr>", '<th style="width:90px;">DIA</th>']
-    for at in ATENDIMENTOS:
-        header_top.append(f'<th colspan="2" style="text-align:center;">ATENDIMENTO {at:02d}</th>')
-    header_top.append("</tr>")
-
-    header_sub = ["<tr>", "<th></th>"]
-    for _ in ATENDIMENTOS:
-        header_sub.append('<th style="width:150px;">CLIENTE</th>')
-        header_sub.append('<th style="width:80px;">VALOR</th>')
-    header_sub.append("</tr>")
-
-    body_rows = []
-
-    for dia in DIAS_SEMANA:
-        row = [f"<tr><td><b>{h(dia)}</b></td>"]
-        for at in ATENDIMENTOS:
-            cliente = agenda[dia][at]["cliente"]
-            valor = agenda[dia][at]["valor"]
-
-            row.append(
-                f'<td><input class="agenda-input" type="text" name="{h(dia)}_{at}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
-            )
-            row.append(
-                f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor"></td>'
-            )
-        row.append("</tr>")
-        body_rows.append("".join(row))
-
-    hidden_sup = f'<input type="hidden" name="sup" value="{h(sup_sel)}">' if sup_sel else ""
-    hidden_rep = f'<input type="hidden" name="rep" value="{h(rep_sel)}">' if rep_sel else ""
-
-    return f"""
-    <form method="post" action="{url_for('salvar_agenda')}">
-      <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
-      {hidden_sup}
-      {hidden_rep}
-
-      <div class="agenda-topbar">
-        <div class="agenda-rep-label">
-          Agenda semanal do representante <b>{h(rep_code)}</b>
-        </div>
-        <div>
-          <button type="submit" class="agenda-save-btn">Salvar Agenda</button>
-        </div>
-      </div>
-
-      <div class="agenda-wrapper">
-        <table class="agenda-table">
-          <thead>
-            {''.join(header_top)}
-            {''.join(header_sub)}
-          </thead>
-          <tbody>
-            {''.join(body_rows)}
-          </tbody>
-        </table>
-      </div>
-    </form>
-    """
 
 
 # =========================
@@ -1621,6 +1616,11 @@ BASE_HTML = """
       background: #ffffff;
     }
 
+    .print-scale-wrap {
+      width: 100%;
+      transform-origin: top left;
+    }
+
     .dash-shell {
       background: #ffffff;
       border: 1px solid #cfd4dc;
@@ -1718,39 +1718,21 @@ BASE_HTML = """
       justify-self: end;
     }
 
-    .dash-layout-main {
+    .dash-row-top {
       display: grid;
-      grid-template-columns: 1.45fr 1fr;
+      grid-template-columns: 1fr 1fr 1.25fr;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .dash-row-bottom {
+      display: grid;
+      grid-template-columns: 1.65fr 0.95fr;
       gap: 8px;
       align-items: stretch;
     }
 
-    .dash-left-col {
-      display: grid;
-      grid-template-rows: auto 1fr;
-      gap: 8px;
-      min-height: 0;
-    }
-
-    .dash-top-ranking {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      min-height: 0;
-    }
-
-    .dash-left-bottom {
-      min-height: 0;
-    }
-
-    .dash-right-col {
-      display: grid;
-      grid-template-rows: 1fr auto;
-      gap: 8px;
-      min-height: 0;
-    }
-
-    .dash-right-bottom {
+    .dash-right-stack {
       display: grid;
       grid-template-rows: auto auto;
       gap: 8px;
@@ -1760,9 +1742,7 @@ BASE_HTML = """
       border: 1px solid #9ca3af;
       background: #ffffff;
       overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
+      height: 100%;
     }
 
     .dash-panel-title {
@@ -1779,15 +1759,12 @@ BASE_HTML = """
     .dash-panel-body {
       padding: 6px;
       box-sizing: border-box;
-      flex: 1;
-      min-height: 0;
     }
 
     .dash-panel-body-map {
-      padding: 4px;
+      padding: 6px;
       box-sizing: border-box;
-      flex: 1;
-      min-height: 520px;
+      min-height: 410px;
     }
 
     .dash-table-mini {
@@ -1981,7 +1958,7 @@ BASE_HTML = """
 
     @page {
       size: A3 landscape;
-      margin: 4mm;
+      margin: 5mm;
     }
 
     @media print {
@@ -1989,6 +1966,8 @@ BASE_HTML = """
         width: 420mm;
         height: 297mm;
         background: #ffffff !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
       }
 
       .topbar,
@@ -1997,63 +1976,145 @@ BASE_HTML = """
         display: none !important;
       }
 
+      body {
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
       .container {
         padding: 0 !important;
         margin: 0 !important;
-        width: 100%;
+        width: 100% !important;
       }
 
       .dash-page {
         gap: 0 !important;
-        width: 100%;
+        width: 100% !important;
+        align-items: stretch !important;
       }
 
       .a3-page {
-        width: 412mm !important;
-        height: 288mm !important;
+        width: 410mm !important;
+        height: 285mm !important;
         margin: 0 auto !important;
+        padding: 0 !important;
         overflow: hidden !important;
+        background: #ffffff !important;
+      }
+
+      .print-scale-wrap {
+        width: 100% !important;
+        transform: scale(0.93) !important;
+        transform-origin: top left !important;
       }
 
       .dash-shell {
-        width: 100% !important;
-        height: 100% !important;
-        padding: 6mm !important;
+        width: 435mm !important;
+        min-height: 0 !important;
+        height: auto !important;
+        padding: 5mm !important;
         border-radius: 0 !important;
         box-shadow: none !important;
         overflow: hidden !important;
       }
 
-      .dash-layout-main {
-        grid-template-columns: 1.45fr 1fr !important;
-      }
-
-      .dash-panel-body-map {
-        min-height: 470px !important;
-      }
-
       .dash-header,
-      .dash-layout-main,
-      .dash-left-col,
-      .dash-right-col,
-      .dash-top-ranking,
-      .dash-right-bottom,
+      .dash-row-top,
+      .dash-row-bottom,
+      .dash-right-stack,
       .dash-panel,
-      .dash-panel-body {
+      .dash-panel-body,
+      .dash-panel-body-map,
+      .agenda-wrapper,
+      .agenda-table {
         break-inside: avoid !important;
         page-break-inside: avoid !important;
       }
 
-      .dash-table-mini,
-      .dash-table-big,
-      .agenda-table {
+      .dash-header {
+        margin-bottom: 6px !important;
+        padding-bottom: 5px !important;
+      }
+
+      .dash-main-title {
+        font-size: 15px !important;
+      }
+
+      .dash-subline {
+        font-size: 9px !important;
+        line-height: 1.2 !important;
+      }
+
+      .dash-metric {
+        padding: 4px !important;
+      }
+
+      .dash-metric-label {
         font-size: 8px !important;
       }
 
+      .dash-metric-value {
+        font-size: 13px !important;
+      }
+
+      .dash-panel-title {
+        font-size: 10px !important;
+        padding: 4px 6px !important;
+      }
+
+      .dash-panel-body {
+        padding: 4px !important;
+      }
+
+      .dash-panel-body-map {
+        padding: 3px !important;
+        min-height: 355px !important;
+      }
+
+      .dash-table-mini {
+        font-size: 7.5px !important;
+      }
+
+      .dash-table-big {
+        font-size: 7.5px !important;
+      }
+
       .dash-table-mini th, .dash-table-mini td,
-      .dash-table-big th, .dash-table-big td,
-      .agenda-table th, .agenda-table td {
+      .dash-table-big th, .dash-table-big td {
         padding: 2px 3px !important;
+        line-height: 1.05 !important;
+      }
+
+      .dash-gold-box,
+      .dash-coverage-box,
+      .dash-summary-box {
+        min-height: unset !important;
+        padding: 6px !important;
+        font-size: 9px !important;
+      }
+
+      .agenda-table {
+        font-size: 7px !important;
+      }
+
+      .agenda-table th,
+      .agenda-table td {
+        padding: 2px 3px !important;
+      }
+
+      .agenda-input {
+        font-size: 7px !important;
+        padding: 3px 4px !important;
+        min-width: 40px !important;
+      }
+
+      .agenda-save-btn {
+        display: none !important;
+      }
+
+      button,
+      .btn-link {
+        box-shadow: none !important;
       }
     }
 
@@ -2061,22 +2122,8 @@ BASE_HTML = """
       .dash-header { grid-template-columns: 74px 1fr; }
       .dash-meta-box { grid-column: 1 / -1; }
       .dash-kidy-logo { justify-self: start; }
-
-      .dash-layout-main {
-        grid-template-columns: 1fr;
-      }
-
-      .dash-top-ranking {
-        grid-template-columns: 1fr;
-      }
-
-      .dash-right-bottom {
-        grid-template-rows: auto auto;
-      }
-
-      .dash-panel-body-map {
-        min-height: 340px;
-      }
+      .dash-row-top { grid-template-columns: 1fr; }
+      .dash-row-bottom { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -2108,6 +2155,32 @@ BASE_HTML = """
   </div>
 </body>
 </html>
+"""
+
+LOGIN_BODY = """
+<div class="login-wrap">
+  <div class="card login-card">
+    <img src="{{ logo_url }}" alt="Logo Kidy" class="login-logo">
+    <h2 class="login-title">Acompanhamento de clientes</h2>
+    <p class="login-subtitle">Faça login para acessar a carteira comercial</p>
+
+    <form method="post">
+      <div class="grid-2">
+        <div>
+          <label>Usuário</label>
+          <input name="user" placeholder="admin ou código do representante" required>
+        </div>
+        <div>
+          <label>Senha</label>
+          <input name="pass" type="password" placeholder="admin123 ou o mesmo código" required>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <button type="submit">Entrar</button>
+      </div>
+    </form>
+  </div>
+</div>
 """
 
 
@@ -2408,6 +2481,7 @@ def admin_dashboard():
                 return "chip-blue"
             return "chip-gray"
 
+        ranking_2026_html = ""
         if ranking_2026:
             rows = []
             for i, item in enumerate(ranking_2026, start=1):
@@ -2443,6 +2517,7 @@ def admin_dashboard():
             </div>
             """
 
+        ranking_2025_html = ""
         if ranking_2025:
             rows = []
             for i, item in enumerate(ranking_2025, start=1):
@@ -2478,6 +2553,7 @@ def admin_dashboard():
             </div>
             """
 
+        clientes_sem_compra_html = ""
         if clientes_sem_compra:
             rows = []
             for item in clientes_sem_compra[:24]:
@@ -2684,161 +2760,151 @@ def admin_dashboard():
         body = f"""
         <div class="dash-page">
 
-        <div class="card no-print a3-page">
+          <div class="card no-print a3-page">
             <form method="get">
-            <div class="grid">
+              <div class="grid">
                 <div>
-                <label>Supervisor</label>
-                <select name="sup">
+                  <label>Supervisor</label>
+                  <select name="sup">
                     <option value="">(Todos)</option>
                     {''.join([f"<option value='{h(s)}' {'selected' if norm(s) == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
-                </select>
+                  </select>
                 </div>
 
                 <div>
-                <label>Representante</label>
-                <select name="rep">
+                  <label>Representante</label>
+                  <select name="rep">
                     <option value="">(Todos)</option>
                     {''.join([f"<option value='{h(r)}' {'selected' if norm(r) == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
-                </select>
+                  </select>
                 </div>
 
                 <div class="print-toolbar">
-                <button type="submit">Aplicar</button>
-                <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
-                <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
+                  <button type="submit">Aplicar</button>
+                  <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
+                  <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
                 </div>
 
                 <div class="print-note">
-                Layout ajustado com mapa maior e blocos alinhados.
+                  Impressão ajustada para ficar o mais próximo possível da tela em uma página A3 horizontal.
                 </div>
-            </div>
+              </div>
             </form>
-        </div>
+          </div>
 
-        <div class="a3-page no-break">
-            <div class="dash-shell">
+          <div class="a3-page no-break">
+            <div class="print-scale-wrap">
+              <div class="dash-shell">
 
-            <div class="dash-header">
-                <div>
-                {
-                    f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
-                    if rep_photo else
-                    '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
-                }
+                <div class="dash-header">
+                  <div>
+                    {
+                        f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
+                        if rep_photo else
+                        '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
+                    }
+                  </div>
+
+                  <div class="dash-title-wrap">
+                    <div class="dash-main-title">Acompanhamento de Representante</div>
+                    <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                    <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                    <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
+                  </div>
+
+                  <div class="dash-meta-box">
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">Meta</div>
+                      <div class="dash-metric-value">{h(header_meta)}</div>
+                    </div>
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">Realizado</div>
+                      <div class="dash-metric-value">{h(header_realizado)}</div>
+                    </div>
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">% Realizado</div>
+                      <div class="dash-metric-value">{h(header_percentual)}</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
+                  </div>
                 </div>
 
-                <div class="dash-title-wrap">
-                <div class="dash-main-title">Acompanhamento de Representante</div>
-                <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
-                <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
-                <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
-                </div>
-
-                <div class="dash-meta-box">
-                <div class="dash-metric">
-                    <div class="dash-metric-label">Meta</div>
-                    <div class="dash-metric-value">{h(header_meta)}</div>
-                </div>
-                <div class="dash-metric">
-                    <div class="dash-metric-label">Realizado</div>
-                    <div class="dash-metric-value">{h(header_realizado)}</div>
-                </div>
-                <div class="dash-metric">
-                    <div class="dash-metric-label">% Realizado</div>
-                    <div class="dash-metric-value">{h(header_percentual)}</div>
-                </div>
-                </div>
-
-                <div>
-                <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
-                </div>
-            </div>
-
-            <div class="dash-layout-main">
-
-                <div class="dash-left-col">
-
-                <div class="dash-top-ranking">
-                    <div class="dash-panel">
+                <div class="dash-row-top">
+                  <div class="dash-panel">
                     <div class="dash-panel-title">10 Maiores Clientes</div>
                     <div class="dash-panel-body">
-                        {ranking_2026_html}
+                      {ranking_2026_html}
                     </div>
-                    </div>
+                  </div>
 
-                    <div class="dash-panel">
+                  <div class="dash-panel">
                     <div class="dash-panel-title">10 Maiores Clientes 2025</div>
                     <div class="dash-panel-body">
-                        {ranking_2025_html}
+                      {ranking_2025_html}
                     </div>
-                    </div>
-                </div>
+                  </div>
 
-                <div class="dash-left-bottom">
-                    <div class="dash-panel">
-                    <div class="dash-panel-title">Clientes sem Compra</div>
-                    <div class="dash-panel-body">
-                        {clientes_sem_compra_html}
-                    </div>
-                    </div>
-                </div>
-
-                </div>
-
-                <div class="dash-right-col">
-
-                <div class="dash-panel">
+                  <div class="dash-panel">
                     <div class="dash-panel-title">Cidades da Região</div>
                     <div class="dash-panel-body-map">
-                    {mapa_svg_html}
-                    <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                      {mapa_svg_html}
+                      <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
                         Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
                         {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
+                      </div>
                     </div>
-                    </div>
+                  </div>
                 </div>
 
-                <div class="dash-right-bottom">
-                    <div class="dash-panel">
-                    <div class="dash-panel-title">Clientes Gold</div>
+                <div class="dash-row-bottom">
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Clientes sem Compra</div>
                     <div class="dash-panel-body">
+                      {clientes_sem_compra_html}
+                    </div>
+                  </div>
+
+                  <div class="dash-right-stack">
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Clientes Gold</div>
+                      <div class="dash-panel-body">
                         <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
-                        <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
-                        {gold_subinfo}
-                        {gold_table_html}
+                          <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                          {gold_subinfo}
+                          {gold_table_html}
                         </div>
-                    </div>
+                      </div>
                     </div>
 
                     <div class="dash-panel">
-                    <div class="dash-panel-title">Cobertura da Carteira</div>
-                    <div class="dash-panel-body">
+                      <div class="dash-panel-title">Cobertura da Carteira</div>
+                      <div class="dash-panel-body">
                         <div class="dash-coverage-box">
-                        Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                        Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                          Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                          Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                          Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
                         </div>
+                      </div>
                     </div>
+                  </div>
+                </div>
+
+                <div style="margin-top:8px;">
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Agenda Semanal do Representante</div>
+                    <div class="dash-panel-body">
+                      {agenda_semanal_html}
                     </div>
+                  </div>
                 </div>
 
-                </div>
-
+              </div>
             </div>
-
-            <div style="margin-top:8px;">
-                <div class="dash-panel">
-                <div class="dash-panel-title">Agenda Semanal do Representante</div>
-                <div class="dash-panel-body">
-                    {agenda_semanal_html}
-                </div>
-                </div>
-            </div>
-
-            </div>
-        </div>
+          </div>
         </div>
         """
 
@@ -3097,7 +3163,8 @@ def dashboard():
             '<div class="rep-photo-placeholder">Sem foto</div>'
         )
 
-        infos = [f"<div><b>Código:</b> {h(selected_rep_code)}</div>"]
+        infos = []
+        infos.append(f"<div><b>Código:</b> {h(selected_rep_code)}</div>")
         if nome_card:
             infos.append(f"<div><b>Representante:</b> {h(nome_card)}</div>")
         if sup_card:
