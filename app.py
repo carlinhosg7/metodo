@@ -106,6 +106,7 @@ DEFAULT_STATUS = [
     "CLIENTE NÃO ATENDEU",
     "CLIENTE SEM VERBA",
     "CLIENTE VAI MANDAR O PEDIDO",
+    "CLIENTE FECHOU A LOJA",
 ]
 
 # =========================
