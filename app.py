@@ -1961,13 +1961,16 @@ BASE_HTML = """
 
     @page {
       size: A3 landscape;
-      margin: 5mm;
+      margin: 0;
     }
 
     @media print {
       html, body {
         width: 420mm;
         height: 297mm;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
         background: #ffffff !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
@@ -1997,8 +2000,8 @@ BASE_HTML = """
       }
 
       .a3-page {
-        width: 410mm !important;
-        height: 285mm !important;
+        width: 420mm !important;
+        height: 297mm !important;
         margin: 0 auto !important;
         padding: 0 !important;
         overflow: hidden !important;
@@ -2006,19 +2009,24 @@ BASE_HTML = """
       }
 
       .print-scale-wrap {
-        width: 100% !important;
-        transform: scale(0.93) !important;
+        transform: scale(0.72) !important;
         transform-origin: top left !important;
+        width: 140% !important;
       }
 
       .dash-shell {
-        width: 435mm !important;
+        width: 100% !important;
         min-height: 0 !important;
         height: auto !important;
-        padding: 5mm !important;
+        padding: 4mm !important;
         border-radius: 0 !important;
         box-shadow: none !important;
         overflow: hidden !important;
+      }
+
+      * {
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
       }
 
       .dash-header,
@@ -2113,11 +2121,6 @@ BASE_HTML = """
 
       .agenda-save-btn {
         display: none !important;
-      }
-
-      button,
-      .btn-link {
-        box-shadow: none !important;
       }
     }
 
