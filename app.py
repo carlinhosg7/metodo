@@ -1961,16 +1961,13 @@ BASE_HTML = """
 
     @page {
       size: A3 landscape;
-      margin: 0;
+      margin: 5mm;
     }
 
     @media print {
       html, body {
         width: 420mm;
         height: 297mm;
-        margin: 0 !important;
-        padding: 0 !important;
-        overflow: hidden !important;
         background: #ffffff !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
@@ -2000,8 +1997,8 @@ BASE_HTML = """
       }
 
       .a3-page {
-        width: 420mm !important;
-        height: 297mm !important;
+        width: 410mm !important;
+        height: 285mm !important;
         margin: 0 auto !important;
         padding: 0 !important;
         overflow: hidden !important;
@@ -2009,24 +2006,19 @@ BASE_HTML = """
       }
 
       .print-scale-wrap {
-        transform: scale(0.72) !important;
+        width: 100% !important;
+        transform: scale(0.93) !important;
         transform-origin: top left !important;
-        width: 140% !important;
       }
 
       .dash-shell {
-        width: 100% !important;
+        width: 435mm !important;
         min-height: 0 !important;
         height: auto !important;
-        padding: 4mm !important;
+        padding: 5mm !important;
         border-radius: 0 !important;
         box-shadow: none !important;
         overflow: hidden !important;
-      }
-
-      * {
-        page-break-inside: avoid !important;
-        break-inside: avoid !important;
       }
 
       .dash-header,
@@ -2122,6 +2114,11 @@ BASE_HTML = """
       .agenda-save-btn {
         display: none !important;
       }
+
+      button,
+      .btn-link {
+        box-shadow: none !important;
+      }
     }
 
     @media (max-width: 1200px) {
@@ -2159,6 +2156,94 @@ BASE_HTML = """
     {% endwith %}
     {{ body|safe }}
   </div>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script>
+async function imprimirTelaA3() {
+  const alvo = document.querySelector('.a3-page.no-break');
+  if (!alvo) {
+    alert('Área do dashboard não encontrada para impressão.');
+    return;
+  }
+
+  const botoes = alvo.querySelectorAll('button');
+  botoes.forEach(btn => btn.style.visibility = 'hidden');
+
+  try {
+    const canvas = await html2canvas(alvo, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      windowWidth: document.documentElement.scrollWidth,
+      windowHeight: document.documentElement.scrollHeight
+    });
+
+    const imgData = canvas.toDataURL('image/png');
+    const win = window.open('', '_blank');
+
+    if (!win) {
+      alert('O navegador bloqueou a janela de impressão.');
+      return;
+    }
+
+    win.document.write(`
+      <html>
+        <head>
+          <title>Impressão A3</title>
+          <style>
+            @page {
+              size: A3 landscape;
+              margin: 0;
+            }
+
+            html, body {
+              margin: 0;
+              padding: 0;
+              width: 420mm;
+              height: 297mm;
+              overflow: hidden;
+              background: #ffffff;
+            }
+
+            .page {
+              width: 420mm;
+              height: 297mm;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              overflow: hidden;
+              background: #ffffff;
+            }
+
+            img {
+              width: 420mm;
+              height: 297mm;
+              object-fit: contain;
+              display: block;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="page">
+            <img src="${imgData}" alt="Dashboard">
+          </div>
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+              }, 300);
+            };
+          <\/script>
+        </body>
+      </html>
+    `);
+
+    win.document.close();
+  } finally {
+    botoes.forEach(btn => btn.style.visibility = '');
+  }
+}
+</script>
 </body>
 </html>
 """
@@ -2788,7 +2873,7 @@ def admin_dashboard():
                 <div class="print-toolbar">
                   <button type="submit">Aplicar</button>
                   <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
-                  <button type="button" class="btn-link orange" onclick="window.print()">Imprimir A3</button>
+                  <button type="button" class="btn-link orange" onclick="imprimirTelaA3()">Imprimir A3</button>
                 </div>
 
                 <div class="print-note">
