@@ -1957,6 +1957,48 @@ BASE_HTML = """
       font-weight:700;
     }
 
+    .rep-main-table-wrap {
+      overflow: auto;
+      max-height: 72vh;
+      position: relative;
+    }
+
+    .rep-main-table {
+      width: max-content;
+      min-width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    .rep-main-table .sticky-col-code,
+    .rep-main-table .sticky-col-group {
+      position: sticky;
+      background: #ffffff;
+      z-index: 3;
+    }
+
+    .rep-main-table .sticky-col-code {
+      left: 0;
+      min-width: 95px;
+      max-width: 95px;
+      width: 95px;
+      box-shadow: 2px 0 0 #e5e7eb;
+    }
+
+    .rep-main-table .sticky-col-group {
+      left: 95px;
+      min-width: 320px;
+      max-width: 320px;
+      width: 320px;
+      box-shadow: 2px 0 0 #d1d5db;
+    }
+
+    .rep-main-table thead .sticky-col-code,
+    .rep-main-table thead .sticky-col-group {
+      z-index: 5;
+      background: #f8fafc;
+    }
+
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
     @page {
@@ -3357,10 +3399,13 @@ def dashboard():
         if filtro_semana:
             hidden_filters += f'<input type="hidden" name="filtro_semana" value="{h(filtro_semana)}">'
 
+        first_col_class = 'nowrap sticky-col-code' if not show_admin_cols else 'nowrap'
+        second_col_class = 'sticky-col-group' if not show_admin_cols else ''
+
         row_html = f"""
         <tr class="{h(klass)}">
-          <td class="nowrap">{h(ck)}</td>
-          <td>{h(grupo)}</td>
+          <td class="{first_col_class}">{h(ck)}</td>
+          <td class="{second_col_class}">{h(grupo)}</td>
           {f'<td class="nowrap">{h(repc)}</td>' if show_admin_cols else ''}
           {f'<td>{h(nome_rep)}</td>' if show_admin_cols else ''}
           {f'<td class="nowrap">{h(supv)}</td>' if show_admin_cols else ''}
@@ -3477,12 +3522,12 @@ def dashboard():
       </form>
     </div>
 
-    <div class="card" style="overflow:auto; max-height:72vh;">
-      <table>
+    <div class="card rep-main-table-wrap">
+      <table class="{'' if show_admin_cols else 'rep-main-table'}">
         <thead>
           <tr>
-            <th>Codigo Grupo Cliente</th>
-            <th>Grupo Cliente</th>
+            <th class="{'' if show_admin_cols else 'sticky-col-code'}">Codigo Grupo Cliente</th>
+            <th class="{'' if show_admin_cols else 'sticky-col-group'}">Grupo Cliente</th>
             { '<th>Codigo Representante</th>' if show_admin_cols else '' }
             { '<th>Representante</th>' if show_admin_cols else '' }
             { '<th>Supervisor</th>' if show_admin_cols else '' }
