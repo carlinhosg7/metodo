@@ -1964,33 +1964,23 @@ BASE_HTML = """
     }
 
     .rep-main-table {
-      width: max-content;
-      min-width: 100%;
-      border-collapse: separate;
-      border-spacing: 0;
+      width: 100%;
+      border-collapse: collapse;
     }
 
     .rep-main-table .sticky-col-code,
     .rep-main-table .sticky-col-group {
       position: sticky;
-      background: #ffffff;
       z-index: 3;
+      background: inherit;
     }
 
     .rep-main-table .sticky-col-code {
       left: 0;
-      min-width: 95px;
-      max-width: 95px;
-      width: 95px;
-      box-shadow: 2px 0 0 #e5e7eb;
     }
 
     .rep-main-table .sticky-col-group {
-      left: 95px;
-      min-width: 320px;
-      max-width: 320px;
-      width: 320px;
-      box-shadow: 2px 0 0 #d1d5db;
+      left: var(--rep-sticky-left, 0px);
     }
 
     .rep-main-table thead .sticky-col-code,
@@ -3523,7 +3513,7 @@ def dashboard():
     </div>
 
     <div class="card rep-main-table-wrap">
-      <table class="{'' if show_admin_cols else 'rep-main-table'}">
+      <table class="{'' if show_admin_cols else 'rep-main-table'}" id="{'' if show_admin_cols else 'rep-main-table'}">
         <thead>
           <tr>
             <th class="{'' if show_admin_cols else 'sticky-col-code'}">Codigo Grupo Cliente</th>
@@ -3548,6 +3538,24 @@ def dashboard():
         </tbody>
       </table>
     </div>
+    {'' if show_admin_cols else """
+    <script>
+      (function() {
+        function aplicarStickyRep() {
+          var tabela = document.getElementById('rep-main-table');
+          if (!tabela) return;
+
+          var primeiraColuna = tabela.querySelector('thead .sticky-col-code');
+          if (!primeiraColuna) return;
+
+          tabela.style.setProperty('--rep-sticky-left', primeiraColuna.offsetWidth + 'px');
+        }
+
+        aplicarStickyRep();
+        window.addEventListener('resize', aplicarStickyRep);
+      })();
+    </script>
+    """}
     """
 
     return render_template_string(
