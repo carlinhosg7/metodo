@@ -3315,6 +3315,7 @@ def dashboard():
             out.append(f"<option value='{h(o)}' {sel}>{h(o)}</option>")
         return "\n".join(out)
 
+    show_admin_cols = is_admin()
     table_rows = []
 
     for idx, r in enumerate(out_rows, start=1):
@@ -3360,14 +3361,14 @@ def dashboard():
         <tr class="{h(klass)}">
           <td class="nowrap">{h(ck)}</td>
           <td>{h(grupo)}</td>
-          <td class="nowrap">{h(repc)}</td>
-          <td>{h(nome_rep)}</td>
-          <td class="nowrap">{h(supv)}</td>
+          {f'<td class="nowrap">{h(repc)}</td>' if show_admin_cols else ''}
+          {f'<td>{h(nome_rep)}</td>' if show_admin_cols else ''}
+          {f'<td class="nowrap">{h(supv)}</td>' if show_admin_cols else ''}
           <td>{h(cidade)}</td>
           <td class="money nowrap">{h(t24)}</td>
           <td class="money nowrap">{h(t25)}</td>
           <td class="money nowrap">{h(t26)}</td>
-          <td class="nowrap"><b>{h(status_cor)}</b></td>
+          {f'<td class="nowrap"><b>{h(status_cor)}</b></td>' if show_admin_cols else ''}
 
           <td>
             <form id="{form_id}" method="post" action="{url_for('salvar')}">
@@ -3376,7 +3377,7 @@ def dashboard():
               <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
               {hidden_filters}
             </form>
-            <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
+            {f'<input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">' if show_admin_cols else f'<input type="hidden" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}">' }
           </td>
 
           <td>
@@ -3482,15 +3483,15 @@ def dashboard():
           <tr>
             <th>Codigo Grupo Cliente</th>
             <th>Grupo Cliente</th>
-            <th>Codigo Representante</th>
-            <th>Representante</th>
-            <th>Supervisor</th>
+            { '<th>Codigo Representante</th>' if show_admin_cols else '' }
+            { '<th>Representante</th>' if show_admin_cols else '' }
+            { '<th>Supervisor</th>' if show_admin_cols else '' }
             <th>Cidade</th>
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
-            <th>Status Cor</th>
-            <th>Data Agenda Visita</th>
+            { '<th>Status Cor</th>' if show_admin_cols else '' }
+            { '<th>Data Agenda Visita</th>' if show_admin_cols else '' }
             <th>Mês</th>
             <th>Semana Atendimento</th>
             <th>Status Cliente</th>
