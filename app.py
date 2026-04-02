@@ -2506,16 +2506,54 @@ def admin_dashboard():
 
         sup_sel = norm(request.args.get("sup", ""))
         rep_sel = norm(request.args.get("rep", ""))
+        q = norm(request.args.get("q", ""))
+        data_ini = norm(request.args.get("data_ini", ""))
+        data_fim = norm(request.args.get("data_fim", ""))
+        filtro_mes = norm(request.args.get("filtro_mes", ""))
+        filtro_semana = norm(request.args.get("filtro_semana", ""))
 
         sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if sup_col else []
         rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if rep_col else []
 
         filtered_rows = []
+        q_lower = q.lower()
+
         for r in base_rows:
             if sup_sel and sup_col and norm(r.get(sup_col, "")) != sup_sel:
                 continue
             if rep_sel and rep_col and norm(r.get(rep_col, "")) != rep_sel:
                 continue
+
+            if q_lower:
+                grupo_val = norm(r.get(grupo_col, "")) if grupo_col else ""
+                cidade_val = norm(r.get(cidade_col, "")) if cidade_col else ""
+                ck_val = norm(r.get(key_col, "")) if key_col else ""
+                nome_rep_val = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
+                sup_val = norm(r.get(sup_col, "")) if sup_col else ""
+                hay = f"{ck_val} {grupo_val} {cidade_val} {nome_rep_val} {sup_val}".lower()
+                if q_lower not in hay:
+                    continue
+
+            data_agenda_val = norm(r.get(data_agenda_col, "")) if data_agenda_col else ""
+            data_agenda_cmp = to_input_date(data_agenda_val)
+
+            if data_ini:
+                if not data_agenda_cmp or data_agenda_cmp < data_ini:
+                    continue
+
+            if data_fim:
+                if not data_agenda_cmp or data_agenda_cmp > data_fim:
+                    continue
+
+            mes_val = norm(r.get(mes_col, "")) if mes_col else ""
+            semana_val = norm(r.get(semana_col, "")) if semana_col else ""
+
+            if filtro_mes and normalize_text_for_match(mes_val) != normalize_text_for_match(filtro_mes):
+                continue
+
+            if filtro_semana and normalize_text_for_match(semana_val) != normalize_text_for_match(filtro_semana):
+                continue
+
             filtered_rows.append(r)
 
         header_rep_code = rep_sel
