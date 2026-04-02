@@ -1592,6 +1592,83 @@ BASE_HTML = """
     .row-green { background: rgba(34,197,94,0.16); }
     .row-blue { background: rgba(56,189,248,0.14); }
 
+    .rep-table-wrap {
+      overflow: auto;
+      max-height: 72vh;
+    }
+
+    .rep-table {
+      width: max-content;
+      min-width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    .rep-table th,
+    .rep-table td {
+      background-clip: padding-box;
+    }
+
+    .rep-table th.sticky-col,
+    .rep-table td.sticky-col,
+    .rep-table th.sticky-col-2,
+    .rep-table td.sticky-col-2 {
+      position: sticky;
+      z-index: 4;
+      background-clip: padding-box;
+    }
+
+    .rep-table th.sticky-col,
+    .rep-table td.sticky-col {
+      left: 0;
+    }
+
+    .rep-table th.sticky-col-2,
+    .rep-table td.sticky-col-2 {
+      left: 110px;
+    }
+
+    .rep-table thead th.sticky-col,
+    .rep-table thead th.sticky-col-2 {
+      z-index: 6;
+      background: #f8fafc !important;
+    }
+
+    .rep-table tbody tr.row-red td.sticky-col,
+    .rep-table tbody tr.row-red td.sticky-col-2 {
+      background: #ead1d1 !important;
+    }
+
+    .rep-table tbody tr.row-orange td.sticky-col,
+    .rep-table tbody tr.row-orange td.sticky-col-2 {
+      background: #f1dbc9 !important;
+    }
+
+    .rep-table tbody tr.row-yellow td.sticky-col,
+    .rep-table tbody tr.row-yellow td.sticky-col-2 {
+      background: #efe4be !important;
+    }
+
+    .rep-table tbody tr.row-green td.sticky-col,
+    .rep-table tbody tr.row-green td.sticky-col-2 {
+      background: #d1e8d7 !important;
+    }
+
+    .rep-table tbody tr.row-blue td.sticky-col,
+    .rep-table tbody tr.row-blue td.sticky-col-2 {
+      background: #d2e5ef !important;
+    }
+
+    .rep-table tbody td.sticky-col,
+    .rep-table tbody td.sticky-col-2 {
+      box-shadow: inset -1px 0 0 #e5e7eb;
+    }
+
+    .rep-table tbody td.sticky-col-2,
+    .rep-table thead th.sticky-col-2 {
+      box-shadow: 2px 0 6px rgba(15, 23, 42, 0.08);
+    }
+
     .debug-card {
       background: #0f172a;
       color: #e2e8f0;
@@ -1955,38 +2032,6 @@ BASE_HTML = """
       color:#fff;
       cursor:pointer;
       font-weight:700;
-    }
-
-    .rep-main-table-wrap {
-      overflow: auto;
-      max-height: 72vh;
-      position: relative;
-    }
-
-    .rep-main-table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-
-    .rep-main-table .sticky-col-code,
-    .rep-main-table .sticky-col-group {
-      position: sticky;
-      z-index: 3;
-      background: inherit;
-    }
-
-    .rep-main-table .sticky-col-code {
-      left: 0;
-    }
-
-    .rep-main-table .sticky-col-group {
-      left: var(--rep-sticky-left, 0px);
-    }
-
-    .rep-main-table thead .sticky-col-code,
-    .rep-main-table thead .sticky-col-group {
-      z-index: 5;
-      background: #f8fafc;
     }
 
     .no-break { page-break-inside: avoid; break-inside: avoid; }
@@ -3347,7 +3392,6 @@ def dashboard():
             out.append(f"<option value='{h(o)}' {sel}>{h(o)}</option>")
         return "\n".join(out)
 
-    show_admin_cols = is_admin()
     table_rows = []
 
     for idx, r in enumerate(out_rows, start=1):
@@ -3389,21 +3433,19 @@ def dashboard():
         if filtro_semana:
             hidden_filters += f'<input type="hidden" name="filtro_semana" value="{h(filtro_semana)}">'
 
-        first_col_class = 'nowrap sticky-col-code' if not show_admin_cols else 'nowrap'
-        second_col_class = 'sticky-col-group' if not show_admin_cols else ''
-
-        row_html = f"""
+        if is_admin():
+            row_html = f"""
         <tr class="{h(klass)}">
-          <td class="{first_col_class}">{h(ck)}</td>
-          <td class="{second_col_class}">{h(grupo)}</td>
-          {f'<td class="nowrap">{h(repc)}</td>' if show_admin_cols else ''}
-          {f'<td>{h(nome_rep)}</td>' if show_admin_cols else ''}
-          {f'<td class="nowrap">{h(supv)}</td>' if show_admin_cols else ''}
+          <td class="nowrap">{h(ck)}</td>
+          <td>{h(grupo)}</td>
+          <td class="nowrap">{h(repc)}</td>
+          <td>{h(nome_rep)}</td>
+          <td class="nowrap">{h(supv)}</td>
           <td>{h(cidade)}</td>
           <td class="money nowrap">{h(t24)}</td>
           <td class="money nowrap">{h(t25)}</td>
           <td class="money nowrap">{h(t26)}</td>
-          {f'<td class="nowrap"><b>{h(status_cor)}</b></td>' if show_admin_cols else ''}
+          <td class="nowrap"><b>{h(status_cor)}</b></td>
 
           <td>
             <form id="{form_id}" method="post" action="{url_for('salvar')}">
@@ -3412,10 +3454,57 @@ def dashboard():
               <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
               {hidden_filters}
             </form>
-            {f'<input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">' if show_admin_cols else f'<input type="hidden" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}">' }
+            <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
           </td>
 
           <td>
+            <select name="Mês" form="{form_id}" style="min-width:140px;">
+              {opt_html(meses, mes)}
+            </select>
+          </td>
+
+          <td>
+            <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
+              {opt_html(semanas, sem)}
+            </select>
+          </td>
+
+          <td>
+            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
+              {opt_html(status_list, stc)}
+            </select>
+          </td>
+
+          <td style="min-width:420px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="text"
+                     name="Observações"
+                     form="{form_id}"
+                     placeholder="Digite observações..."
+                     value="{h(obs)}"
+                     style="flex:1; min-width:260px;">
+              <button type="submit" form="{form_id}" style="white-space:nowrap;">Gravar</button>
+            </div>
+          </td>
+        </tr>
+        """
+        else:
+            row_html = f"""
+        <tr class="{h(klass)}">
+          <td class="nowrap sticky-col">{h(ck)}</td>
+          <td class="sticky-col-2">{h(grupo)}</td>
+          <td>{h(cidade)}</td>
+          <td class="money nowrap">{h(t24)}</td>
+          <td class="money nowrap">{h(t25)}</td>
+          <td class="money nowrap">{h(t26)}</td>
+
+          <td>
+            <form id="{form_id}" method="post" action="{url_for('salvar')}">
+              <input type="hidden" name="client_key" value="{h(ck)}">
+              <input type="hidden" name="rep_code" value="{h(repc)}">
+              <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
+              {hidden_filters}
+            </form>
             <select name="Mês" form="{form_id}" style="min-width:140px;">
               {opt_html(meses, mes)}
             </select>
@@ -3512,50 +3601,47 @@ def dashboard():
       </form>
     </div>
 
-    <div class="card rep-main-table-wrap">
-      <table class="{'' if show_admin_cols else 'rep-main-table'}" id="{'' if show_admin_cols else 'rep-main-table'}">
+    <div class="card rep-table-wrap">
+      <table class="rep-table">
         <thead>
+          {f"""
           <tr>
-            <th class="{'' if show_admin_cols else 'sticky-col-code'}">Codigo Grupo Cliente</th>
-            <th class="{'' if show_admin_cols else 'sticky-col-group'}">Grupo Cliente</th>
-            { '<th>Codigo Representante</th>' if show_admin_cols else '' }
-            { '<th>Representante</th>' if show_admin_cols else '' }
-            { '<th>Supervisor</th>' if show_admin_cols else '' }
+            <th>Codigo Grupo Cliente</th>
+            <th>Grupo Cliente</th>
+            <th>Codigo Representante</th>
+            <th>Representante</th>
+            <th>Supervisor</th>
             <th>Cidade</th>
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
-            { '<th>Status Cor</th>' if show_admin_cols else '' }
-            { '<th>Data Agenda Visita</th>' if show_admin_cols else '' }
+            <th>Status Cor</th>
+            <th>Data Agenda Visita</th>
             <th>Mês</th>
             <th>Semana Atendimento</th>
             <th>Status Cliente</th>
             <th>Observações</th>
           </tr>
+          """ if is_admin() else f"""
+          <tr>
+            <th class="sticky-col">Codigo Grupo Cliente</th>
+            <th class="sticky-col-2">Grupo Cliente</th>
+            <th>Cidade</th>
+            <th>Total 2024</th>
+            <th>Total 2025</th>
+            <th>Total 2026</th>
+            <th>Mês</th>
+            <th>Semana Atendimento</th>
+            <th>Status Cliente</th>
+            <th>Observações</th>
+          </tr>
+          """}
         </thead>
         <tbody>
           {''.join(table_rows)}
         </tbody>
       </table>
     </div>
-    {'' if show_admin_cols else """
-    <script>
-      (function() {
-        function aplicarStickyRep() {
-          var tabela = document.getElementById('rep-main-table');
-          if (!tabela) return;
-
-          var primeiraColuna = tabela.querySelector('thead .sticky-col-code');
-          if (!primeiraColuna) return;
-
-          tabela.style.setProperty('--rep-sticky-left', primeiraColuna.offsetWidth + 'px');
-        }
-
-        aplicarStickyRep();
-        window.addEventListener('resize', aplicarStickyRep);
-      })();
-    </script>
-    """}
     """
 
     return render_template_string(
