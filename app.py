@@ -364,6 +364,87 @@ def normalizar_data_comparacao(v):
     return v
 
 
+def parse_date_any(v):
+    v = norm(v)
+    if not v:
+        return None
+
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(v, fmt)
+        except Exception:
+            pass
+
+    return None
+
+
+def get_dia_semana_ptbr(v):
+    dt = parse_date_any(v)
+    if dt is None:
+        return ""
+
+    mapa = {
+        0: "SEGUNDA",
+        1: "TERCA",
+        2: "QUARTA",
+        3: "QUINTA",
+        4: "SEXTA",
+        5: "SABADO",
+        6: "DOMINGO",
+    }
+    return mapa.get(dt.weekday(), "")
+
+
+def montar_agenda_da_base(rows, data_col, grupo_col, valor_col):
+    agenda = _agenda_vazia()
+    excedentes = []
+
+    if not rows or not data_col or not grupo_col:
+        return agenda, excedentes
+
+    linhas_ordenadas = sorted(
+        rows,
+        key=lambda r: (
+            to_input_date(norm(r.get(data_col, ""))) or "9999-12-31",
+            norm(r.get(grupo_col, "")),
+            norm(r.get(valor_col, "")) if valor_col else ""
+        )
+    )
+
+    for r in linhas_ordenadas:
+        data_base = norm(r.get(data_col, ""))
+        dia = get_dia_semana_ptbr(data_base)
+        if dia not in DIAS_SEMANA:
+            continue
+
+        cliente = norm(r.get(grupo_col, ""))
+        valor = format_number_br(parse_number_br(r.get(valor_col, ""))) if valor_col else ""
+
+        if not cliente and not valor:
+            continue
+
+        slot_livre = None
+        for at in ATENDIMENTOS:
+            atual_cliente = norm(agenda[dia][at].get("cliente", ""))
+            atual_valor = norm(agenda[dia][at].get("valor", ""))
+            if not atual_cliente and not atual_valor:
+                slot_livre = at
+                break
+
+        if slot_livre is not None:
+            agenda[dia][slot_livre]["cliente"] = cliente
+            agenda[dia][slot_livre]["valor"] = valor
+        else:
+            excedentes.append({
+                "dia": dia,
+                "data": data_base,
+                "cliente": cliente,
+                "valor": valor,
+            })
+
+    return agenda, excedentes
+
+
 def safe_cell(vals, idx_1_based):
     pos = idx_1_based - 1
     return norm(vals[pos]) if pos < len(vals) else ""
@@ -1000,8 +1081,21 @@ def salvar_agenda_rep(rep_code, agenda_dict):
         ws_agenda.append_rows(linhas_novas, value_input_option="USER_ENTERED")
 
 
-def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
+def render_agenda_semana_html(
+    rep_code,
+    sup_sel="",
+    rep_sel="",
+    data_ini="",
+    data_fim="",
+    agenda_override=None,
+    agenda_auto_carregada=False,
+    agenda_excedentes=None,
+):
     rep_code = norm(rep_code)
+    data_ini = norm(data_ini)
+    data_fim = norm(data_fim)
+    agenda_excedentes = agenda_excedentes or []
+
     if not rep_code:
         return """
         <div class="dash-summary-box">
@@ -1009,7 +1103,7 @@ def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
         </div>
         """
 
-    agenda = carregar_agenda_rep(rep_code)
+    agenda = agenda_override if isinstance(agenda_override, dict) else carregar_agenda_rep(rep_code)
 
     header_top = []
     header_top.append("<tr>")
@@ -1023,7 +1117,7 @@ def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
     header_sub.append("<th></th>")
     for _ in ATENDIMENTOS:
         header_sub.append('<th style="width:150px;">CLIENTE</th>')
-        header_sub.append('<th style="width:80px;">VALOR</th>')
+        header_sub.append('<th style="width:80px;">VALOR 2025</th>')
     header_sub.append("</tr>")
 
     body_rows = []
@@ -1038,41 +1132,87 @@ def render_agenda_semana_html(rep_code, sup_sel="", rep_sel=""):
                 f'<td><input class="agenda-input" type="text" name="{h(dia)}_{at}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
             )
             row.append(
-                f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor"></td>'
+                f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor 2025"></td>'
             )
         row.append("</tr>")
         body_rows.append("".join(row))
 
     hidden_sup = f'<input type="hidden" name="sup" value="{h(sup_sel)}">' if sup_sel else ""
     hidden_rep = f'<input type="hidden" name="rep" value="{h(rep_sel)}">' if rep_sel else ""
+    hidden_data_ini = f'<input type="hidden" name="agenda_data_ini" value="{h(data_ini)}">' if data_ini else ""
+    hidden_data_fim = f'<input type="hidden" name="agenda_data_fim" value="{h(data_fim)}">' if data_fim else ""
+
+    aviso_html = ""
+    if agenda_auto_carregada:
+        intervalo_txt = ""
+        if data_ini or data_fim:
+            intervalo_txt = f" | intervalo: {h(data_ini or '...')} até {h(data_fim or '...')}"
+        aviso_html += (
+            '<div class="small" style="margin-top:6px; color:#065f46; font-weight:700;">'
+            'Agenda preenchida automaticamente com clientes da BASE pelo dia da semana, usando o valor de 2025.'
+            f'{intervalo_txt}'
+            '</div>'
+        )
+
+    if agenda_excedentes:
+        aviso_html += (
+            '<div class="small" style="margin-top:6px; color:#9a3412; font-weight:700;">'
+            f'{len(agenda_excedentes)} cliente(s) ficaram fora da grade por exceder o limite de 4 atendimentos em um ou mais dias.'
+            '</div>'
+        )
 
     return f"""
-    <form method="post" action="{url_for('salvar_agenda')}">
-      <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
-      {hidden_sup}
-      {hidden_rep}
-
-      <div class="agenda-topbar">
-        <div class="agenda-rep-label">
-          Agenda semanal do representante <b>{h(rep_code)}</b>
+    <div class="card" style="margin-top:10px;">
+      <form method="get" action="{url_for('admin_dashboard')}" class="no-print" style="margin-bottom:10px;">
+        <div class="grid" style="grid-template-columns: 1.2fr 1fr 1fr auto;">
+          {hidden_sup}
+          {hidden_rep}
+          <input type="hidden" name="auto_agenda" value="1">
+          <div>
+            <label>Data inicial da agenda</label>
+            <input type="date" name="agenda_data_ini" value="{h(data_ini)}">
+          </div>
+          <div>
+            <label>Data final da agenda</label>
+            <input type="date" name="agenda_data_fim" value="{h(data_fim)}">
+          </div>
+          <div style="display:flex; align-items:flex-end; gap:8px;">
+            <button type="submit" class="agenda-save-btn" style="background:#2563eb;">Carregar da Base</button>
+          </div>
         </div>
-        <div>
-          <button type="submit" class="agenda-save-btn">Salvar Agenda</button>
-        </div>
-      </div>
+      </form>
 
-      <div class="agenda-wrapper">
-        <table class="agenda-table">
-          <thead>
-            {''.join(header_top)}
-            {''.join(header_sub)}
-          </thead>
-          <tbody>
-            {''.join(body_rows)}
-          </tbody>
-        </table>
-      </div>
-    </form>
+      <form method="post" action="{url_for('salvar_agenda')}">
+        <input type="hidden" name="rep_code_agenda" value="{h(rep_code)}">
+        {hidden_sup}
+        {hidden_rep}
+        {hidden_data_ini}
+        {hidden_data_fim}
+
+        <div class="agenda-topbar">
+          <div class="agenda-rep-label">
+            Agenda semanal do representante <b>{h(rep_code)}</b>
+          </div>
+          <div>
+            <button type="submit" class="agenda-save-btn">Salvar Agenda</button>
+          </div>
+        </div>
+
+        {aviso_html}
+
+        <div class="agenda-wrapper">
+          <table class="agenda-table">
+            <thead>
+              {''.join(header_top)}
+              {''.join(header_sub)}
+            </thead>
+            <tbody>
+              {''.join(body_rows)}
+            </tbody>
+          </table>
+        </div>
+      </form>
+    </div>
     """
 
 
@@ -2424,6 +2564,8 @@ def salvar_agenda():
     rep_code = norm(request.form.get("rep_code_agenda", ""))
     sup = norm(request.form.get("sup", ""))
     rep = norm(request.form.get("rep", ""))
+    agenda_data_ini = norm(request.form.get("agenda_data_ini", ""))
+    agenda_data_fim = norm(request.form.get("agenda_data_fim", ""))
 
     if not rep_code:
         flash("Selecione um representante antes de salvar a agenda.", "err")
@@ -2449,6 +2591,10 @@ def salvar_agenda():
         args["sup"] = sup
     if rep:
         args["rep"] = rep
+    if agenda_data_ini:
+        args["agenda_data_ini"] = agenda_data_ini
+    if agenda_data_fim:
+        args["agenda_data_fim"] = agenda_data_fim
     return redirect(url_for("admin_dashboard", **args))
 
 
@@ -2511,6 +2657,9 @@ def admin_dashboard():
         data_fim = norm(request.args.get("data_fim", ""))
         filtro_mes = norm(request.args.get("filtro_mes", ""))
         filtro_semana = norm(request.args.get("filtro_semana", ""))
+        agenda_data_ini = norm(request.args.get("agenda_data_ini", data_ini))
+        agenda_data_fim = norm(request.args.get("agenda_data_fim", data_fim))
+        auto_agenda = norm(request.args.get("auto_agenda", "")) == "1"
 
         sup_list = unique_list([r.get(sup_col, "") for r in base_rows]) if sup_col else []
         rep_list = unique_list([r.get(rep_col, "") for r in base_rows]) if rep_col else []
@@ -2659,10 +2808,46 @@ def admin_dashboard():
                 reverse=True
             )
 
+        agenda_override = None
+        agenda_excedentes = []
+        agenda_auto_carregada = False
+
+        if header_rep_code and auto_agenda:
+            agenda_rows_base = []
+            for r in base_rows:
+                rep_val = norm(r.get(rep_col, "")) if rep_col else ""
+                if rep_val != header_rep_code:
+                    continue
+
+                data_base = to_input_date(norm(r.get(data_agenda_col, ""))) if data_agenda_col else ""
+                if agenda_data_ini and (not data_base or data_base < agenda_data_ini):
+                    continue
+                if agenda_data_fim and (not data_base or data_base > agenda_data_fim):
+                    continue
+
+                dia_semana = get_dia_semana_ptbr(data_base)
+                if dia_semana not in DIAS_SEMANA:
+                    continue
+
+                agenda_rows_base.append(r)
+
+            agenda_override, agenda_excedentes = montar_agenda_da_base(
+                rows=agenda_rows_base,
+                data_col=data_agenda_col,
+                grupo_col=grupo_col,
+                valor_col=t2025_col,
+            )
+            agenda_auto_carregada = True
+
         agenda_semanal_html = render_agenda_semana_html(
             rep_code=header_rep_code,
             sup_sel=sup_sel,
-            rep_sel=rep_sel
+            rep_sel=rep_sel,
+            data_ini=agenda_data_ini,
+            data_fim=agenda_data_fim,
+            agenda_override=agenda_override,
+            agenda_auto_carregada=agenda_auto_carregada,
+            agenda_excedentes=agenda_excedentes,
         )
 
         gold_info = get_gold_info_by_rep(header_rep_code)
