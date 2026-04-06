@@ -2182,9 +2182,17 @@ BASE_HTML = """
     }
 
     @media print {
+      @page {
+        size: A3 landscape;
+        margin: 0;
+      }
+
       html, body {
-        width: 420mm;
-        height: 297mm;
+        width: 420mm !important;
+        height: 297mm !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
         background: #ffffff !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
@@ -2204,35 +2212,46 @@ BASE_HTML = """
       .container {
         padding: 0 !important;
         margin: 0 !important;
-        width: 100% !important;
+        width: 420mm !important;
+        height: 297mm !important;
+        overflow: hidden !important;
       }
 
       .dash-page {
         gap: 0 !important;
-        width: 100% !important;
+        width: 420mm !important;
+        height: 297mm !important;
         align-items: stretch !important;
+        overflow: hidden !important;
       }
 
       .a3-page {
-        width: 410mm !important;
-        height: 285mm !important;
-        margin: 0 auto !important;
+        width: 420mm !important;
+        height: 297mm !important;
+        min-width: 420mm !important;
+        max-width: 420mm !important;
+        min-height: 297mm !important;
+        max-height: 297mm !important;
+        margin: 0 !important;
         padding: 0 !important;
         overflow: hidden !important;
         background: #ffffff !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        page-break-after: avoid !important;
       }
 
       .print-scale-wrap {
-        width: 100% !important;
-        transform: scale(0.93) !important;
+        width: 152% !important;
+        transform: scale(0.658) !important;
         transform-origin: top left !important;
       }
 
       .dash-shell {
-        width: 435mm !important;
+        width: 100% !important;
         min-height: 0 !important;
         height: auto !important;
-        padding: 5mm !important;
+        padding: 4mm !important;
         border-radius: 0 !important;
         box-shadow: none !important;
         overflow: hidden !important;
@@ -2252,80 +2271,77 @@ BASE_HTML = """
       }
 
       .dash-header {
-        margin-bottom: 6px !important;
-        padding-bottom: 5px !important;
+        margin-bottom: 5px !important;
+        padding-bottom: 4px !important;
       }
 
       .dash-main-title {
-        font-size: 15px !important;
+        font-size: 14px !important;
       }
 
       .dash-subline {
-        font-size: 9px !important;
-        line-height: 1.2 !important;
+        font-size: 8px !important;
+        line-height: 1.15 !important;
       }
 
       .dash-metric {
-        padding: 4px !important;
+        padding: 3px !important;
       }
 
       .dash-metric-label {
-        font-size: 8px !important;
+        font-size: 7px !important;
       }
 
       .dash-metric-value {
-        font-size: 13px !important;
+        font-size: 11px !important;
       }
 
       .dash-panel-title {
-        font-size: 10px !important;
-        padding: 4px 6px !important;
+        font-size: 9px !important;
+        padding: 3px 5px !important;
       }
 
       .dash-panel-body {
-        padding: 4px !important;
+        padding: 3px !important;
       }
 
       .dash-panel-body-map {
-        padding: 3px !important;
-        min-height: 355px !important;
+        padding: 2px !important;
+        min-height: 300px !important;
       }
 
-      .dash-table-mini {
-        font-size: 7.5px !important;
-      }
-
+      .dash-table-mini,
       .dash-table-big {
-        font-size: 7.5px !important;
+        font-size: 6.8px !important;
       }
 
       .dash-table-mini th, .dash-table-mini td,
       .dash-table-big th, .dash-table-big td {
-        padding: 2px 3px !important;
-        line-height: 1.05 !important;
+        padding: 1px 2px !important;
+        line-height: 1.0 !important;
       }
 
       .dash-gold-box,
       .dash-coverage-box,
       .dash-summary-box {
         min-height: unset !important;
-        padding: 6px !important;
-        font-size: 9px !important;
+        padding: 4px !important;
+        font-size: 8px !important;
       }
 
       .agenda-table {
-        font-size: 7px !important;
+        font-size: 6.8px !important;
       }
 
       .agenda-table th,
       .agenda-table td {
-        padding: 2px 3px !important;
+        padding: 1px 2px !important;
       }
 
       .agenda-input {
-        font-size: 7px !important;
-        padding: 3px 4px !important;
-        min-width: 40px !important;
+        font-size: 6.8px !important;
+        padding: 2px 3px !important;
+        min-width: 34px !important;
       }
 
       .agenda-save-btn {
@@ -2374,56 +2390,9 @@ BASE_HTML = """
     {{ body|safe }}
   </div>
 <script>
-function mmToPx(mm) {
-  return (mm * 96) / 25.4;
-}
-
-function prepararEscalaImpressaoA3() {
-  const alvo = document.querySelector('.a3-page.no-break');
-  const wrap = alvo ? alvo.querySelector('.print-scale-wrap') : null;
-  if (!alvo || !wrap) return;
-
-  wrap.style.transform = 'scale(1)';
-  wrap.style.width = '100%';
-
-  const pageWidthPx = mmToPx(410);
-  const pageHeightPx = mmToPx(285);
-  const safetyPx = 18;
-  const contentWidth = Math.max(wrap.scrollWidth, wrap.offsetWidth, 1);
-  const contentHeight = Math.max(wrap.scrollHeight, wrap.offsetHeight, 1);
-
-  const scaleX = (pageWidthPx - safetyPx) / contentWidth;
-  const scaleY = (pageHeightPx - safetyPx) / contentHeight;
-  let scale = Math.min(scaleX, scaleY, 1);
-
-  if (!Number.isFinite(scale) || scale <= 0) {
-    scale = 1;
-  }
-
-  document.documentElement.style.setProperty('--print-scale-factor', String(scale));
-  document.documentElement.style.setProperty('--print-scale-width', `${100 / scale}%`);
-}
-
-function limparEscalaImpressaoA3() {
-  document.documentElement.style.removeProperty('--print-scale-factor');
-  document.documentElement.style.removeProperty('--print-scale-width');
-  const alvo = document.querySelector('.a3-page.no-break');
-  const wrap = alvo ? alvo.querySelector('.print-scale-wrap') : null;
-  if (wrap) {
-    wrap.style.transform = '';
-    wrap.style.width = '';
-  }
-}
-
 function imprimirTelaA3() {
-  prepararEscalaImpressaoA3();
-  setTimeout(function() {
-    window.print();
-  }, 80);
+  window.print();
 }
-
-window.addEventListener('beforeprint', prepararEscalaImpressaoA3);
-window.addEventListener('afterprint', limparEscalaImpressaoA3);
 </script>
 </body>
 </html>
