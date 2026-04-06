@@ -2174,84 +2174,6 @@ BASE_HTML = """
       font-weight:700;
     }
 
-    .agenda-card-print {
-      width: 100%;
-      box-sizing: border-box;
-      padding-top: 4px;
-    }
-
-    .agenda-topbar-print {
-      justify-content: flex-start;
-      margin-bottom: 8px;
-    }
-
-    .agenda-rep-label-print {
-      font-size: 13px;
-      font-weight: 800;
-      color: #1f2937;
-    }
-
-    .agenda-periodo-print {
-      display: flex;
-      gap: 20px;
-      flex-wrap: wrap;
-      align-items: center;
-      margin: 0 0 8px 0;
-      padding: 6px 8px;
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-      background: #f8fafc;
-      font-size: 11px;
-      color: #334155;
-    }
-
-    .agenda-wrapper-print {
-      overflow: visible;
-    }
-
-    .agenda-table-print {
-      table-layout: fixed;
-    }
-
-    .agenda-dia-cell {
-      white-space: nowrap;
-      text-align: center;
-      vertical-align: middle;
-      font-weight: 800;
-    }
-
-    .agenda-print-text {
-      display: block;
-      width: 100%;
-      min-height: 22px;
-      padding: 4px 5px;
-      box-sizing: border-box;
-      font-size: 11px;
-      line-height: 1.2;
-      color: #111827;
-      white-space: normal;
-      word-break: break-word;
-      overflow-wrap: anywhere;
-    }
-
-    .agenda-print-cliente {
-      text-align: left;
-    }
-
-    .agenda-print-valor {
-      text-align: center;
-      font-weight: 700;
-      white-space: nowrap;
-    }
-
-    .agenda-info-msg {
-      margin-bottom: 6px;
-    }
-
-    .no-print-temp {
-      display: none !important;
-    }
-
     .no-break { page-break-inside: avoid; break-inside: avoid; }
 
     @page {
@@ -2260,14 +2182,9 @@ BASE_HTML = """
     }
 
     @media print {
-      @page {
-        size: A3 landscape;
-        margin: 6mm;
-      }
-
       html, body {
-        width: auto !important;
-        height: auto !important;
+        width: 420mm;
+        height: 297mm;
         background: #ffffff !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
@@ -2275,9 +2192,7 @@ BASE_HTML = """
 
       .topbar,
       .no-print,
-      .msg,
-      .print-toolbar,
-      .agenda-save-btn {
+      .msg {
         display: none !important;
       }
 
@@ -2299,30 +2214,28 @@ BASE_HTML = """
       }
 
       .a3-page {
-        width: 100% !important;
-        max-width: none !important;
-        height: auto !important;
-        margin: 0 !important;
+        width: 410mm !important;
+        height: 285mm !important;
+        margin: 0 auto !important;
         padding: 0 !important;
-        overflow: visible !important;
+        overflow: hidden !important;
         background: #ffffff !important;
       }
 
       .print-scale-wrap {
         width: 100% !important;
-        transform: none !important;
+        transform: scale(0.93) !important;
+        transform-origin: top left !important;
       }
 
       .dash-shell {
-        width: 100% !important;
-        min-height: auto !important;
+        width: 435mm !important;
+        min-height: 0 !important;
         height: auto !important;
-        padding: 4mm !important;
+        padding: 5mm !important;
         border-radius: 0 !important;
         box-shadow: none !important;
-        overflow: visible !important;
-        page-break-inside: avoid !important;
-        break-inside: avoid !important;
+        overflow: hidden !important;
       }
 
       .dash-header,
@@ -2332,7 +2245,6 @@ BASE_HTML = """
       .dash-panel,
       .dash-panel-body,
       .dash-panel-body-map,
-      .agenda-card-print,
       .agenda-wrapper,
       .agenda-table {
         break-inside: avoid !important;
@@ -2345,11 +2257,11 @@ BASE_HTML = """
       }
 
       .dash-main-title {
-        font-size: 16px !important;
+        font-size: 15px !important;
       }
 
       .dash-subline {
-        font-size: 9.5px !important;
+        font-size: 9px !important;
         line-height: 1.2 !important;
       }
 
@@ -2365,22 +2277,6 @@ BASE_HTML = """
         font-size: 13px !important;
       }
 
-      .dash-row-top {
-        grid-template-columns: 1fr 1fr 1.12fr !important;
-        gap: 6px !important;
-        margin-bottom: 6px !important;
-      }
-
-      .dash-row-bottom {
-        grid-template-columns: 1.78fr 0.82fr !important;
-        gap: 6px !important;
-      }
-
-      .dash-right-stack {
-        grid-template-rows: auto auto !important;
-        gap: 6px !important;
-      }
-
       .dash-panel-title {
         font-size: 10px !important;
         padding: 4px 6px !important;
@@ -2392,94 +2288,48 @@ BASE_HTML = """
 
       .dash-panel-body-map {
         padding: 3px !important;
-        min-height: 300px !important;
+        min-height: 355px !important;
       }
 
       .dash-table-mini {
-        font-size: 7.8px !important;
+        font-size: 7.5px !important;
       }
 
       .dash-table-big {
-        font-size: 7.8px !important;
+        font-size: 7.5px !important;
       }
 
       .dash-table-mini th, .dash-table-mini td,
       .dash-table-big th, .dash-table-big td {
         padding: 2px 3px !important;
-        line-height: 1.08 !important;
+        line-height: 1.05 !important;
       }
 
-      .dash-gold-box {
-        min-height: 48px !important;
-        padding: 6px !important;
-        font-size: 9px !important;
-      }
-
-      .dash-coverage-box {
-        min-height: 58px !important;
-        padding: 6px !important;
-        font-size: 9px !important;
-      }
-
+      .dash-gold-box,
+      .dash-coverage-box,
       .dash-summary-box {
-        min-height: 110px !important;
+        min-height: unset !important;
         padding: 6px !important;
         font-size: 9px !important;
-      }
-
-      .agenda-card-print {
-        min-height: 360px !important;
-        padding-top: 2px !important;
-      }
-
-      .agenda-topbar-print {
-        margin-bottom: 6px !important;
-      }
-
-      .agenda-rep-label-print {
-        font-size: 12px !important;
-      }
-
-      .agenda-periodo-print {
-        font-size: 10px !important;
-        padding: 5px 6px !important;
-        margin-bottom: 6px !important;
-      }
-
-      .agenda-wrapper {
-        overflow: visible !important;
       }
 
       .agenda-table {
-        width: 100% !important;
-        font-size: 10.5px !important;
-        table-layout: fixed !important;
+        font-size: 7px !important;
       }
 
       .agenda-table th,
       .agenda-table td {
-        padding: 3px 4px !important;
-        height: 30px !important;
-      }
-
-      .agenda-table thead th {
-        font-size: 9px !important;
+        padding: 2px 3px !important;
       }
 
       .agenda-input {
+        font-size: 7px !important;
+        padding: 3px 4px !important;
+        min-width: 40px !important;
+      }
+
+      .agenda-save-btn {
         display: none !important;
-      }
-
-      .agenda-print-text {
-        min-height: 24px !important;
-        padding: 4px !important;
-        font-size: 10.5px !important;
-        line-height: 1.15 !important;
-        border: none !important;
-      }
-
-      .agenda-print-valor {
-        font-size: 10px !important;
       }
 
       button,
@@ -2524,18 +2374,56 @@ BASE_HTML = """
     {{ body|safe }}
   </div>
 <script>
-function imprimirTelaA3() {
-  const botoes = document.querySelectorAll('.a3-page button');
-  botoes.forEach(btn => btn.classList.add('no-print-temp'));
+function mmToPx(mm) {
+  return (mm * 96) / 25.4;
+}
 
-  try {
-    window.print();
-  } finally {
-    setTimeout(function() {
-      botoes.forEach(btn => btn.classList.remove('no-print-temp'));
-    }, 300);
+function prepararEscalaImpressaoA3() {
+  const alvo = document.querySelector('.a3-page.no-break');
+  const wrap = alvo ? alvo.querySelector('.print-scale-wrap') : null;
+  if (!alvo || !wrap) return;
+
+  wrap.style.transform = 'scale(1)';
+  wrap.style.width = '100%';
+
+  const pageWidthPx = mmToPx(410);
+  const pageHeightPx = mmToPx(285);
+  const safetyPx = 18;
+  const contentWidth = Math.max(wrap.scrollWidth, wrap.offsetWidth, 1);
+  const contentHeight = Math.max(wrap.scrollHeight, wrap.offsetHeight, 1);
+
+  const scaleX = (pageWidthPx - safetyPx) / contentWidth;
+  const scaleY = (pageHeightPx - safetyPx) / contentHeight;
+  let scale = Math.min(scaleX, scaleY, 1);
+
+  if (!Number.isFinite(scale) || scale <= 0) {
+    scale = 1;
+  }
+
+  document.documentElement.style.setProperty('--print-scale-factor', String(scale));
+  document.documentElement.style.setProperty('--print-scale-width', `${100 / scale}%`);
+}
+
+function limparEscalaImpressaoA3() {
+  document.documentElement.style.removeProperty('--print-scale-factor');
+  document.documentElement.style.removeProperty('--print-scale-width');
+  const alvo = document.querySelector('.a3-page.no-break');
+  const wrap = alvo ? alvo.querySelector('.print-scale-wrap') : null;
+  if (wrap) {
+    wrap.style.transform = '';
+    wrap.style.width = '';
   }
 }
+
+function imprimirTelaA3() {
+  prepararEscalaImpressaoA3();
+  setTimeout(function() {
+    window.print();
+  }, 80);
+}
+
+window.addEventListener('beforeprint', prepararEscalaImpressaoA3);
+window.addEventListener('afterprint', limparEscalaImpressaoA3);
 </script>
 </body>
 </html>
