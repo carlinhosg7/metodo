@@ -2190,10 +2190,8 @@ BASE_HTML = """
       html, body {
         width: 420mm !important;
         height: 297mm !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        overflow: hidden !important;
         background: #ffffff !important;
+        overflow: hidden !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
       }
@@ -2212,38 +2210,30 @@ BASE_HTML = """
       .container {
         padding: 0 !important;
         margin: 0 !important;
-        width: 420mm !important;
-        height: 297mm !important;
+        width: 100% !important;
         overflow: hidden !important;
       }
 
       .dash-page {
         gap: 0 !important;
-        width: 420mm !important;
-        height: 297mm !important;
+        width: 100% !important;
         align-items: stretch !important;
-        overflow: hidden !important;
       }
 
       .a3-page {
         width: 420mm !important;
         height: 297mm !important;
-        min-width: 420mm !important;
-        max-width: 420mm !important;
-        min-height: 297mm !important;
-        max-height: 297mm !important;
         margin: 0 !important;
         padding: 0 !important;
         overflow: hidden !important;
         background: #ffffff !important;
-        page-break-inside: avoid !important;
-        break-inside: avoid !important;
         page-break-after: avoid !important;
+        break-after: avoid !important;
       }
 
       .print-scale-wrap {
-        width: 152% !important;
-        transform: scale(0.658) !important;
+        width: 116% !important;
+        transform: scale(0.86) !important;
         transform-origin: top left !important;
       }
 
@@ -2276,72 +2266,72 @@ BASE_HTML = """
       }
 
       .dash-main-title {
-        font-size: 14px !important;
+        font-size: 15px !important;
       }
 
       .dash-subline {
-        font-size: 8px !important;
+        font-size: 9px !important;
         line-height: 1.15 !important;
       }
 
       .dash-metric {
-        padding: 3px !important;
+        padding: 4px !important;
       }
 
       .dash-metric-label {
-        font-size: 7px !important;
+        font-size: 8px !important;
       }
 
       .dash-metric-value {
-        font-size: 11px !important;
+        font-size: 13px !important;
       }
 
       .dash-panel-title {
-        font-size: 9px !important;
-        padding: 3px 5px !important;
+        font-size: 10px !important;
+        padding: 4px 6px !important;
       }
 
       .dash-panel-body {
-        padding: 3px !important;
+        padding: 4px !important;
       }
 
       .dash-panel-body-map {
-        padding: 2px !important;
-        min-height: 300px !important;
+        padding: 3px !important;
+        min-height: 330px !important;
       }
 
       .dash-table-mini,
       .dash-table-big {
-        font-size: 6.8px !important;
+        font-size: 8px !important;
       }
 
       .dash-table-mini th, .dash-table-mini td,
       .dash-table-big th, .dash-table-big td {
-        padding: 1px 2px !important;
-        line-height: 1.0 !important;
+        padding: 2px 3px !important;
+        line-height: 1.05 !important;
       }
 
       .dash-gold-box,
       .dash-coverage-box,
       .dash-summary-box {
         min-height: unset !important;
-        padding: 4px !important;
-        font-size: 8px !important;
+        padding: 5px !important;
+        font-size: 9px !important;
       }
 
       .agenda-table {
-        font-size: 6.8px !important;
+        font-size: 7.5px !important;
       }
 
       .agenda-table th,
       .agenda-table td {
-        padding: 1px 2px !important;
+        padding: 2px 3px !important;
       }
 
       .agenda-input {
-        font-size: 6.8px !important;
-        padding: 2px 3px !important;
-        min-width: 34px !important;
+        font-size: 7px !important;
+        padding: 3px 4px !important;
+        min-width: 40px !important;
       }
 
       .agenda-save-btn {
