@@ -1090,7 +1090,6 @@ def render_agenda_semana_html(
     agenda_override=None,
     agenda_auto_carregada=False,
     agenda_excedentes=None,
-    modo_print=False,
 ):
     rep_code = norm(rep_code)
     data_ini = norm(data_ini)
@@ -1124,25 +1123,17 @@ def render_agenda_semana_html(
     body_rows = []
 
     for dia in DIAS_SEMANA:
-        row = [f'<tr><td class="agenda-dia-cell"><b>{h(dia)}</b></td>']
+        row = [f"<tr><td><b>{h(dia)}</b></td>"]
         for at in ATENDIMENTOS:
             cliente = agenda[dia][at]["cliente"]
             valor = agenda[dia][at]["valor"]
 
-            if modo_print:
-                row.append(
-                    f'<td><div class="agenda-print-text agenda-print-cliente">{h(cliente) or "&nbsp;"}</div></td>'
-                )
-                row.append(
-                    f'<td><div class="agenda-print-text agenda-print-valor">{h(valor) or "&nbsp;"}</div></td>'
-                )
-            else:
-                row.append(
-                    f'<td><input class="agenda-input" type="text" name="{h(dia)}_{at}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
-                )
-                row.append(
-                    f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor 2025"></td>'
-                )
+            row.append(
+                f'<td><input class="agenda-input" type="text" name="{h(dia)}_{at}_cliente" value="{h(cliente)}" placeholder="Cliente"></td>'
+            )
+            row.append(
+                f'<td><input class="agenda-input agenda-valor" type="text" name="{h(dia)}_{at}_valor" value="{h(valor)}" placeholder="Valor 2025"></td>'
+            )
         row.append("</tr>")
         body_rows.append("".join(row))
 
@@ -1157,7 +1148,7 @@ def render_agenda_semana_html(
         if data_ini or data_fim:
             intervalo_txt = f" | intervalo: {h(data_ini or '...')} até {h(data_fim or '...')}"
         aviso_html += (
-            '<div class="small agenda-info-msg" style="margin-top:6px; color:#065f46; font-weight:700;">'
+            '<div class="small" style="margin-top:6px; color:#065f46; font-weight:700;">'
             'Agenda preenchida automaticamente com clientes da BASE pelo dia da semana, usando o valor de 2025.'
             f'{intervalo_txt}'
             '</div>'
@@ -1165,47 +1156,10 @@ def render_agenda_semana_html(
 
     if agenda_excedentes:
         aviso_html += (
-            '<div class="small agenda-info-msg" style="margin-top:6px; color:#9a3412; font-weight:700;">'
+            '<div class="small" style="margin-top:6px; color:#9a3412; font-weight:700;">'
             f'{len(agenda_excedentes)} cliente(s) ficaram fora da grade por exceder o limite de 4 atendimentos em um ou mais dias.'
             '</div>'
         )
-
-    table_html = f"""
-    <div class="agenda-wrapper {'agenda-wrapper-print' if modo_print else ''}">
-      <table class="agenda-table {'agenda-table-print' if modo_print else ''}">
-        <thead>
-          {''.join(header_top)}
-          {''.join(header_sub)}
-        </thead>
-        <tbody>
-          {''.join(body_rows)}
-        </tbody>
-      </table>
-    </div>
-    """
-
-    if modo_print:
-        periodo_html = ""
-        if data_ini or data_fim:
-            periodo_html = (
-                '<div class="agenda-periodo-print">'
-                f'<span><b>Data inicial:</b> {h(data_ini or "-")}</span>'
-                f'<span><b>Data final:</b> {h(data_fim or "-")}</span>'
-                '</div>'
-            )
-
-        return f"""
-        <div class="agenda-card-print no-break">
-          <div class="agenda-topbar agenda-topbar-print">
-            <div class="agenda-rep-label agenda-rep-label-print">
-              Agenda semanal do representante <b>{h(rep_code)}</b>
-            </div>
-          </div>
-          {periodo_html}
-          {aviso_html}
-          {table_html}
-        </div>
-        """
 
     return f"""
     <div class="card" style="margin-top:10px;">
@@ -1246,11 +1200,20 @@ def render_agenda_semana_html(
 
         {aviso_html}
 
-        {table_html}
+        <div class="agenda-wrapper">
+          <table class="agenda-table">
+            <thead>
+              {''.join(header_top)}
+              {''.join(header_sub)}
+            </thead>
+            <tbody>
+              {''.join(body_rows)}
+            </tbody>
+          </table>
+        </div>
       </form>
     </div>
     """
-
 
 
 # =========================
@@ -1984,7 +1947,7 @@ BASE_HTML = """
 
     .dash-row-bottom {
       display: grid;
-      grid-template-columns: 1.72fr 0.88fr;
+      grid-template-columns: 1.65fr 0.95fr;
       gap: 8px;
       align-items: stretch;
     }
@@ -2160,8 +2123,7 @@ BASE_HTML = """
     .chip-gray { background: #e5e7eb; color: #374151; }
 
     .agenda-wrapper { overflow:auto; width:100%; }
-    .agenda-wrapper-print { overflow: visible; }
-    .agenda-table { width:100%; border-collapse:collapse; font-size:10px; table-layout: fixed; }
+    .agenda-table { width:100%; border-collapse:collapse; font-size:10px; }
     .agenda-table th, .agenda-table td {
       border:1px solid #9ca3af;
       padding:4px;
@@ -2184,34 +2146,6 @@ BASE_HTML = """
       border:1px solid #cbd5e1;
       font-size:10px;
       box-sizing:border-box;
-    }
-    .agenda-print-text {
-      display:block;
-      width:100%;
-      min-height:20px;
-      padding:4px 5px;
-      border:1px solid transparent;
-      box-sizing:border-box;
-      font-size:11px;
-      line-height:1.2;
-      color:#111827;
-      white-space:normal;
-      word-break:break-word;
-    }
-    .agenda-print-cliente { text-align:left; font-weight:600; }
-    .agenda-print-valor { text-align:center; font-variant-numeric:tabular-nums; }
-    .agenda-dia-cell { white-space:nowrap; }
-    .agenda-card-print { width:100%; }
-    .agenda-topbar-print { margin-bottom:4px; }
-    .agenda-rep-label-print { font-size:12px; }
-    .agenda-periodo-print {
-      display:flex;
-      gap:18px;
-      flex-wrap:wrap;
-      margin:2px 0 8px 0;
-      font-size:11px;
-      color:#374151;
-      font-weight:600;
     }
     .agenda-valor {
       min-width:58px;
@@ -2281,27 +2215,27 @@ BASE_HTML = """
 
       .a3-page {
         width: 410mm !important;
-        min-height: 285mm !important;
+        height: 285mm !important;
         margin: 0 auto !important;
         padding: 0 !important;
-        overflow: visible !important;
+        overflow: hidden !important;
         background: #ffffff !important;
       }
 
       .print-scale-wrap {
         width: 100% !important;
-        transform: none !important;
+        transform: scale(0.93) !important;
         transform-origin: top left !important;
       }
 
       .dash-shell {
-        width: 100% !important;
+        width: 435mm !important;
         min-height: 0 !important;
         height: auto !important;
-        padding: 4mm !important;
+        padding: 5mm !important;
         border-radius: 0 !important;
         box-shadow: none !important;
-        overflow: visible !important;
+        overflow: hidden !important;
       }
 
       .dash-header,
@@ -2354,15 +2288,15 @@ BASE_HTML = """
 
       .dash-panel-body-map {
         padding: 3px !important;
-        min-height: 320px !important;
+        min-height: 355px !important;
       }
 
       .dash-table-mini {
-        font-size: 7.4px !important;
+        font-size: 7.5px !important;
       }
 
       .dash-table-big {
-        font-size: 7.2px !important;
+        font-size: 7.5px !important;
       }
 
       .dash-table-mini th, .dash-table-mini td,
@@ -2379,47 +2313,19 @@ BASE_HTML = """
         font-size: 9px !important;
       }
 
-      .agenda-wrapper,
-      .agenda-wrapper-print {
-        overflow: visible !important;
-      }
-
-      .agenda-card-print {
-        min-height: 0 !important;
-      }
-
-      .agenda-periodo-print {
-        font-size: 10px !important;
-        margin: 2px 0 6px 0 !important;
-      }
-
       .agenda-table {
-        width: 100% !important;
-        table-layout: fixed !important;
-        font-size: 10px !important;
+        font-size: 7px !important;
       }
 
       .agenda-table th,
       .agenda-table td {
-        padding: 3px 4px !important;
-        height: 24px !important;
-        vertical-align: middle !important;
-      }
-
-      .agenda-table thead th {
-        font-size: 9px !important;
+        padding: 2px 3px !important;
       }
 
       .agenda-input {
-        display: none !important;
-      }
-
-      .agenda-print-text {
-        display: block !important;
-        font-size: 9.5px !important;
-        min-height: 18px !important;
-        padding: 2px 3px !important;
-        line-height: 1.15 !important;
+        font-size: 7px !important;
+        padding: 3px 4px !important;
+        min-width: 40px !important;
       }
 
       .agenda-save-btn {
@@ -2468,53 +2374,56 @@ BASE_HTML = """
     {{ body|safe }}
   </div>
 <script>
-function ajustarEscalaA3() {
-  const area = document.querySelector('.a3-page.no-break');
-  const wrap = area ? area.querySelector('.print-scale-wrap') : null;
-  const shell = wrap ? wrap.querySelector('.dash-shell') : null;
-  if (!area || !wrap || !shell) return;
+function mmToPx(mm) {
+  return (mm * 96) / 25.4;
+}
 
-  wrap.style.removeProperty('transform');
-  wrap.style.removeProperty('width');
-  document.documentElement.style.setProperty('--print-scale', '1');
+function prepararEscalaImpressaoA3() {
+  const alvo = document.querySelector('.a3-page.no-break');
+  const wrap = alvo ? alvo.querySelector('.print-scale-wrap') : null;
+  if (!alvo || !wrap) return;
 
-  const areaWidth = area.clientWidth || area.offsetWidth || 1;
-  const areaHeight = area.clientHeight || area.offsetHeight || 1;
-  const contentWidth = shell.scrollWidth || shell.offsetWidth || 1;
-  const contentHeight = shell.scrollHeight || shell.offsetHeight || 1;
+  wrap.style.transform = 'scale(1)';
+  wrap.style.width = '100%';
 
-  const scaleX = areaWidth / contentWidth;
-  const scaleY = areaHeight / contentHeight;
-  const scale = Math.min(scaleX, scaleY, 1);
+  const pageWidthPx = mmToPx(410);
+  const pageHeightPx = mmToPx(285);
+  const safetyPx = 18;
+  const contentWidth = Math.max(wrap.scrollWidth, wrap.offsetWidth, 1);
+  const contentHeight = Math.max(wrap.scrollHeight, wrap.offsetHeight, 1);
 
-  document.documentElement.style.setProperty('--print-scale', String(scale));
-  wrap.style.width = `calc(100% / ${scale})`;
-  wrap.style.transform = `scale(${scale})`;
+  const scaleX = (pageWidthPx - safetyPx) / contentWidth;
+  const scaleY = (pageHeightPx - safetyPx) / contentHeight;
+  let scale = Math.min(scaleX, scaleY, 1);
+
+  if (!Number.isFinite(scale) || scale <= 0) {
+    scale = 1;
+  }
+
+  document.documentElement.style.setProperty('--print-scale-factor', String(scale));
+  document.documentElement.style.setProperty('--print-scale-width', `${100 / scale}%`);
+}
+
+function limparEscalaImpressaoA3() {
+  document.documentElement.style.removeProperty('--print-scale-factor');
+  document.documentElement.style.removeProperty('--print-scale-width');
+  const alvo = document.querySelector('.a3-page.no-break');
+  const wrap = alvo ? alvo.querySelector('.print-scale-wrap') : null;
+  if (wrap) {
+    wrap.style.transform = '';
+    wrap.style.width = '';
+  }
 }
 
 function imprimirTelaA3() {
-  ajustarEscalaA3();
+  prepararEscalaImpressaoA3();
   setTimeout(function() {
     window.print();
-  }, 120);
+  }, 80);
 }
 
-window.addEventListener('load', function() {
-  ajustarEscalaA3();
-  setTimeout(ajustarEscalaA3, 250);
-});
-
-window.addEventListener('resize', ajustarEscalaA3);
-window.addEventListener('beforeprint', ajustarEscalaA3);
-window.addEventListener('afterprint', function() {
-  document.documentElement.style.setProperty('--print-scale', '1');
-  const wrap = document.querySelector('.a3-page.no-break .print-scale-wrap');
-  if (wrap) {
-    wrap.style.removeProperty('transform');
-    wrap.style.removeProperty('width');
-  }
-  setTimeout(ajustarEscalaA3, 100);
-});
+window.addEventListener('beforeprint', prepararEscalaImpressaoA3);
+window.addEventListener('afterprint', limparEscalaImpressaoA3);
 </script>
 </body>
 </html>
@@ -2903,7 +2812,6 @@ def admin_dashboard():
             agenda_override=agenda_override,
             agenda_auto_carregada=agenda_auto_carregada,
             agenda_excedentes=agenda_excedentes,
-            modo_print=True,
         )
 
         gold_info = get_gold_info_by_rep(header_rep_code)
