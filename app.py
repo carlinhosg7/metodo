@@ -804,41 +804,172 @@ def find_city_coords_public(rows_cidades, municipios_index, cidade_base_norm, ci
     return lat, lon, nome_final
 
 
-def build_city_alert_table_html(city_alert_rows):
-    if not city_alert_rows:
+def build_city_map_svg(city_points, width=900, height=520):
+    if not city_points:
         return """
-        <div class="dash-map-placeholder" style="min-height:220px;">
-          Nenhuma cidade sem CNPJ ou sem vendas encontrada.
+        <div class="dash-map-placeholder">
+          Não foi possível montar o mapa.<br><br>
+          Verifique o cruzamento das cidades e as colunas de latitude e longitude.
         </div>
         """
 
-    rows_html = []
-    for item in city_alert_rows:
-        rows_html.append(f"""
-        <tr class="{h(item.get('row_class', ''))}">
-          <td>{h(item.get('cidade', ''))}</td>
-          <td style="text-align:right;">{h(format_number_br(item.get('valor', 0.0)))}</td>
-          <td style="text-align:center;">{h(str(item.get('qtde_cnpj', 0)))}</td>
-        </tr>
-        """)
+    valid_points = [
+        p for p in city_points
+        if p.get("lat") is not None and p.get("lon") is not None
+    ]
 
-    return f"""
-    <div style="max-height:340px; overflow:auto; width:100%;">
-      <table class="dash-table-big">
-        <thead>
-          <tr>
-            <th>Cidade</th>
-            <th style="width:110px; text-align:right;">Valor</th>
-            <th style="width:90px; text-align:center;">Qtde CNPJ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {''.join(rows_html)}
-        </tbody>
-      </table>
+    if not valid_points:
+        return """
+        <div class="dash-map-placeholder">
+          Nenhuma coordenada válida encontrada.
+        </div>
+        """
+
+    min_lon = min(p["lon"] for p in valid_points)
+    max_lon = max(p["lon"] for p in valid_points)
+    min_lat = min(p["lat"] for p in valid_points)
+    max_lat = max(p["lat"] for p in valid_points)
+
+    lon_span = max_lon - min_lon
+    lat_span = max_lat - min_lat
+
+    if lon_span == 0:
+        lon_span = 0.3
+    if lat_span == 0:
+        lat_span = 0.3
+
+    lon_margin = lon_span * 0.08
+    lat_margin = lat_span * 0.08
+
+    min_lon -= lon_margin
+    max_lon += lon_margin
+    min_lat -= lat_margin
+    max_lat += lat_margin
+
+    pad = 10
+
+    def project(lon, lat):
+        x = pad + ((lon - min_lon) / (max_lon - min_lon)) * (width - 2 * pad)
+        y = pad + (1 - ((lat - min_lat) / (max_lat - min_lat))) * (height - 2 * pad)
+        return x, y
+
+    circles = []
+    labels = []
+
+    for p in valid_points:
+        x, y = project(p["lon"], p["lat"])
+        fill = p["fill"]
+        cidade = p.get("cidade", "")
+        status_txt = p.get("status_txt", "")
+        total_2024 = p.get("total_2024", 0)
+        total_2025 = p.get("total_2025", 0)
+        total_2026 = p.get("total_2026", 0)
+
+        title = h(
+            f"{cidade} | {status_txt} | "
+            f"2024: {format_number_br(total_2024)} | "
+            f"2025: {format_number_br(total_2025)} | "
+            f"2026: {format_number_br(total_2026)}"
+        )
+
+        circles.append(
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="6.2" fill="{fill}" stroke="#ffffff" stroke-width="1.4">'
+            f'<title>{title}</title></circle>'
+        )
+
+        labels.append(
+            f'<text class="map-label" x="{x + 8:.2f}" y="{y - 8:.2f}" font-size="10" fill="#1f2937">{h(cidade[:22])}</text>'
+        )
+
+    map_uid = f"map_{int(time.time() * 1000)}_{len(valid_points)}"
+
+    svg = f"""
+    <div style="width:100%; background:#eef7f7; border:1px solid #cbd5e1; border-radius:6px; padding:6px; box-sizing:border-box;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; flex-wrap:wrap;">
+        <div style="font-size:10px; color:#334155; font-weight:700;">
+          Use os botões para zoom
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button type="button" onclick="zoomMap('{map_uid}', 1.2)" title="Aumentar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">+</button>
+          <button type="button" onclick="zoomMap('{map_uid}', 0.83)" title="Diminuir zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:800; font-size:16px; line-height:1;">−</button>
+          <button type="button" onclick="resetMapZoom('{map_uid}')" title="Resetar zoom" style="padding:4px 10px; border-radius:6px; border:1px solid #94a3b8; background:#ffffff; cursor:pointer; font-weight:700; font-size:12px;">Reset</button>
+        </div>
+      </div>
+
+      <div style="width:100%; height:100%; overflow:auto; background:#dff3f1; border-radius:4px;">
+        <svg id="{map_uid}" viewBox="0 0 {width} {height}" width="100%" height="100%" style="display:block; background:#dff3f1; border-radius:4px; transform-origin:center center; transition:transform .15s ease;">
+          <rect x="0" y="0" width="{width}" height="{height}" fill="#dff3f1"></rect>
+          <rect x="8" y="8" width="{width-16}" height="{height-16}" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"></rect>
+          {''.join(circles)}
+          <g class="map-labels" style="display:none;">
+            {''.join(labels)}
+          </g>
+        </svg>
+      </div>
+
+      <div style="display:flex; gap:12px; justify-content:center; align-items:center; margin-top:6px; flex-wrap:wrap; font-size:10px;">
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#16a34a; display:inline-block;"></span>
+          Vendas em 2026
+        </span>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span style="width:10px; height:10px; border-radius:50%; background:#dc2626; display:inline-block;"></span>
+          Sem vendas em 2026
+        </span>
+      </div>
     </div>
+
+    <script>
+      window._mapZoomLevels = window._mapZoomLevels || {{}};
+
+      function applyMapLabelVisibility(mapId) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+
+        const zoom = window._mapZoomLevels[mapId] || 1;
+        const labels = el.querySelector('.map-labels');
+        if (!labels) return;
+
+        if (zoom > 1.05) {{
+          labels.style.display = 'block';
+        }} else {{
+          labels.style.display = 'none';
+        }}
+      }}
+
+      function zoomMap(mapId, factor) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        if (!window._mapZoomLevels[mapId]) window._mapZoomLevels[mapId] = 1;
+
+        let next = window._mapZoomLevels[mapId] * factor;
+        if (next < 1) next = 1;
+        if (next > 8) next = 8;
+
+        window._mapZoomLevels[mapId] = next;
+        el.style.transform = 'scale(' + next + ')';
+        applyMapLabelVisibility(mapId);
+      }}
+
+      function resetMapZoom(mapId) {{
+        const el = document.getElementById(mapId);
+        if (!el) return;
+        window._mapZoomLevels[mapId] = 1;
+        el.style.transform = 'scale(1)';
+        applyMapLabelVisibility(mapId);
+      }}
+
+      setTimeout(function() {{
+        if (!window._mapZoomLevels['{map_uid}']) {{
+          window._mapZoomLevels['{map_uid}'] = 1;
+        }}
+        applyMapLabelVisibility('{map_uid}');
+      }}, 0);
+    </script>
     """
-    
+    return svg
+
+
 # =========================
 # AGENDA - FUNÇÕES
 # =========================
@@ -2780,126 +2911,377 @@ def admin_dashboard():
             </div>
             """
 
-         = ""
-        mapa_info_msg =mapa_svg_html = ""
-cidades_mapa_qtd = 0
+        mapa_svg_html = ""
+        mapa_info_msg = ""
+        cidades_mapa_qtd = 0
+        cidades_sem_coordenada = 0
 
-try:
-    if not cidade_col:
-        raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
+        map_debug = {
+            "municipios_url": MUNICIPIOS_URL,
+            "cidade_muni_col": "nome",
+            "lat_col": "latitude",
+            "lon_col": "longitude",
+            "labels": "aparecem no zoom",
+            "zoom": "ativo"
+        }
 
-    cnpj_col = pick_col_flexible(headers, [
-        "Cnpj", "CNPJ", "Cnpj Cliente", "CNPJ Cliente"
-    ])
+        try:
+            rows_cidades, municipios_index, erro_muni = load_public_municipios()
+            if erro_muni:
+                raise RuntimeError(erro_muni)
 
-    cidades_dict = {}
+            if not rows_cidades:
+                raise RuntimeError("Nenhum município foi carregado da URL pública.")
 
-    for r in filtered_rows:
-        cidade_original = norm(r.get(cidade_col, ""))
-        cidade_base = normalize_city_key(cidade_original)
+            if not cidade_col:
+                raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
 
-        if not cidade_base:
-            continue
+            vendas_por_cidade = {}
+            for r in filtered_rows:
+                cidade_original = norm(r.get(cidade_col, ""))
+                cidade_base = normalize_city_key(cidade_original)
 
-        valor = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
-        cnpj = norm(r.get(cnpj_col, "")) if cnpj_col else ""
+                if not cidade_base:
+                    continue
 
-        if cidade_base not in cidades_dict:
-            cidades_dict[cidade_base] = {
-                "cidade": cidade_original,
-                "valor": 0.0,
-                "cnpjs": set()
-            }
+                total_2024 = parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0
+                total_2025 = parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0
+                total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
 
-        cidades_dict[cidade_base]["valor"] += valor
+                if cidade_base not in vendas_por_cidade:
+                    vendas_por_cidade[cidade_base] = {
+                        "cidade_original": cidade_original,
+                        "total_2024": 0.0,
+                        "total_2025": 0.0,
+                        "total_2026": 0.0,
+                    }
 
-        if cnpj:
-            cidades_dict[cidade_base]["cnpjs"].add(cnpj)
+                vendas_por_cidade[cidade_base]["total_2024"] += total_2024
+                vendas_por_cidade[cidade_base]["total_2025"] += total_2025
+                vendas_por_cidade[cidade_base]["total_2026"] += total_2026
 
-    cidades_alerta = []
+            city_points = []
 
-    for _, dados in cidades_dict.items():
-        cidade = dados["cidade"]
-        valor = dados["valor"]
-        qtde_cnpj = len(dados["cnpjs"])
+            for cidade_key, dados_cidade in vendas_por_cidade.items():
+                cidade_original = dados_cidade["cidade_original"]
 
-        row_class = ""
-        prioridade = 99
+                lat, lon, nome_municipio = find_city_coords_public(
+                    rows_cidades,
+                    municipios_index,
+                    cidade_key,
+                    cidade_original
+                )
 
-        # 🔴 prioridade máxima
-        if qtde_cnpj == 0:
-            row_class = "row-red"
-            prioridade = 1
+                if lat is None or lon is None:
+                    cidades_sem_coordenada += 1
+                    continue
 
-        # 🟡 segunda prioridade
-        elif valor == 0:
-            row_class = "row-yellow"
-            prioridade = 2
+                total_2024 = dados_cidade["total_2024"]
+                total_2025 = dados_cidade["total_2025"]
+                total_2026 = dados_cidade["total_2026"]
 
-        # 🔥 só entra se for problema
-        if row_class:
-            cidades_alerta.append({
-                "cidade": cidade,
-                "valor": valor,
-                "qtde_cnpj": qtde_cnpj,
-                "row_class": row_class,
-                "prioridade": prioridade
-            })
+                if total_2026 > 0:
+                    fill = "#16a34a"
+                    status_txt = "Vendas em 2026"
+                else:
+                    fill = "#dc2626"
+                    status_txt = "Sem vendas em 2026"
 
-    # ordenação
-    cidades_alerta.sort(
-        key=lambda x: (
-            x["prioridade"],
-            normalize_city_key(x["cidade"]),
-            -x["valor"]
+                city_points.append({
+                    "cidade": cidade_original or nome_municipio,
+                    "lat": lat,
+                    "lon": lon,
+                    "total_2024": total_2024,
+                    "total_2025": total_2025,
+                    "total_2026": total_2026,
+                    "fill": fill,
+                    "status_txt": status_txt
+                })
+
+            cidades_mapa_qtd = len(city_points)
+            mapa_svg_html = build_city_map_svg(city_points)
+
+            if not city_points:
+                mapa_info_msg = "Nenhuma cidade da carteira encontrou coordenadas no arquivo público."
+            elif cidades_sem_coordenada > 0:
+                mapa_info_msg = f"{cidades_sem_coordenada} cidade(s) da carteira não encontraram coordenadas."
+
+        except Exception as e:
+            erro_txt = norm(str(e))
+            mapa_svg_html = f"""
+            <div class="dash-map-placeholder">
+              Erro ao montar mapa.<br><br>
+              {h(erro_txt)}
+            </div>
+            """
+
+        gold_subinfo = ""
+        gold_table_html = ""
+
+        if not header_rep_code:
+            gold_subinfo = """
+            <div style="font-size:10px; color:#92400e;">
+              Selecione um representante para consultar os clientes GOLD.
+            </div>
+            """
+        elif gold_info.get("ok"):
+            gold_subinfo = f"""
+            <div style="font-size:10px; color:#92400e;">
+              Rep: <b>{h(header_rep_code)}</b> | Aba GOLD: <b>{h(gold_info.get('worksheet_title', GOLD_WS))}</b>
+            </div>
+            """
+
+            if gold_info.get("gold_rows"):
+                gold_rows_html = []
+                for item in gold_info.get("gold_rows", [])[:20]:
+                    gold_rows_html.append(f"""
+                    <tr>
+                      <td>{h(item.get('codigo', ''))}</td>
+                      <td>{h(item.get('cliente_grupo', ''))}</td>
+                      <td>{h(item.get('grupo_cliente_cliente', ''))}</td>
+                    </tr>
+                    """)
+
+                gold_table_html = f"""
+                <div style="margin-top:8px; max-height:180px; overflow:auto; width:100%;">
+                  <table class="dash-table-mini">
+                    <thead>
+                      <tr>
+                        <th style="width:90px;">Código</th>
+                        <th>Cliente / Grupo</th>
+                        <th>Grupo Cliente / Cliente</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {''.join(gold_rows_html)}
+                    </tbody>
+                  </table>
+                </div>
+                """
+            else:
+                gold_table_html = """
+                <div style="margin-top:8px; font-size:10px; color:#92400e;">
+                  Nenhum cliente GOLD encontrado para este representante.
+                </div>
+                """
+        elif gold_info.get("error"):
+            gold_subinfo = f"""
+            <div style="font-size:10px; color:#b91c1c;">
+              Erro GOLD: {h(gold_info.get('error'))}
+            </div>
+            """
+
+        body = f"""
+        <div class="dash-page">
+
+          <div class="card no-print a3-page">
+            <form method="get">
+              <div class="grid">
+                <div>
+                  <label>Supervisor</label>
+                  <select name="sup">
+                    <option value="">(Todos)</option>
+                    {''.join([f"<option value='{h(s)}' {'selected' if norm(s) == sup_sel else ''}>{h(s)}</option>" for s in sup_list])}
+                  </select>
+                </div>
+
+                <div>
+                  <label>Representante</label>
+                  <select name="rep">
+                    <option value="">(Todos)</option>
+                    {''.join([f"<option value='{h(r)}' {'selected' if norm(r) == rep_sel else ''}>{h(r)}</option>" for r in rep_list])}
+                  </select>
+                </div>
+
+                <div class="print-toolbar">
+                  <button type="submit">Aplicar</button>
+                  <a href="{url_for('admin_dashboard')}" class="btn-link secondary">Limpar</a>
+                  <button type="button" class="btn-link orange" onclick="imprimirTelaA3()">Imprimir A3</button>
+                </div>
+
+                <div class="print-note">
+                  Impressão ajustada para ficar o mais próximo possível da tela em uma página A3 horizontal.
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <div class="a3-page no-break">
+            <div class="print-scale-wrap">
+              <div class="dash-shell">
+
+                <div class="dash-header">
+                  <div>
+                    {
+                        f'<img src="{h(rep_photo)}" alt="Representante" class="dash-avatar">'
+                        if rep_photo else
+                        '<div class="dash-avatar-placeholder">FOTO<br>REP</div>'
+                    }
+                  </div>
+
+                  <div class="dash-title-wrap">
+                    <div class="dash-main-title">Acompanhamento de Representante</div>
+                    <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
+                    <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
+                    <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
+                  </div>
+
+                  <div class="dash-meta-box">
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">Meta</div>
+                      <div class="dash-metric-value">{h(header_meta)}</div>
+                    </div>
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">Realizado</div>
+                      <div class="dash-metric-value">{h(header_realizado)}</div>
+                    </div>
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">% Realizado</div>
+                      <div class="dash-metric-value">{h(header_percentual)}</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <img src="{h(LOGO_URL)}" alt="Logo Kidy" class="dash-kidy-logo">
+                  </div>
+                </div>
+
+                <div class="dash-row-top">
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">10 Maiores Clientes</div>
+                    <div class="dash-panel-body">
+                      {ranking_2026_html}
+                    </div>
+                  </div>
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">10 Maiores Clientes 2025</div>
+                    <div class="dash-panel-body">
+                      {ranking_2025_html}
+                    </div>
+                  </div>
+
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Cidades da Região</div>
+                    <div class="dash-panel-body-map">
+                      {mapa_svg_html}
+                      <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                        Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
+                        {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="dash-row-bottom">
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Clientes sem Compra</div>
+                    <div class="dash-panel-body">
+                      {clientes_sem_compra_html}
+                    </div>
+                  </div>
+
+                  <div class="dash-right-stack">
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Clientes Gold</div>
+                      <div class="dash-panel-body">
+                        <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
+                          <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                          {gold_subinfo}
+                          {gold_table_html}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Cobertura da Carteira</div>
+                      <div class="dash-panel-body">
+                        <div class="dash-coverage-box">
+                          Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                          Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                          Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="margin-top:8px;">
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Agenda Semanal do Representante</div>
+                    <div class="dash-panel-body">
+                      {agenda_semanal_html}
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+        """
+
+        if DEBUG_MODE:
+            abas = ", ".join(debug_info.get("worksheets", []))
+            body += f"""
+            <div class="card debug-card no-print">
+              <div class="title">DEBUG DASHBOARD ADMIN</div>
+              <div class="line"><b>SHEET_ID:</b> {h(debug_info.get("sheet_id", ""))}</div>
+              <div class="line"><b>NOME PLANILHA:</b> {h(debug_info.get("spreadsheet_title", ""))}</div>
+              <div class="line"><b>ABAS:</b> {h(abas)}</div>
+              <div class="line"><b>ROWS FILTRADAS:</b> {h(len(filtered_rows))}</div>
+              <div class="line"><b>CLIENTES SEM COMPRA:</b> {h(len(clientes_sem_compra))}</div>
+              <div class="line"><b>TOP 2026:</b> {h(len(ranking_2026))}</div>
+              <div class="line"><b>TOP 2025:</b> {h(len(ranking_2025))}</div>
+              <div class="line"><b>AGENDA SHEET ID:</b> {h(extract_google_sheet_id(AGENDA_SHEET_URL))}</div>
+              <div class="line"><b>AGENDA ABA:</b> {h(WS_AGENDA)}</div>
+              <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
+              <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
+              <div class="line"><b>CIDADES SEM COORDENADA:</b> {h(cidades_sem_coordenada)}</div>
+              <div class="line"><b>MUNICIPIOS URL:</b> {h(map_debug['municipios_url'])}</div>
+              <div class="line"><b>COLUNA CIDADE BASE:</b> {h(cidade_col)}</div>
+              <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
+              <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
+              <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
+              <div class="line"><b>LABELS MAPA:</b> {h(map_debug['labels'])}</div>
+              <div class="line"><b>ZOOM MAPA:</b> {h(map_debug['zoom'])}</div>
+              <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
+              <div class="line"><b>DATA AGENDA COL:</b> {h(data_agenda_col)}</div>
+              <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
+              <div class="line"><b>SEMANA COL:</b> {h(semana_col)}</div>
+              <div class="line"><b>STATUS CLIENTE COL:</b> {h(status_cliente_col)}</div>
+              <div class="line"><b>OBS COL:</b> {h(observacoes_col)}</div>
+              <hr style="border-color:#334155;">
+              <div class="line"><b>GOLD SHEET ID/URL RESOLVIDO:</b> {h(gold_info.get('resolved_sheet_id', ''))}</div>
+              <div class="line"><b>GOLD WS:</b> {h(GOLD_WS)}</div>
+              <div class="line"><b>GOLD SHEET TITLE:</b> {h(gold_info.get('sheet_title', ''))}</div>
+              <div class="line"><b>GOLD WORKSHEET TITLE:</b> {h(gold_info.get('worksheet_title', ''))}</div>
+              <div class="line"><b>GOLD REP COL:</b> {h(gold_info.get('rep_col', ''))}</div>
+              <div class="line"><b>GOLD CODIGO COL:</b> {h(gold_info.get('codigo_col', ''))}</div>
+              <div class="line"><b>GOLD CLIENTE COL:</b> {h(gold_info.get('cliente_col', ''))}</div>
+              <div class="line"><b>GOLD GRUPO COL:</b> {h(gold_info.get('grupo_col', ''))}</div>
+              <div class="line"><b>GOLD SUPERVISOR COL:</b> {h(gold_info.get('supervisor_col', ''))}</div>
+              <div class="line"><b>TOTAL GOLD:</b> {h(gold_info.get('total_gold', 0))}</div>
+              <div class="line"><b>GOLD OK:</b> {h(gold_info.get('ok', False))}</div>
+              <div class="line"><b>GOLD ERROR:</b> {h(gold_info.get('error', ''))}</div>
+            </div>
+            """
+
+        return render_template_string(
+            BASE_HTML,
+            title=APP_TITLE,
+            subtitle="Dashboard Admin",
+            logged=True,
+            user_login=session.get("user_login"),
+            user_name=session.get("rep_name", ""),
+            user_type=session.get("user_type"),
+            user_photo_url="",
+            body=body
         )
-    )
 
-    cidades_mapa_qtd = len(cidades_alerta)
-
-    # montagem HTML
-    if not cidades_alerta:
-        mapa_svg_html = """
-        <div class="dash-map-placeholder">
-          Nenhuma cidade sem CNPJ ou sem vendas.
-        </div>
-        """
-    else:
-        linhas = []
-        for item in cidades_alerta:
-            linhas.append(f"""
-            <tr class="{item['row_class']}">
-              <td>{h(item['cidade'])}</td>
-              <td style="text-align:right;">{h(format_number_br(item['valor']))}</td>
-              <td style="text-align:center;">{item['qtde_cnpj']}</td>
-            </tr>
-            """)
-
-        mapa_svg_html = f"""
-        <div style="max-height:340px; overflow:auto;">
-          <table class="dash-table-big">
-            <thead>
-              <tr>
-                <th>Cidade</th>
-                <th style="text-align:right;">Valor</th>
-                <th style="text-align:center;">Qtde CNPJ</th>
-              </tr>
-            </thead>
-            <tbody>
-              {''.join(linhas)}
-            </tbody>
-          </table>
-        </div>
-        """
-
-except Exception as e:
-    erro_txt = norm(str(e))
-    mapa_svg_html = f"""
-    <div class="dash-map-placeholder">
-      Erro ao montar tabela.<br><br>
-      {h(erro_txt)}
-    </div>
-    """Cidades sem vendas
+    except Exception as e:
+        return render_error_page("Dashboard Admin", f"Erro ao abrir dashboard admin: {norm(str(e))}")
 
 
 @app.route("/dashboard", methods=["GET"])
