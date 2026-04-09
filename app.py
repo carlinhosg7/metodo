@@ -1648,6 +1648,11 @@ def build_debug_sheet_info(sh=None):
         return result
 
 
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
+
+
 # =========================
 # ERROR HANDLER
 # =========================
