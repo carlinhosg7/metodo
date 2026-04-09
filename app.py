@@ -2917,26 +2917,21 @@ def admin_dashboard():
         cidades_sem_coordenada = 0
 
         map_debug = {
-            "municipios_url": MUNICIPIOS_URL,
-            "cidade_muni_col": "nome",
-            "lat_col": "latitude",
-            "lon_col": "longitude",
-            "labels": "aparecem no zoom",
-            "zoom": "ativo"
+            "tipo": "tabela",
+            "regra_vermelho": "qtde_cnpj = 0",
+            "regra_amarelo": "valor = 0",
         }
 
         try:
-            rows_cidades, municipios_index, erro_muni = load_public_municipios()
-            if erro_muni:
-                raise RuntimeError(erro_muni)
-
-            if not rows_cidades:
-                raise RuntimeError("Nenhum município foi carregado da URL pública.")
-
             if not cidade_col:
                 raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
 
-            vendas_por_cidade = {}
+            cnpj_col = pick_col_flexible(headers, [
+                "Cnpj", "CNPJ", "Cnpj Cliente", "CNPJ Cliente"
+            ])
+
+            cidades_dict = {}
+
             for r in filtered_rows:
                 cidade_original = norm(r.get(cidade_col, ""))
                 cidade_base = normalize_city_key(cidade_original)
@@ -2944,73 +2939,77 @@ def admin_dashboard():
                 if not cidade_base:
                     continue
 
-                total_2024 = parse_number_br(r.get(t2024_col, "")) if t2024_col else 0.0
-                total_2025 = parse_number_br(r.get(t2025_col, "")) if t2025_col else 0.0
-                total_2026 = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
+                valor = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
+                cnpj = norm(r.get(cnpj_col, "")) if cnpj_col else ""
 
-                if cidade_base not in vendas_por_cidade:
-                    vendas_por_cidade[cidade_base] = {
-                        "cidade_original": cidade_original,
-                        "total_2024": 0.0,
-                        "total_2025": 0.0,
-                        "total_2026": 0.0,
+                if cidade_base not in cidades_dict:
+                    cidades_dict[cidade_base] = {
+                        "cidade": cidade_original,
+                        "valor": 0.0,
+                        "cnpjs": set(),
                     }
 
-                vendas_por_cidade[cidade_base]["total_2024"] += total_2024
-                vendas_por_cidade[cidade_base]["total_2025"] += total_2025
-                vendas_por_cidade[cidade_base]["total_2026"] += total_2026
+                cidades_dict[cidade_base]["valor"] += valor
 
-            city_points = []
+                if cnpj:
+                    cidades_dict[cidade_base]["cnpjs"].add(cnpj)
 
-            for cidade_key, dados_cidade in vendas_por_cidade.items():
-                cidade_original = dados_cidade["cidade_original"]
+            cidades_alerta = []
 
-                lat, lon, nome_municipio = find_city_coords_public(
-                    rows_cidades,
-                    municipios_index,
-                    cidade_key,
-                    cidade_original
+            for _, dados in cidades_dict.items():
+                cidade = dados["cidade"]
+                valor = dados["valor"]
+                qtde_cnpj = len(dados["cnpjs"])
+
+                row_class = ""
+                prioridade = 99
+                motivo = ""
+
+                if qtde_cnpj == 0:
+                    row_class = "row-red"
+                    prioridade = 1
+                    motivo = "sem_cnpj"
+                elif valor == 0:
+                    row_class = "row-yellow"
+                    prioridade = 2
+                    motivo = "sem_vendas"
+
+                if row_class:
+                    cidades_alerta.append({
+                        "cidade": cidade,
+                        "valor": valor,
+                        "qtde_cnpj": qtde_cnpj,
+                        "row_class": row_class,
+                        "prioridade": prioridade,
+                        "motivo": motivo,
+                    })
+
+            cidades_alerta.sort(
+                key=lambda x: (
+                    x["prioridade"],
+                    normalize_city_key(x["cidade"]),
+                    -x["valor"],
                 )
+            )
 
-                if lat is None or lon is None:
-                    cidades_sem_coordenada += 1
-                    continue
+            cidades_mapa_qtd = len(cidades_alerta)
+            mapa_svg_html = build_city_alert_table_html(cidades_alerta)
 
-                total_2024 = dados_cidade["total_2024"]
-                total_2025 = dados_cidade["total_2025"]
-                total_2026 = dados_cidade["total_2026"]
-
-                if total_2026 > 0:
-                    fill = "#16a34a"
-                    status_txt = "Vendas em 2026"
-                else:
-                    fill = "#dc2626"
-                    status_txt = "Sem vendas em 2026"
-
-                city_points.append({
-                    "cidade": cidade_original or nome_municipio,
-                    "lat": lat,
-                    "lon": lon,
-                    "total_2024": total_2024,
-                    "total_2025": total_2025,
-                    "total_2026": total_2026,
-                    "fill": fill,
-                    "status_txt": status_txt
-                })
-
-            cidades_mapa_qtd = len(city_points)
-            mapa_svg_html = build_city_map_svg(city_points)
-
-            if not city_points:
-                mapa_info_msg = "Nenhuma cidade da carteira encontrou coordenadas no arquivo público."
-            elif cidades_sem_coordenada > 0:
-                mapa_info_msg = f"{cidades_sem_coordenada} cidade(s) da carteira não encontraram coordenadas."
+            if not cidades_alerta:
+                mapa_info_msg = "Nenhuma cidade sem CNPJ ou sem vendas encontrada."
+            else:
+                qtd_sem_cnpj = sum(1 for x in cidades_alerta if x["motivo"] == "sem_cnpj")
+                qtd_sem_vendas = sum(1 for x in cidades_alerta if x["motivo"] == "sem_vendas")
+                mapa_info_msg = (
+                    f"{qtd_sem_cnpj} cidade(s) sem CNPJ | "
+                    f"{qtd_sem_vendas} cidade(s) sem vendas"
+                )
 
         except Exception as e:
             erro_txt = norm(str(e))
             mapa_svg_html = f"""
             <div class="dash-map-placeholder">
-              Erro ao montar mapa.<br><br>
+              Erro ao montar tabela.<br><br>
               {h(erro_txt)}
             </div>
             """
@@ -3162,11 +3161,11 @@ def admin_dashboard():
                   </div>
 
                   <div class="dash-panel">
-                    <div class="dash-panel-title">Cidades da Região</div>
+                    <div class="dash-panel-title">Cidades sem CNPJ / sem vendas</div>
                     <div class="dash-panel-body-map">
                       {mapa_svg_html}
                       <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
-                        Cidades plotadas: <b>{h(cidades_mapa_qtd)}</b>
+                        Cidades encontradas: <b>{h(cidades_mapa_qtd)}</b>
                         {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                       </div>
                     </div>
@@ -3238,14 +3237,10 @@ def admin_dashboard():
               <div class="line"><b>AGENDA ABA:</b> {h(WS_AGENDA)}</div>
               <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
-              <div class="line"><b>CIDADES SEM COORDENADA:</b> {h(cidades_sem_coordenada)}</div>
-              <div class="line"><b>MUNICIPIOS URL:</b> {h(map_debug['municipios_url'])}</div>
+              <div class="line"><b>TIPO PAINEL CIDADES:</b> {h(map_debug['tipo'])}</div>
               <div class="line"><b>COLUNA CIDADE BASE:</b> {h(cidade_col)}</div>
-              <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
-              <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
-              <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
-              <div class="line"><b>LABELS MAPA:</b> {h(map_debug['labels'])}</div>
-              <div class="line"><b>ZOOM MAPA:</b> {h(map_debug['zoom'])}</div>
+              <div class="line"><b>REGRA VERMELHO:</b> {h(map_debug['regra_vermelho'])}</div>
+              <div class="line"><b>REGRA AMARELO:</b> {h(map_debug['regra_amarelo'])}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
               <div class="line"><b>DATA AGENDA COL:</b> {h(data_agenda_col)}</div>
               <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
