@@ -804,6 +804,43 @@ def find_city_coords_public(rows_cidades, municipios_index, cidade_base_norm, ci
     return lat, lon, nome_final
 
 
+
+
+def build_city_alert_table_html(city_alert_rows):
+    if not city_alert_rows:
+        return """
+        <div class="dash-map-placeholder" style="min-height:220px;">
+          Nenhuma cidade sem CNPJ ou sem vendas encontrada.
+        </div>
+        """
+
+    rows_html = []
+    for item in city_alert_rows:
+        rows_html.append(f"""
+        <tr class="{h(item.get('row_class', ''))}">
+          <td>{h(item.get('cidade', ''))}</td>
+          <td style="text-align:right;">{h(format_number_br(item.get('valor', 0.0)))}</td>
+          <td style="text-align:center;">{h(str(item.get('qtde_cnpj', 0)))}</td>
+        </tr>
+        """)
+
+    return f"""
+    <div style="max-height:340px; overflow:auto; width:100%;">
+      <table class="dash-table-big">
+        <thead>
+          <tr>
+            <th>Cidade</th>
+            <th style="width:110px; text-align:right;">Valor</th>
+            <th style="width:90px; text-align:center;">Qtde CNPJ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(rows_html)}
+        </tbody>
+      </table>
+    </div>
+    """
+
 def build_city_map_svg(city_points, width=900, height=520):
     if not city_points:
         return """
