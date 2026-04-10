@@ -2672,7 +2672,12 @@ def admin_dashboard():
         sup_col = pick_col_flexible(headers, [
             "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
         ])
-        cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
+        cidade_col = (
+            pick_col_exact(headers, ["Cidades", "CIDADE", "Cidade", "CIDADE CLIENTE", "Cidade Cliente"]) or
+            pick_col_flexible(headers, ["Cidades", "Cidade", "CIDADE CLIENTE", "Cidade Cliente"]) or
+            pick_col_exact(headers, ["Município", "Municipio", "MUNICIPIO"]) or
+            pick_col_flexible(headers, ["Município", "Municipio"])
+        )
         cnpj_col = pick_col_flexible(headers, ["CNPJ", "Cnpj", "Cpf/Cnpj", "CPF/CNPJ", "Documento"])
 
         t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
@@ -4018,5 +4023,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.getenv("PORT", "5000")),
         debug=DEBUG_MODE
-    )#   t e s t e   c o m m i t  
- 
+    )#
