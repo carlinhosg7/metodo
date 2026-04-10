@@ -2053,10 +2053,11 @@ BASE_HTML = """
     }
 
     .dash-row-top {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1.25fr;
-      gap: 8px;
-      margin-bottom: 8px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr; /* <-- deixa os 3 iguais */
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: stretch; /* IMPORTANTE */
     }
 
     .dash-row-bottom {
@@ -2073,10 +2074,9 @@ BASE_HTML = """
     }
 
     .dash-panel {
-      border: 1px solid #9ca3af;
-      background: #ffffff;
-      overflow: hidden;
-      height: 100%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     }
 
     .dash-panel-title {
