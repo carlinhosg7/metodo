@@ -2086,58 +2086,39 @@ BASE_HTML = """
 
     .dash-dashboard-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr 0.95fr;
+      grid-template-columns: 1.65fr 0.95fr 1fr;
       grid-template-areas:
-        "top1 top2 city"
-        "gold coverage city"
-        "semcompra semcompra city";
+        "top2026 top2025 cidade"
+        "semcompra goldcarteira cidade";
       gap: 8px;
       align-items: stretch;
       margin-bottom: 8px;
     }
 
-    .dash-row-top {
-      display: contents;
-    }
+    .dash-cell-top2026 { grid-area: top2026; }
+    .dash-cell-top2025 { grid-area: top2025; }
+    .dash-cell-cidade { grid-area: cidade; }
+    .dash-cell-semcompra { grid-area: semcompra; }
+    .dash-cell-goldcarteira { grid-area: goldcarteira; }
 
-    .dash-top-2026 {
-      grid-area: top1;
-    }
-
-    .dash-top-2025 {
-      grid-area: top2;
-    }
-
-    .dash-city-panel {
-      grid-area: city;
+    .dash-right-stack {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 8px;
       height: 100%;
       min-height: 100%;
     }
 
-    .dash-row-bottom {
-      display: contents;
-    }
-
-    .dash-gold-panel {
-      grid-area: gold;
-    }
-
-    .dash-coverage-panel {
-      grid-area: coverage;
-    }
-
-    .dash-semcompra-panel {
-      grid-area: semcompra;
-    }
-
-    .dash-right-stack {
-      display: contents;
+    .dash-cell-cidade,
+    .dash-cell-cidade .dash-panel,
+    .dash-cell-cidade .dash-panel-body-map {
+      height: 100%;
     }
 
     .dash-panel {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     }
 
     .dash-panel-title {
@@ -2159,11 +2140,8 @@ BASE_HTML = """
     .dash-panel-body-map {
     padding: 6px;
     box-sizing: border-box;
+    min-height: auto;
     height: 100%;
-    min-height: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
 }
 
     .dash-table-mini {
@@ -3231,23 +3209,26 @@ def admin_dashboard():
                 </div>
 
                 <div class="dash-dashboard-grid">
-
-                  <div class="dash-row-top">
-                    <div class="dash-panel dash-top-2026">
+                  <div class="dash-cell-top2026">
+                    <div class="dash-panel">
                       <div class="dash-panel-title">10 Maiores Clientes</div>
                       <div class="dash-panel-body">
                         {ranking_2026_html}
                       </div>
                     </div>
+                  </div>
 
-                    <div class="dash-panel dash-top-2025">
+                  <div class="dash-cell-top2025">
+                    <div class="dash-panel">
                       <div class="dash-panel-title">10 Maiores Clientes 2025</div>
                       <div class="dash-panel-body">
                         {ranking_2025_html}
                       </div>
                     </div>
+                  </div>
 
-                    <div class="dash-panel dash-city-panel">
+                  <div class="dash-cell-cidade">
+                    <div class="dash-panel">
                       <div class="dash-panel-title">Resumo por Cidade</div>
                       <div class="dash-panel-body-map">
                         {mapa_svg_html}
@@ -3259,9 +3240,18 @@ def admin_dashboard():
                     </div>
                   </div>
 
-                  <div class="dash-row-bottom">
+                  <div class="dash-cell-semcompra">
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Clientes sem Compra</div>
+                      <div class="dash-panel-body">
+                        {clientes_sem_compra_html}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="dash-cell-goldcarteira">
                     <div class="dash-right-stack">
-                      <div class="dash-panel dash-gold-panel">
+                      <div class="dash-panel">
                         <div class="dash-panel-title">Clientes Gold</div>
                         <div class="dash-panel-body">
                           <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
@@ -3272,7 +3262,7 @@ def admin_dashboard():
                         </div>
                       </div>
 
-                      <div class="dash-panel dash-coverage-panel">
+                      <div class="dash-panel">
                         <div class="dash-panel-title">Cobertura da Carteira</div>
                         <div class="dash-panel-body">
                           <div class="dash-coverage-box">
@@ -3283,16 +3273,8 @@ def admin_dashboard():
                           </div>
                         </div>
                       </div>
-
-                      <div class="dash-panel dash-semcompra-panel">
-                        <div class="dash-panel-title">Clientes sem Compra</div>
-                        <div class="dash-panel-body">
-                          {clientes_sem_compra_html}
-                        </div>
-                      </div>
                     </div>
                   </div>
-
                 </div>
 
                 <div style="margin-top:8px;">
