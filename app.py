@@ -633,8 +633,8 @@ def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, val
     )
 
     html = f"""
-    <div style="max-height:410px; overflow:auto; width:100%;">
-      <table class="dash-table-mini">
+    <div style="max-height:180px; overflow:auto; width:100%;">
+        <table class="dash-table-mini">
         <thead>
           <tr>
             <th>Cidades</th>
