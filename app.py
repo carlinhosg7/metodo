@@ -1992,7 +1992,7 @@ BASE_HTML = """
       border: 1px solid #cfd4dc;
       border-top: 3px solid #f97316;
       border-bottom: 3px solid #f97316;
-      padding: 10px;
+      padding: 6px;
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.05);
       width: 100%;
@@ -2093,10 +2093,10 @@ BASE_HTML = """
     }
 
     .dash-row-bottom {
-      display: grid;
-      grid-template-columns: 1.65fr 0.95fr;
-      gap: 8px;
-      align-items: stretch;
+    display: grid;
+    grid-template-columns: 1.65fr 0.95fr;
+    gap: 4px; /* 👈 diminui espaço */
+    align-items: stretch;
     }
 
     .dash-right-stack {
@@ -2128,10 +2128,11 @@ BASE_HTML = """
     }
 
     .dash-panel-body-map {
-      padding: 6px;
-      box-sizing: border-box;
-      min-height: 410px;
-    }
+    padding: 6px;
+    box-sizing: border-box;
+    min-height: auto;
+    height: 100%;
+}
 
     .dash-table-mini {
       width: 100%;
