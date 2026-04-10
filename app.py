@@ -2086,10 +2086,10 @@ BASE_HTML = """
 
     .dash-dashboard-grid {
       display: grid;
-      grid-template-columns: 1.65fr 0.95fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       grid-template-areas:
         "top2026 top2025 cidade"
-        "semcompra goldcarteira cidade";
+        "semcompra extras cidade";
       gap: 8px;
       align-items: stretch;
       margin-bottom: 8px;
@@ -2099,14 +2099,14 @@ BASE_HTML = """
     .dash-cell-top2025 { grid-area: top2025; }
     .dash-cell-cidade { grid-area: cidade; }
     .dash-cell-semcompra { grid-area: semcompra; }
-    .dash-cell-goldcarteira { grid-area: goldcarteira; }
+    .dash-cell-extras { grid-area: extras; }
 
     .dash-right-stack {
       display: grid;
-      grid-template-rows: 1fr 1fr;
+      grid-template-rows: auto auto;
       gap: 8px;
+      align-items: stretch;
       height: 100%;
-      min-height: 100%;
     }
 
     .dash-cell-cidade,
@@ -3249,7 +3249,7 @@ def admin_dashboard():
                     </div>
                   </div>
 
-                  <div class="dash-cell-goldcarteira">
+                  <div class="dash-cell-extras">
                     <div class="dash-right-stack">
                       <div class="dash-panel">
                         <div class="dash-panel-title">Clientes Gold</div>
