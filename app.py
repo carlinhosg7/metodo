@@ -2095,6 +2095,12 @@ BASE_HTML = """
     .dash-layout-left,
     .dash-layout-right {
       min-width: 0;
+      height: 100%;
+    }
+
+    .dash-layout-left {
+      display: flex;
+      flex-direction: column;
     }
 
     .dash-row-top {
@@ -2103,6 +2109,7 @@ BASE_HTML = """
       gap: 8px;
       margin-bottom: 8px;
       align-items: stretch;
+      min-height: 360px;
     }
 
     .dash-row-bottom {
@@ -2115,6 +2122,7 @@ BASE_HTML = """
 
     .dash-row-single {
       display: block;
+      flex: 1 1 auto;
     }
 
     .dash-right-stack {
@@ -2123,9 +2131,13 @@ BASE_HTML = """
     }
 
     .dash-panel {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    .dash-row-top .dash-panel-body {
+      min-height: 315px;
     }
 
     .dash-panel-title {
