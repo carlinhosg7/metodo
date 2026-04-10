@@ -3283,6 +3283,15 @@ def admin_dashboard():
                         </div>
                       </div>
                     </div>
+
+                    <div style="margin-top:8px;">
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">Agenda Semanal do Representante</div>
+                        <div class="dash-panel-body">
+                          {agenda_semanal_html}
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   <div class="dash-layout-right">
@@ -3297,15 +3306,6 @@ def admin_dashboard():
                           </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div style="margin-top:8px;">
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Agenda Semanal do Representante</div>
-                    <div class="dash-panel-body">
-                      {agenda_semanal_html}
                     </div>
                   </div>
                 </div>
