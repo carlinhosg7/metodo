@@ -256,6 +256,33 @@ def pick_col_flexible(headers, candidates):
     return None
 
 
+def resolve_city_col(headers):
+    prioridades = [
+        ["Cidades"],
+        ["Cidade"],
+        ["Cidade Cliente", "CIDADE CLIENTE"],
+        ["Município", "Municipio", "Municípios", "Municipios"],
+    ]
+    for candidatos in prioridades:
+        col = pick_col_exact(headers, candidatos) or pick_col_flexible(headers, candidatos)
+        if col:
+            return col
+    return None
+
+
+def resolve_cnpj_col(headers):
+    prioridades = [
+        ["CNPJ", "Cnpj"],
+        ["CPF/CNPJ", "Cpf/Cnpj", "CNPJ/CPF", "Cnpj/Cpf"],
+        ["Documento", "Documento Cliente", "Doc", "CNPJ Cliente", "Cnpj Cliente"],
+    ]
+    for candidatos in prioridades:
+        col = pick_col_exact(headers, candidatos) or pick_col_flexible(headers, candidatos)
+        if col:
+            return col
+    return None
+
+
 def clean_color_text(v):
     return norm(v)
 
@@ -511,7 +538,7 @@ def format_cnpj_key(v):
     return s
 
 
-def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, valor_col=None):
+def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, valor_col=None, fallback_id_col=None):
     if not filtered_rows or not cidade_col:
         return (
             """
@@ -539,10 +566,15 @@ def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, val
                 "valor_tem_dado": False,
             }
 
+        cnpj = ""
         if cnpj_col:
             cnpj = format_cnpj_key(r.get(cnpj_col, ""))
-            if cnpj:
-                resumo[chave]["cnpjs"].add(cnpj)
+
+        if not cnpj and fallback_id_col:
+            cnpj = format_cnpj_key(r.get(fallback_id_col, ""))
+
+        if cnpj:
+            resumo[chave]["cnpjs"].add(cnpj)
 
         if valor_col:
             valor_raw = norm(r.get(valor_col, ""))
@@ -2062,24 +2094,9 @@ BASE_HTML = """
 
     .dash-row-bottom {
       display: grid;
-      grid-template-columns: 1fr;
+      grid-template-columns: 1.65fr 0.95fr;
       gap: 8px;
       align-items: stretch;
-    }
-
-    .dash-row-middle {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      align-items: stretch;
-      margin-bottom: 8px;
-    }
-
-    .dash-row-middle-split {
-      display: grid;
-      grid-template-rows: 1fr 1fr;
-      gap: 8px;
-      height: 100%;
     }
 
     .dash-right-stack {
@@ -2108,9 +2125,6 @@ BASE_HTML = """
     .dash-panel-body {
       padding: 6px;
       box-sizing: border-box;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
     }
 
     .dash-panel-body-map {
@@ -2381,8 +2395,6 @@ BASE_HTML = """
 
       .dash-header,
       .dash-row-top,
-      .dash-row-middle,
-      .dash-row-middle-split,
       .dash-row-bottom,
       .dash-right-stack,
       .dash-panel,
@@ -2483,8 +2495,6 @@ BASE_HTML = """
       .dash-meta-box { grid-column: 1 / -1; }
       .dash-kidy-logo { justify-self: start; }
       .dash-row-top { grid-template-columns: 1fr; }
-      .dash-row-middle { grid-template-columns: 1fr; }
-      .dash-row-middle-split { grid-template-rows: auto auto; }
       .dash-row-bottom { grid-template-columns: 1fr; }
     }
   </style>
@@ -2694,8 +2704,8 @@ def admin_dashboard():
         sup_col = pick_col_flexible(headers, [
             "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
         ])
-        cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
-        cnpj_col = pick_col_flexible(headers, ["CNPJ", "Cnpj", "Cpf/Cnpj", "CPF/CNPJ", "Documento"])
+        cidade_col = resolve_city_col(headers)
+        cnpj_col = resolve_cnpj_col(headers)
 
         t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
         t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
@@ -3052,7 +3062,8 @@ def admin_dashboard():
             filtered_rows,
             cidade_col=cidade_col,
             cnpj_col=cnpj_col,
-            valor_col=t2026_col
+            valor_col=t2026_col,
+            fallback_id_col=key_col
         )
 
         gold_subinfo = ""
@@ -3213,36 +3224,36 @@ def admin_dashboard():
                   </div>
                 </div>
 
-                <div class="dash-row-middle">
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Cobertura da Carteira</div>
-                    <div class="dash-panel-body">
-                      <div class="dash-coverage-box">
-                        Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                        Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="dash-panel">
-                    <div class="dash-panel-title">Clientes Gold</div>
-                    <div class="dash-panel-body">
-                      <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
-                        <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
-                        {gold_subinfo}
-                        {gold_table_html}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
                 <div class="dash-row-bottom">
                   <div class="dash-panel">
                     <div class="dash-panel-title">Clientes sem Compra</div>
                     <div class="dash-panel-body">
                       {clientes_sem_compra_html}
+                    </div>
+                  </div>
+
+                  <div class="dash-right-stack">
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Clientes Gold</div>
+                      <div class="dash-panel-body">
+                        <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
+                          <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                          {gold_subinfo}
+                          {gold_table_html}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Cobertura da Carteira</div>
+                      <div class="dash-panel-body">
+                        <div class="dash-coverage-box">
+                          Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                          Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                          Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -3369,7 +3380,7 @@ def dashboard():
     sup_col = pick_col_flexible(headers, [
         "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
     ])
-    cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
+    cidade_col = resolve_city_col(headers)
 
     t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
     t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
