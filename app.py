@@ -256,6 +256,33 @@ def pick_col_flexible(headers, candidates):
     return None
 
 
+def resolve_city_col(headers):
+    prioridades = [
+        ["Cidades"],
+        ["Cidade"],
+        ["Cidade Cliente", "CIDADE CLIENTE"],
+        ["Município", "Municipio", "Municípios", "Municipios"],
+    ]
+    for candidatos in prioridades:
+        col = pick_col_exact(headers, candidatos) or pick_col_flexible(headers, candidatos)
+        if col:
+            return col
+    return None
+
+
+def resolve_cnpj_col(headers):
+    prioridades = [
+        ["CNPJ", "Cnpj"],
+        ["CPF/CNPJ", "Cpf/Cnpj", "CNPJ/CPF", "Cnpj/Cpf"],
+        ["Documento", "Documento Cliente", "Doc", "CNPJ Cliente", "Cnpj Cliente"],
+    ]
+    for candidatos in prioridades:
+        col = pick_col_exact(headers, candidatos) or pick_col_flexible(headers, candidatos)
+        if col:
+            return col
+    return None
+
+
 def clean_color_text(v):
     return norm(v)
 
@@ -511,7 +538,7 @@ def format_cnpj_key(v):
     return s
 
 
-def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, valor_col=None):
+def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, valor_col=None, fallback_id_col=None):
     if not filtered_rows or not cidade_col:
         return (
             """
@@ -539,10 +566,15 @@ def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, val
                 "valor_tem_dado": False,
             }
 
+        cnpj = ""
         if cnpj_col:
             cnpj = format_cnpj_key(r.get(cnpj_col, ""))
-            if cnpj:
-                resumo[chave]["cnpjs"].add(cnpj)
+
+        if not cnpj and fallback_id_col:
+            cnpj = format_cnpj_key(r.get(fallback_id_col, ""))
+
+        if cnpj:
+            resumo[chave]["cnpjs"].add(cnpj)
 
         if valor_col:
             valor_raw = norm(r.get(valor_col, ""))
@@ -2672,13 +2704,8 @@ def admin_dashboard():
         sup_col = pick_col_flexible(headers, [
             "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
         ])
-        cidade_col = (
-            pick_col_exact(headers, ["Cidades", "CIDADE", "Cidade", "CIDADE CLIENTE", "Cidade Cliente"]) or
-            pick_col_flexible(headers, ["Cidades", "Cidade", "CIDADE CLIENTE", "Cidade Cliente"]) or
-            pick_col_exact(headers, ["Município", "Municipio", "MUNICIPIO"]) or
-            pick_col_flexible(headers, ["Município", "Municipio"])
-        )
-        cnpj_col = pick_col_flexible(headers, ["CNPJ", "Cnpj", "Cpf/Cnpj", "CPF/CNPJ", "Documento"])
+        cidade_col = resolve_city_col(headers)
+        cnpj_col = resolve_cnpj_col(headers)
 
         t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
         t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
@@ -3035,7 +3062,8 @@ def admin_dashboard():
             filtered_rows,
             cidade_col=cidade_col,
             cnpj_col=cnpj_col,
-            valor_col=t2026_col
+            valor_col=t2026_col,
+            fallback_id_col=key_col
         )
 
         gold_subinfo = ""
@@ -3352,7 +3380,7 @@ def dashboard():
     sup_col = pick_col_flexible(headers, [
         "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
     ])
-    cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
+    cidade_col = resolve_city_col(headers)
 
     t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
     t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
