@@ -2084,28 +2084,29 @@ BASE_HTML = """
       justify-self: end;
     }
 
-    .dash-dashboard-grid {
+    .dash-main-grid {
       display: grid;
-      grid-template-columns: 1.9fr 1fr;
-      grid-template-areas: "left city";
+      grid-template-columns: 2fr 1fr;
       gap: 8px;
       align-items: stretch;
       margin-bottom: 8px;
     }
 
-    .dash-layout-left {
-      grid-area: left;
-      display: grid;
-      grid-template-rows: auto auto auto;
+    .dash-left-stack {
+      display: flex;
+      flex-direction: column;
       gap: 8px;
-      align-items: stretch;
+      min-width: 0;
     }
 
-    .dash-layout-right {
-      grid-area: city;
+    .dash-city-column {
       display: flex;
-      align-items: stretch;
-      min-height: 100%;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .dash-city-column .dash-panel {
+      flex: 1;
     }
 
     .dash-row-top {
@@ -2127,16 +2128,9 @@ BASE_HTML = """
     }
 
     .dash-right-stack {
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-rows: auto auto;
       gap: 8px;
-      width: 100%;
-      height: 100%;
-      min-height: 100%;
-    }
-
-    .dash-right-stack .dash-panel {
-      flex: 1;
     }
 
     .dash-panel {
@@ -3232,9 +3226,8 @@ def admin_dashboard():
                   </div>
                 </div>
 
-                <div class="dash-dashboard-grid">
-                  <div class="dash-layout-left">
-
+                <div class="dash-main-grid">
+                  <div class="dash-left-stack">
                     <div class="dash-row-top">
                       <div class="dash-panel">
                         <div class="dash-panel-title">10 Maiores Clientes</div>
@@ -3284,19 +3277,16 @@ def admin_dashboard():
                         </div>
                       </div>
                     </div>
-
                   </div>
 
-                  <div class="dash-layout-right">
-                    <div class="dash-right-stack">
-                      <div class="dash-panel">
-                        <div class="dash-panel-title">Resumo por Cidade</div>
-                        <div class="dash-panel-body-map">
-                          {mapa_svg_html}
-                          <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
-                            Cidades: <b>{h(cidades_mapa_qtd)}</b>
-                            {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
-                          </div>
+                  <div class="dash-city-column">
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Resumo por Cidade</div>
+                      <div class="dash-panel-body-map">
+                        {mapa_svg_html}
+                        <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                          Cidades: <b>{h(cidades_mapa_qtd)}</b>
+                          {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                         </div>
                       </div>
                     </div>
