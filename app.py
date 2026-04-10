@@ -2089,7 +2089,8 @@ BASE_HTML = """
       grid-template-columns: 1fr 1fr 1fr;
       grid-template-areas:
         "top2026 top2025 cidade"
-        "semcompra extras cidade";
+        "gold carteira cidade"
+        "semcompra semcompra cidade";
       gap: 8px;
       align-items: stretch;
       margin-bottom: 8px;
@@ -2097,17 +2098,10 @@ BASE_HTML = """
 
     .dash-cell-top2026 { grid-area: top2026; }
     .dash-cell-top2025 { grid-area: top2025; }
-    .dash-cell-cidade { grid-area: cidade; }
+    .dash-cell-gold { grid-area: gold; }
+    .dash-cell-carteira { grid-area: carteira; }
     .dash-cell-semcompra { grid-area: semcompra; }
-    .dash-cell-extras { grid-area: extras; }
-
-    .dash-right-stack {
-      display: grid;
-      grid-template-rows: auto auto;
-      gap: 8px;
-      align-items: stretch;
-      height: 100%;
-    }
+    .dash-cell-cidade { grid-area: cidade; }
 
     .dash-cell-cidade,
     .dash-cell-cidade .dash-panel,
@@ -3028,7 +3022,7 @@ def admin_dashboard():
         clientes_sem_compra_html = ""
         if clientes_sem_compra:
             rows = []
-            for item in clientes_sem_compra[:24]:
+            for item in clientes_sem_compra[:30]:
                 rows.append(f"""
                 <tr class="{h(item['row_class'])}">
                   <td>{h(item['codigo'])}</td>
@@ -3240,38 +3234,38 @@ def admin_dashboard():
                     </div>
                   </div>
 
-                  <div class="dash-cell-semcompra">
+                  <div class="dash-cell-gold">
                     <div class="dash-panel">
-                      <div class="dash-panel-title">Clientes sem Compra</div>
+                      <div class="dash-panel-title">Clientes Gold</div>
                       <div class="dash-panel-body">
-                        {clientes_sem_compra_html}
+                        <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
+                          <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                          {gold_subinfo}
+                          {gold_table_html}
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  <div class="dash-cell-extras">
-                    <div class="dash-right-stack">
-                      <div class="dash-panel">
-                        <div class="dash-panel-title">Clientes Gold</div>
-                        <div class="dash-panel-body">
-                          <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
-                            <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
-                            {gold_subinfo}
-                            {gold_table_html}
-                          </div>
+                  <div class="dash-cell-carteira">
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">Cobertura da Carteira</div>
+                      <div class="dash-panel-body">
+                        <div class="dash-coverage-box">
+                          Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                          Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                          Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
                         </div>
                       </div>
+                    </div>
+                  </div>
 
-                      <div class="dash-panel">
-                        <div class="dash-panel-title">Cobertura da Carteira</div>
-                        <div class="dash-panel-body">
-                          <div class="dash-coverage-box">
-                            Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                            Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                            Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                            Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
-                          </div>
-                        </div>
+                  <div class="dash-cell-semcompra">
+                    <div class="dash-panel">
+                      <div class="dash-panel-title">30 Maiores Clientes sem Compra</div>
+                      <div class="dash-panel-body">
+                        {clientes_sem_compra_html}
                       </div>
                     </div>
                   </div>
