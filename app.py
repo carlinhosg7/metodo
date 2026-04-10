@@ -2086,27 +2086,57 @@ BASE_HTML = """
 
     .dash-dashboard-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      grid-template-areas:
-        "top2026 top2025 cidade"
-        "gold carteira cidade"
-        "semcompra semcompra cidade";
+      grid-template-columns: 1.9fr 1fr;
+      grid-template-areas: "left city";
       gap: 8px;
       align-items: stretch;
       margin-bottom: 8px;
     }
 
-    .dash-cell-top2026 { grid-area: top2026; }
-    .dash-cell-top2025 { grid-area: top2025; }
-    .dash-cell-gold { grid-area: gold; }
-    .dash-cell-carteira { grid-area: carteira; }
-    .dash-cell-semcompra { grid-area: semcompra; }
-    .dash-cell-cidade { grid-area: cidade; }
+    .dash-layout-left {
+      grid-area: left;
+      display: grid;
+      grid-template-rows: auto auto auto;
+      gap: 8px;
+      align-items: stretch;
+    }
 
-    .dash-cell-cidade,
-    .dash-cell-cidade .dash-panel,
-    .dash-cell-cidade .dash-panel-body-map {
+    .dash-layout-right {
+      grid-area: city;
+      display: flex;
+      align-items: stretch;
+      min-height: 100%;
+    }
+
+    .dash-row-top {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .dash-row-middle {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .dash-row-bottom {
+      display: block;
+    }
+
+    .dash-right-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
       height: 100%;
+      min-height: 100%;
+    }
+
+    .dash-right-stack .dash-panel {
+      flex: 1;
     }
 
     .dash-panel {
@@ -3203,69 +3233,71 @@ def admin_dashboard():
                 </div>
 
                 <div class="dash-dashboard-grid">
-                  <div class="dash-cell-top2026">
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">10 Maiores Clientes</div>
-                      <div class="dash-panel-body">
-                        {ranking_2026_html}
-                      </div>
-                    </div>
-                  </div>
+                  <div class="dash-layout-left">
 
-                  <div class="dash-cell-top2025">
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">10 Maiores Clientes 2025</div>
-                      <div class="dash-panel-body">
-                        {ranking_2025_html}
+                    <div class="dash-row-top">
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">10 Maiores Clientes</div>
+                        <div class="dash-panel-body">
+                          {ranking_2026_html}
+                        </div>
                       </div>
-                    </div>
-                  </div>
 
-                  <div class="dash-cell-cidade">
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">Resumo por Cidade</div>
-                      <div class="dash-panel-body-map">
-                        {mapa_svg_html}
-                        <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
-                          Cidades: <b>{h(cidades_mapa_qtd)}</b>
-                          {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">10 Maiores Clientes 2025</div>
+                        <div class="dash-panel-body">
+                          {ranking_2025_html}
                         </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div class="dash-cell-gold">
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">Clientes Gold</div>
-                      <div class="dash-panel-body">
-                        <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
-                          <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
-                          {gold_subinfo}
-                          {gold_table_html}
+                    <div class="dash-row-middle">
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">Clientes Gold</div>
+                        <div class="dash-panel-body">
+                          <div class="dash-gold-box" style="align-items:stretch; justify-content:flex-start;">
+                            <div style="text-align:center;">Total Clientes Gold: <b>{h(total_gold)}</b></div>
+                            {gold_subinfo}
+                            {gold_table_html}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">Cobertura da Carteira</div>
+                        <div class="dash-panel-body">
+                          <div class="dash-coverage-box">
+                            Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                            Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                            Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                            Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div class="dash-cell-carteira">
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">Cobertura da Carteira</div>
-                      <div class="dash-panel-body">
-                        <div class="dash-coverage-box">
-                          Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                          Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                          Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
+                    <div class="dash-row-bottom">
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">30 Maiores Clientes sem Compra</div>
+                        <div class="dash-panel-body">
+                          {clientes_sem_compra_html}
                         </div>
                       </div>
                     </div>
+
                   </div>
 
-                  <div class="dash-cell-semcompra">
-                    <div class="dash-panel">
-                      <div class="dash-panel-title">30 Maiores Clientes sem Compra</div>
-                      <div class="dash-panel-body">
-                        {clientes_sem_compra_html}
+                  <div class="dash-layout-right">
+                    <div class="dash-right-stack">
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">Resumo por Cidade</div>
+                        <div class="dash-panel-body-map">
+                          {mapa_svg_html}
+                          <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                            Cidades: <b>{h(cidades_mapa_qtd)}</b>
+                            {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
