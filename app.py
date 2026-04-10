@@ -506,6 +506,120 @@ def format_money_br(value):
     return f"R$ {format_number_br(value)}"
 
 
+def format_cnpj_key(v):
+    s = re.sub(r"\D", "", norm(v))
+    return s
+
+
+def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, valor_col=None):
+    if not filtered_rows or not cidade_col:
+        return (
+            """
+            <div class="dash-map-placeholder" style="min-height:220px;">
+              Nenhuma cidade encontrada para exibir no resumo.
+            </div>
+            """,
+            0,
+            ""
+        )
+
+    resumo = {}
+
+    for r in filtered_rows:
+        cidade = norm(r.get(cidade_col, ""))
+        if not cidade:
+            continue
+
+        chave = normalize_city_key(cidade)
+        if chave not in resumo:
+            resumo[chave] = {
+                "cidade": cidade,
+                "cnpjs": set(),
+                "valor": 0.0,
+                "valor_tem_dado": False,
+            }
+
+        if cnpj_col:
+            cnpj = format_cnpj_key(r.get(cnpj_col, ""))
+            if cnpj:
+                resumo[chave]["cnpjs"].add(cnpj)
+
+        if valor_col:
+            valor_raw = norm(r.get(valor_col, ""))
+            if valor_raw != "":
+                resumo[chave]["valor_tem_dado"] = True
+            resumo[chave]["valor"] += parse_number_br(valor_raw)
+
+    if not resumo:
+        return (
+            """
+            <div class="dash-map-placeholder" style="min-height:220px;">
+              Nenhuma cidade encontrada para exibir no resumo.
+            </div>
+            """,
+            0,
+            ""
+        )
+
+    linhas = []
+    cidades_sem_cnpj = 0
+    cidades_sem_valor = 0
+    cidades_com_valor = 0
+
+    itens = sorted(
+        resumo.values(),
+        key=lambda x: (-(x.get("valor", 0.0)), x.get("cidade", ""))
+    )
+
+    for item in itens:
+        qtd_cnpjs = len(item["cnpjs"])
+        valor = float(item.get("valor", 0.0) or 0.0)
+        valor_tem_dado = bool(item.get("valor_tem_dado", False))
+
+        if qtd_cnpjs == 0:
+            row_style = "background:#fecaca; color:#7f1d1d; font-weight:700;"
+            cidades_sem_cnpj += 1
+        elif (not valor_tem_dado) or valor <= 0:
+            row_style = "background:#fee2e2; color:#991b1b; font-weight:700;"
+            cidades_sem_valor += 1
+        else:
+            row_style = "background:#dcfce7; color:#166534; font-weight:700;"
+            cidades_com_valor += 1
+
+        linhas.append(f"""
+        <tr style="{row_style}">
+          <td>{h(item['cidade'])}</td>
+          <td style="text-align:center;">{qtd_cnpjs}</td>
+          <td style="text-align:right;">{h(format_number_br(valor))}</td>
+        </tr>
+        """)
+
+    info_msg = (
+        f"Sem CNPJ: {cidades_sem_cnpj} | "
+        f"Vlr vazio/0: {cidades_sem_valor} | "
+        f"Vlr > 0: {cidades_com_valor}"
+    )
+
+    html = f"""
+    <div style="max-height:410px; overflow:auto; width:100%;">
+      <table class="dash-table-mini">
+        <thead>
+          <tr>
+            <th>Cidades</th>
+            <th style="width:90px; text-align:center;">CNPJs (Qtde CNPJ)</th>
+            <th style="width:110px; text-align:right;">Vlr</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(linhas)}
+        </tbody>
+      </table>
+    </div>
+    """
+
+    return html, len(itens), info_msg
+
+
 def render_status_badge_text(status_cor):
     s = normalize_text_for_match(status_cor)
     if "VERMELH" in s:
@@ -803,43 +917,6 @@ def find_city_coords_public(rows_cidades, municipios_index, cidade_base_norm, ci
 
     return lat, lon, nome_final
 
-
-
-
-def build_city_alert_table_html(city_alert_rows):
-    if not city_alert_rows:
-        return """
-        <div class="dash-map-placeholder" style="min-height:220px;">
-          Nenhuma cidade sem CNPJ ou sem vendas encontrada.
-        </div>
-        """
-
-    rows_html = []
-    for item in city_alert_rows:
-        rows_html.append(f"""
-        <tr class="{h(item.get('row_class', ''))}">
-          <td>{h(item.get('cidade', ''))}</td>
-          <td style="text-align:right;">{h(format_number_br(item.get('valor', 0.0)))}</td>
-          <td style="text-align:center;">{h(str(item.get('qtde_cnpj', 0)))}</td>
-        </tr>
-        """)
-
-    return f"""
-    <div style="max-height:340px; overflow:auto; width:100%;">
-      <table class="dash-table-big">
-        <thead>
-          <tr>
-            <th>Cidade</th>
-            <th style="width:110px; text-align:right;">Valor</th>
-            <th style="width:90px; text-align:center;">Qtde CNPJ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {''.join(rows_html)}
-        </tbody>
-      </table>
-    </div>
-    """
 
 def build_city_map_svg(city_points, width=900, height=520):
     if not city_points:
@@ -1646,11 +1723,6 @@ def build_debug_sheet_info(sh=None):
         }
         cache_set(cache_key, result, DEBUG_SHEETINFO_CACHE_TTL)
         return result
-
-
-@app.route("/favicon.ico")
-def favicon():
-    return "", 204
 
 
 # =========================
@@ -2601,6 +2673,7 @@ def admin_dashboard():
             "Supervisor", "Código Supervisor", "Codigo Supervisor", "COD_SUP"
         ])
         cidade_col = pick_col_flexible(headers, ["Cidade", "Município", "Municipio"])
+        cnpj_col = pick_col_flexible(headers, ["CNPJ", "Cnpj", "Cpf/Cnpj", "CPF/CNPJ", "Documento"])
 
         t2024_col = pick_col_exact(headers, ["Total 2024 (PERIODO)"])
         t2025_col = pick_col_exact(headers, ["Total 2025 (PERIODO)"])
@@ -2953,108 +3026,12 @@ def admin_dashboard():
             </div>
             """
 
-        mapa_svg_html = ""
-        mapa_info_msg = ""
-        cidades_mapa_qtd = 0
-        cidades_sem_coordenada = 0
-
-        map_debug = {
-            "tipo": "tabela",
-            "regra_vermelho": "qtde_cnpj = 0",
-            "regra_amarelo": "valor = 0",
-        }
-
-        try:
-            if not cidade_col:
-                raise RuntimeError("A coluna de cidade não foi encontrada na BASE.")
-
-            cnpj_col = pick_col_flexible(headers, [
-                "Cnpj", "CNPJ", "Cnpj Cliente", "CNPJ Cliente"
-            ])
-
-            cidades_dict = {}
-
-            for r in filtered_rows:
-                cidade_original = norm(r.get(cidade_col, ""))
-                cidade_base = normalize_city_key(cidade_original)
-
-                if not cidade_base:
-                    continue
-
-                valor = parse_number_br(r.get(t2026_col, "")) if t2026_col else 0.0
-                cnpj = norm(r.get(cnpj_col, "")) if cnpj_col else ""
-
-                if cidade_base not in cidades_dict:
-                    cidades_dict[cidade_base] = {
-                        "cidade": cidade_original,
-                        "valor": 0.0,
-                        "cnpjs": set(),
-                    }
-
-                cidades_dict[cidade_base]["valor"] += valor
-
-                if cnpj:
-                    cidades_dict[cidade_base]["cnpjs"].add(cnpj)
-
-            cidades_alerta = []
-
-            for _, dados in cidades_dict.items():
-                cidade = dados["cidade"]
-                valor = dados["valor"]
-                qtde_cnpj = len(dados["cnpjs"])
-
-                row_class = ""
-                prioridade = 99
-                motivo = ""
-
-                if qtde_cnpj == 0:
-                    row_class = "row-red"
-                    prioridade = 1
-                    motivo = "sem_cnpj"
-                elif valor == 0:
-                    row_class = "row-yellow"
-                    prioridade = 2
-                    motivo = "sem_vendas"
-
-                if row_class:
-                    cidades_alerta.append({
-                        "cidade": cidade,
-                        "valor": valor,
-                        "qtde_cnpj": qtde_cnpj,
-                        "row_class": row_class,
-                        "prioridade": prioridade,
-                        "motivo": motivo,
-                    })
-
-            cidades_alerta.sort(
-                key=lambda x: (
-                    x["prioridade"],
-                    normalize_city_key(x["cidade"]),
-                    -x["valor"],
-                )
-            )
-
-            cidades_mapa_qtd = len(cidades_alerta)
-            mapa_svg_html = build_city_alert_table_html(cidades_alerta)
-
-            if not cidades_alerta:
-                mapa_info_msg = "Nenhuma cidade sem CNPJ ou sem vendas encontrada."
-            else:
-                qtd_sem_cnpj = sum(1 for x in cidades_alerta if x["motivo"] == "sem_cnpj")
-                qtd_sem_vendas = sum(1 for x in cidades_alerta if x["motivo"] == "sem_vendas")
-                mapa_info_msg = (
-                    f"{qtd_sem_cnpj} cidade(s) sem CNPJ | "
-                    f"{qtd_sem_vendas} cidade(s) sem vendas"
-                )
-
-        except Exception as e:
-            erro_txt = norm(str(e))
-            mapa_svg_html = f"""
-            <div class="dash-map-placeholder">
-              Erro ao montar tabela.<br><br>
-              {h(erro_txt)}
-            </div>
-            """
+        mapa_svg_html, cidades_mapa_qtd, mapa_info_msg = build_cidades_resumo_html(
+            filtered_rows,
+            cidade_col=cidade_col,
+            cnpj_col=cnpj_col,
+            valor_col=t2026_col
+        )
 
         gold_subinfo = ""
         gold_table_html = ""
@@ -3203,11 +3180,11 @@ def admin_dashboard():
                   </div>
 
                   <div class="dash-panel">
-                    <div class="dash-panel-title">Cidades sem CNPJ / sem vendas</div>
+                    <div class="dash-panel-title">Resumo por Cidade</div>
                     <div class="dash-panel-body-map">
                       {mapa_svg_html}
                       <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
-                        Cidades encontradas: <b>{h(cidades_mapa_qtd)}</b>
+                        Cidades: <b>{h(cidades_mapa_qtd)}</b>
                         {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
                       </div>
                     </div>
@@ -3279,10 +3256,14 @@ def admin_dashboard():
               <div class="line"><b>AGENDA ABA:</b> {h(WS_AGENDA)}</div>
               <div class="line"><b>REP AGENDA:</b> {h(header_rep_code)}</div>
               <div class="line"><b>CIDADES NO MAPA:</b> {h(cidades_mapa_qtd)}</div>
-              <div class="line"><b>TIPO PAINEL CIDADES:</b> {h(map_debug['tipo'])}</div>
+              <div class="line"><b>CIDADES SEM COORDENADA:</b> {h(cidades_sem_coordenada)}</div>
+              <div class="line"><b>MUNICIPIOS URL:</b> {h(map_debug['municipios_url'])}</div>
               <div class="line"><b>COLUNA CIDADE BASE:</b> {h(cidade_col)}</div>
-              <div class="line"><b>REGRA VERMELHO:</b> {h(map_debug['regra_vermelho'])}</div>
-              <div class="line"><b>REGRA AMARELO:</b> {h(map_debug['regra_amarelo'])}</div>
+              <div class="line"><b>COLUNA CIDADE MUNICÍPIOS:</b> {h(map_debug['cidade_muni_col'])}</div>
+              <div class="line"><b>COLUNA LAT:</b> {h(map_debug['lat_col'])}</div>
+              <div class="line"><b>COLUNA LON:</b> {h(map_debug['lon_col'])}</div>
+              <div class="line"><b>LABELS MAPA:</b> {h(map_debug['labels'])}</div>
+              <div class="line"><b>ZOOM MAPA:</b> {h(map_debug['zoom'])}</div>
               <div class="line"><b>T2026 COL:</b> {h(t2026_col)}</div>
               <div class="line"><b>DATA AGENDA COL:</b> {h(data_agenda_col)}</div>
               <div class="line"><b>MÊS COL:</b> {h(mes_col)}</div>
