@@ -4118,11 +4118,15 @@ def salvar():
         status_cliente = norm(request.form.get("Status Cliente", ""))
         observacoes = norm(request.form.get("Observações", ""))
 
+        # Na tela da carteira do representante, Data Agenda Visita e Status Cliente
+        # são mantidos apenas como apoio e não devem forçar atualização/confirmação
+        # quando o usuário grava somente Mês, Semana ou Observações.
+        is_admin_user = is_admin()
         campos_enviados = {
-            "data": "Data Agenda Visita" in request.form,
+            "data": is_admin_user and ("Data Agenda Visita" in request.form),
             "mes": "Mês" in request.form,
             "semana": "Semana Atendimento" in request.form,
-            "status": "Status Cliente" in request.form,
+            "status": is_admin_user and ("Status Cliente" in request.form),
             "obs": "Observações" in request.form,
         }
 
