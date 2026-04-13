@@ -3402,12 +3402,17 @@ def admin_dashboard():
                 <div class="dash-main-grid">
                   <div class="dash-left-stack">
                     <div class="dash-row-top">
-                    </div>
-
                       <div class="dash-panel">
                         <div class="dash-panel-title">10 Maiores Clientes 2025</div>
                         <div class="dash-panel-body">
                           {ranking_2025_html}
+                        </div>
+                      </div>
+
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">10 Maiores Clientes 2026</div>
+                        <div class="dash-panel-body">
+                          {ranking_2026_html}
                         </div>
                       </div>
                     </div>
@@ -3446,40 +3451,17 @@ def admin_dashboard():
                         </div>
                       </div>
                     </div>
-                  </div><div class="dash-row-bottom">
+                  </div>
 
-        <div class="dash-panel">
-            <div class="dash-panel-title">Clientes sem Compra</div>
-            <div class="dash-panel-body">
-            {clientes_sem_compra_html}
-            </div>
-        </div>
-
-        <div class="dash-right-stack">
-
-            <div class="dash-panel">
-            <div class="dash-panel-title">Resumo por Cidade</div>
-            <div class="dash-panel-body-map">
-                {mapa_svg_html}
-            </div>
-            </div>
-
-            <div class="dash-panel">
-            <div class="dash-panel-title">Clientes Gold</div>
-            <div class="dash-panel-body">
-                ...
-            </div>
-            </div>
-
-            <div class="dash-panel">
-            <div class="dash-panel-title">Cobertura da Carteira</div>
-            <div class="dash-panel-body">
-                ...
-            </div>
-            </div>
-
-        </div>
-        </div>
+                  <div class="dash-right-stack">
+                    <div class="dash-panel" style="height:100%; display:flex; flex-direction:column;">
+                      <div class="dash-panel-title">Resumo por Cidade</div>
+                      <div class="dash-panel-body-map" style="flex:1; overflow:auto;">
+                        {mapa_svg_html}
+                      </div>
+                    </div>
+                  </div>
+                </div>
         """
 
         if DEBUG_MODE:
