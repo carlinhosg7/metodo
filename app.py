@@ -36,6 +36,10 @@ WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 WS_PARAMETROS_COMERCIAIS = os.getenv("WS_PARAMETROS_COMERCIAIS", "PARAMETROS_COMERCIAIS").strip()
 
+# ===== COBERTURA DA CARTEIRA =====
+SHEET_COBERTURA_ID = os.getenv("SHEET_COBERTURA_ID", "").strip()
+WS_COBERTURA = os.getenv("WS_COBERTURA", "COBERTURA").strip()
+
 # ===== CLIENTES GOLD =====
 GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
 GOLD_SHEET_URL = os.getenv("GOLD_SHEET_URL", "").strip()
@@ -1756,6 +1760,105 @@ def build_debug_sheet_info(sh=None):
         }
         cache_set(cache_key, result, DEBUG_SHEETINFO_CACHE_TTL)
         return result
+
+
+def connect_cobertura_gs():
+    cobertura_sheet_id = extract_google_sheet_id(SHEET_COBERTURA_ID)
+    if not cobertura_sheet_id:
+        raise RuntimeError("SHEET_COBERTURA_ID não configurado.")
+    return connect_gs_by_key(cobertura_sheet_id)
+
+
+def _fmt_int_like(value):
+    num = parse_number_br(value)
+    try:
+        return str(int(round(num)))
+    except Exception:
+        return norm(value)
+
+
+def _fmt_pct_like(value):
+    raw = norm(value)
+    if not raw:
+        return "0,00%"
+
+    if "%" in raw:
+        return raw
+
+    num = parse_number_br(raw)
+    if 0 <= num <= 1:
+        num *= 100.0
+    return f"{format_number_br(num)}%"
+
+
+def get_cobertura_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+
+    info = {
+        "ok": False,
+        "error": "",
+        "carteira": "0",
+        "com_compra": "0",
+        "sem_compra": "0",
+        "cobertura": "0,00%",
+    }
+
+    if not rep_code:
+        info["error"] = "Representante não informado."
+        return info
+
+    try:
+        sh_cob = connect_cobertura_gs()
+
+        try:
+            ws_cob = sh_cob.worksheet(WS_COBERTURA)
+        except WorksheetNotFound:
+            raise RuntimeError(f"A aba '{WS_COBERTURA}' não foi encontrada na planilha de cobertura.")
+
+        headers_cob, rows_cob = safe_get_raw_rows(ws_cob)
+        if not headers_cob:
+            raise RuntimeError("A aba de cobertura está vazia ou sem cabeçalho.")
+
+        rep_col = pick_col_flexible(headers_cob, [
+            "Codigo Representante", "Código Representante", "Cod Representante",
+            "Cod. Representante", "REP", "Rep", "Representante"
+        ])
+        carteira_col = pick_col_flexible(headers_cob, [
+            "Saldo de Carteira", "Carteira", "Total Carteira"
+        ])
+        com_compra_col = pick_col_flexible(headers_cob, [
+            "Com compra", "Cobertura", "Clientes Positivados", "Clientes com Compra"
+        ])
+        sem_compra_col = pick_col_flexible(headers_cob, [
+            "Sem compra", "Clientes Não Positivados", "Clientes Nao Positivados"
+        ])
+        cobertura_col = pick_col_flexible(headers_cob, [
+            "% Cobertura", "Cobertura %", "Cobertura", "%Cobertura"
+        ])
+
+        if not rep_col:
+            raise RuntimeError("Não encontrei a coluna do Código do Representante na planilha de cobertura.")
+
+        rep_code_num = rep_code.lstrip("0") or "0"
+
+        for row in rows_cob:
+            rep_val = norm(row.get(rep_col, ""))
+            rep_val_num = rep_val.lstrip("0") or "0"
+
+            if rep_val == rep_code or rep_val_num == rep_code_num:
+                info["carteira"] = _fmt_int_like(row.get(carteira_col, "0")) if carteira_col else "0"
+                info["com_compra"] = _fmt_int_like(row.get(com_compra_col, "0")) if com_compra_col else "0"
+                info["sem_compra"] = _fmt_int_like(row.get(sem_compra_col, "0")) if sem_compra_col else "0"
+                info["cobertura"] = _fmt_pct_like(row.get(cobertura_col, "0")) if cobertura_col else "0,00%"
+                info["ok"] = True
+                return info
+
+        info["error"] = f"Representante {rep_code} não encontrado na planilha de cobertura."
+        return info
+
+    except Exception as e:
+        info["error"] = norm(str(e))
+        return info
 
 
 # =========================
@@ -3749,29 +3852,29 @@ def dashboard():
         </div>
         """
 
-    total_carteira_dashboard = len(prepared_rows)
-    total_sem_compra_dashboard = 0
-    if t2026_col:
-        for r in prepared_rows:
-            if parse_number_br(r.get(t2026_col, "")) <= 0:
-                total_sem_compra_dashboard += 1
-    total_com_compra_dashboard = max(total_carteira_dashboard - total_sem_compra_dashboard, 0)
-    cobertura_pct_dashboard = (total_com_compra_dashboard / total_carteira_dashboard * 100.0) if total_carteira_dashboard > 0 else 0.0
+    cobertura_info = get_cobertura_info_by_rep(selected_rep_code)
 
-    carteira_parametros_html = f"""
+    if cobertura_info.get("ok"):
+        carteira_parametros_html = f"""
     <div class="card">
       <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Cobertura da Carteira</div>
       <div class="dash-coverage-box">
-        Carteira: <b style="margin:0 6px;">{h(total_carteira_dashboard)}</b> |
-        Com compra: <b style="margin:0 6px;">{h(total_com_compra_dashboard)}</b> |
-        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra_dashboard)}</b> |
-        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct_dashboard))}%</b>
+        Carteira: <b style="margin:0 6px;">{h(cobertura_info.get('carteira', '0'))}</b> |
+        Com compra: <b style="margin:0 6px;">{h(cobertura_info.get('com_compra', '0'))}</b> |
+        Sem compra: <b style="margin:0 6px;">{h(cobertura_info.get('sem_compra', '0'))}</b> |
+        Cobertura: <b style="margin-left:6px;">{h(cobertura_info.get('cobertura', '0,00%'))}</b>
       </div>
-      {render_parametros_comerciais_box_html(parametros_comerciais, compact=True)}
+    </div>
+    """
+    else:
+        carteira_parametros_html = f"""
+    <div class="card">
+      <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Cobertura da Carteira</div>
+      <div class="dash-summary-box">{h(cobertura_info.get('error', 'Sem dados de cobertura.'))}</div>
     </div>
     """
 
-    parametros_card_html = render_parametros_comerciais_box_html(parametros_comerciais)
+    parametros_card_html = ""
 
     debug_html = ""
     if DEBUG_MODE:
@@ -3963,7 +4066,6 @@ def dashboard():
     body = f"""
     {debug_html}
     {rep_card_html}
-    {parametros_card_html}
     {carteira_parametros_html}
 
     <div class="card">
