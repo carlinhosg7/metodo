@@ -3466,6 +3466,10 @@ def admin_dashboard():
                     </div>
                   </div>
                 </div>
+
+                <div style="margin-top:8px;">
+                  {agenda_semanal_html}
+                </div>
         """
 
         if DEBUG_MODE:
