@@ -1821,23 +1821,31 @@ def get_cobertura_info_by_rep(rep_code):
 
         rep_col = pick_col_flexible(headers_cob, [
             "Codigo Representante", "Código Representante", "Cod Representante",
-            "Cod. Representante", "REP", "Rep", "Representante"
+            "Cod. Representante", "REP", "Rep"
         ])
         carteira_col = pick_col_flexible(headers_cob, [
             "Saldo de Carteira", "Carteira", "Total Carteira"
         ])
         com_compra_col = pick_col_flexible(headers_cob, [
-            "Com compra", "Cobertura", "Clientes Positivados", "Clientes com Compra"
+            "Com compra", "Clientes Positivados", "Clientes com Compra", "Cobertura", "cobertura"
         ])
         sem_compra_col = pick_col_flexible(headers_cob, [
             "Sem compra", "Clientes Não Positivados", "Clientes Nao Positivados"
         ])
         cobertura_col = pick_col_flexible(headers_cob, [
-            "% Cobertura", "Cobertura %", "Cobertura", "%Cobertura"
+            "% Cobertura", "Cobertura %", "%Cobertura"
         ])
 
         if not rep_col:
             raise RuntimeError("Não encontrei a coluna do Código do Representante na planilha de cobertura.")
+        if not carteira_col:
+            raise RuntimeError("Não encontrei a coluna de carteira na planilha de cobertura.")
+        if not com_compra_col:
+            raise RuntimeError("Não encontrei a coluna de com compra/cobertura na planilha de cobertura.")
+        if not sem_compra_col:
+            raise RuntimeError("Não encontrei a coluna de sem compra na planilha de cobertura.")
+        if not cobertura_col:
+            raise RuntimeError("Não encontrei a coluna de percentual de cobertura na planilha de cobertura.")
 
         rep_code_num = rep_code.lstrip("0") or "0"
 
@@ -1846,10 +1854,10 @@ def get_cobertura_info_by_rep(rep_code):
             rep_val_num = rep_val.lstrip("0") or "0"
 
             if rep_val == rep_code or rep_val_num == rep_code_num:
-                info["carteira"] = _fmt_int_like(row.get(carteira_col, "0")) if carteira_col else "0"
-                info["com_compra"] = _fmt_int_like(row.get(com_compra_col, "0")) if com_compra_col else "0"
-                info["sem_compra"] = _fmt_int_like(row.get(sem_compra_col, "0")) if sem_compra_col else "0"
-                info["cobertura"] = _fmt_pct_like(row.get(cobertura_col, "0")) if cobertura_col else "0,00%"
+                info["carteira"] = _fmt_int_like(row.get(carteira_col, "0"))
+                info["com_compra"] = _fmt_int_like(row.get(com_compra_col, "0"))
+                info["sem_compra"] = _fmt_int_like(row.get(sem_compra_col, "0"))
+                info["cobertura"] = _fmt_pct_like(row.get(cobertura_col, "0"))
                 info["ok"] = True
                 return info
 
