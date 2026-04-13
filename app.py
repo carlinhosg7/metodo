@@ -3867,11 +3867,8 @@ def dashboard():
         if is_admin():
             row_html = f"""
         <tr class="{h(klass)}">
-          <td class="nowrap">{h(ck)}</td>
-          <td>{h(grupo)}</td>
-          <td class="nowrap">{h(repc)}</td>
-          <td>{h(nome_rep)}</td>
-          <td class="nowrap">{h(supv)}</td>
+          <td class="nowrap sticky-col">{h(ck)}</td>
+          <td class="sticky-col-2">{h(grupo)}</td>
           <td>{h(cidade)}</td>
           <td class="money nowrap">{h(t24)}</td>
           <td class="money nowrap">{h(t25)}</td>
@@ -3883,12 +3880,10 @@ def dashboard():
               <input type="hidden" name="client_key" value="{h(ck)}">
               <input type="hidden" name="rep_code" value="{h(repc)}">
               <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
+              <input type="hidden" name="Data Agenda Visita" value="{h(to_input_date(dav))}">
+              <input type="hidden" name="Status Cliente" value="{h(stc)}">
               {hidden_filters}
             </form>
-            <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
-          </td>
-
-          <td>
             <select name="Mês" form="{form_id}" style="min-width:140px;">
               {opt_html(meses, mes)}
             </select>
@@ -3897,12 +3892,6 @@ def dashboard():
           <td>
             <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
               {opt_html(semanas, sem)}
-            </select>
-          </td>
-
-          <td>
-            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
-              {opt_html(status_list, stc)}
             </select>
           </td>
 
@@ -3934,6 +3923,8 @@ def dashboard():
               <input type="hidden" name="client_key" value="{h(ck)}">
               <input type="hidden" name="rep_code" value="{h(repc)}">
               <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
+              <input type="hidden" name="Data Agenda Visita" value="{h(to_input_date(dav))}">
+              <input type="hidden" name="Status Cliente" value="{h(stc)}">
               {hidden_filters}
             </form>
             <select name="Mês" form="{form_id}" style="min-width:140px;">
@@ -3944,12 +3935,6 @@ def dashboard():
           <td>
             <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
               {opt_html(semanas, sem)}
-            </select>
-          </td>
-
-          <td>
-            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
-              {opt_html(status_list, stc)}
             </select>
           </td>
 
@@ -4039,33 +4024,15 @@ def dashboard():
         <thead>
           {f"""
           <tr>
-            <th>Codigo Grupo Cliente</th>
-            <th>Grupo Cliente</th>
-            <th>Codigo Representante</th>
-            <th>Representante</th>
-            <th>Supervisor</th>
-            <th>Cidade</th>
-            <th>Total 2024</th>
-            <th>Total 2025</th>
-            <th>Total 2026</th>
-            <th>Status Cor</th>
-            <th>Data Agenda Visita</th>
-            <th>Mês</th>
-            <th>Semana Atendimento</th>
-            <th>Status Cliente</th>
-            <th>Observações</th>
-          </tr>
-          """ if is_admin() else f"""
-          <tr>
             <th class="sticky-col">Codigo Grupo Cliente</th>
             <th class="sticky-col-2">Grupo Cliente</th>
             <th>Cidade</th>
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
+            <th>Status Cor</th>
             <th>Mês</th>
             <th>Semana Atendimento</th>
-            <th>Status Cliente</th>
             <th>Observações</th>
           </tr>
           """}
@@ -4287,4 +4254,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.getenv("PORT", "5000")),
         debug=DEBUG_MODE
-    )
+    )#
