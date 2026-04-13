@@ -4139,25 +4139,42 @@ def salvar():
         col_obs = headers_norm.index("Observações") + 1
 
         updates = []
-        if campos_enviados["data"]:
+        confirmacoes = {}
+
+        # Regra prática para a carteira e dashboard:
+        # só atualiza/confirma campos que realmente vieram preenchidos.
+        # Isso evita falso erro ao gravar quando o usuário altera apenas Mês/Obs
+        # e os demais campos chegam vazios no formulário.
+        if campos_enviados["data"] and norm(data_agenda):
             updates.append({"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]})
-        if campos_enviados["mes"]:
+            confirmacoes["data"] = normalizar_data_comparacao(data_agenda)
+
+        if campos_enviados["mes"] and norm(mes):
             updates.append({"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]})
-        if campos_enviados["semana"]:
+            confirmacoes["mes"] = norm(mes)
+
+        if campos_enviados["semana"] and norm(semana):
             updates.append({"range": rowcol_to_a1(row_num, col_semana), "values": [[semana]]})
-        if campos_enviados["status"]:
+            confirmacoes["semana"] = norm(semana)
+
+        if campos_enviados["status"] and norm(status_cliente):
             updates.append({"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]})
+            confirmacoes["status"] = norm(status_cliente)
+
+        # Observações pode ser gravada mesmo vazia quando o campo existir,
+        # para permitir ajuste do texto na mesma linha.
         if campos_enviados["obs"]:
             updates.append({"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]})
+            confirmacoes["obs"] = norm(observacoes)
 
         if updates:
             ws_base.batch_update(updates, value_input_option="RAW")
 
-        esperado_data = normalizar_data_comparacao(data_agenda)
-        esperado_mes = norm(mes)
-        esperado_semana = norm(semana)
-        esperado_status = norm(status_cliente)
-        esperado_obs = norm(observacoes)
+        esperado_data = confirmacoes.get("data", "")
+        esperado_mes = confirmacoes.get("mes", "")
+        esperado_semana = confirmacoes.get("semana", "")
+        esperado_status = confirmacoes.get("status", "")
+        esperado_obs = confirmacoes.get("obs", "")
 
         gravado_data = ""
         gravado_mes = ""
@@ -4177,27 +4194,27 @@ def salvar():
 
             conferiu = True
 
-            if campos_enviados["data"]:
+            if "data" in confirmacoes:
                 conferiu = conferiu and (
                     normalizar_data_comparacao(gravado_data) == esperado_data
                 )
 
-            if campos_enviados["mes"]:
+            if "mes" in confirmacoes:
                 conferiu = conferiu and (
                     normalize_text_for_match(gravado_mes) == normalize_text_for_match(esperado_mes)
                 )
 
-            if campos_enviados["semana"]:
+            if "semana" in confirmacoes:
                 conferiu = conferiu and (
                     normalize_text_for_match(gravado_semana) == normalize_text_for_match(esperado_semana)
                 )
 
-            if campos_enviados["status"]:
+            if "status" in confirmacoes:
                 conferiu = conferiu and (
                     normalize_text_for_match(gravado_status) == normalize_text_for_match(esperado_status)
                 )
 
-            if campos_enviados["obs"]:
+            if "obs" in confirmacoes:
                 conferiu = conferiu and (
                     norm(gravado_obs) == norm(esperado_obs)
                 )
