@@ -4118,6 +4118,14 @@ def salvar():
         status_cliente = norm(request.form.get("Status Cliente", ""))
         observacoes = norm(request.form.get("Observações", ""))
 
+        campos_enviados = {
+            "data": "Data Agenda Visita" in request.form,
+            "mes": "Mês" in request.form,
+            "semana": "Semana Atendimento" in request.form,
+            "status": "Status Cliente" in request.form,
+            "obs": "Observações" in request.form,
+        }
+
         row_num = int(base_row_number)
 
         col_data = headers_norm.index("Data Agenda Visita") + 1
@@ -4126,16 +4134,20 @@ def salvar():
         col_status = headers_norm.index("Status Cliente") + 1
         col_obs = headers_norm.index("Observações") + 1
 
-        ws_base.batch_update(
-            [
-                {"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]},
-                {"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]},
-                {"range": rowcol_to_a1(row_num, col_semana), "values": [[semana]]},
-                {"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]},
-                {"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]},
-            ],
-            value_input_option="RAW"
-        )
+        updates = []
+        if campos_enviados["data"]:
+            updates.append({"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]})
+        if campos_enviados["mes"]:
+            updates.append({"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]})
+        if campos_enviados["semana"]:
+            updates.append({"range": rowcol_to_a1(row_num, col_semana), "values": [[semana]]})
+        if campos_enviados["status"]:
+            updates.append({"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]})
+        if campos_enviados["obs"]:
+            updates.append({"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]})
+
+        if updates:
+            ws_base.batch_update(updates, value_input_option="RAW")
 
         esperado_data = normalizar_data_comparacao(data_agenda)
         esperado_mes = norm(mes)
@@ -4159,13 +4171,32 @@ def salvar():
             gravado_status = norm(ws_base.acell(rowcol_to_a1(row_num, col_status)).value or "")
             gravado_obs = norm(ws_base.acell(rowcol_to_a1(row_num, col_obs)).value or "")
 
-            conferiu = (
-                normalizar_data_comparacao(gravado_data) == esperado_data and
-                normalize_text_for_match(gravado_mes) == normalize_text_for_match(esperado_mes) and
-                normalize_text_for_match(gravado_semana) == normalize_text_for_match(esperado_semana) and
-                normalize_text_for_match(gravado_status) == normalize_text_for_match(esperado_status) and
-                norm(gravado_obs) == norm(esperado_obs)
-            )
+            conferiu = True
+
+            if campos_enviados["data"]:
+                conferiu = conferiu and (
+                    normalizar_data_comparacao(gravado_data) == esperado_data
+                )
+
+            if campos_enviados["mes"]:
+                conferiu = conferiu and (
+                    normalize_text_for_match(gravado_mes) == normalize_text_for_match(esperado_mes)
+                )
+
+            if campos_enviados["semana"]:
+                conferiu = conferiu and (
+                    normalize_text_for_match(gravado_semana) == normalize_text_for_match(esperado_semana)
+                )
+
+            if campos_enviados["status"]:
+                conferiu = conferiu and (
+                    normalize_text_for_match(gravado_status) == normalize_text_for_match(esperado_status)
+                )
+
+            if campos_enviados["obs"]:
+                conferiu = conferiu and (
+                    norm(gravado_obs) == norm(esperado_obs)
+                )
 
             if conferiu:
                 break
