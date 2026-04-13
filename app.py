@@ -8275,17 +8275,16 @@ def dashboard():
 
     <div class="card rep-table-wrap">
       <table class="rep-table">
-        <thead>
-          {f"""
-          <tr>
+       <thead>
+        <tr>
             <th class="sticky-col">Codigo Grupo Cliente</th>
             <th class="sticky-col-2">Grupo Cliente</th>
             <th>Cidade</th>
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
-                        <th>Mês</th>
+            <th>Mês</th>
             <th>Semana Atendimento</th>
             <th>Observações</th>
-          </tr>
-     
+        </tr>
+        </thead>
