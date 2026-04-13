@@ -634,7 +634,7 @@ def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, val
     )
 
     html = f"""
-    <div style="max-height:180px; overflow:auto; width:100%;">
+    <div style="height:100%; min-height:100%; overflow:auto; width:100%;">
         <table class="dash-table-mini">
         <thead>
           <tr>
@@ -2257,12 +2257,15 @@ BASE_HTML = """
 
     .dash-row-bottom {
       display: block;
+      flex: 1;
     }
 
     .dash-right-stack {
-      display: grid;
-      grid-template-rows: auto auto;
+      display: flex;
+      flex-direction: column;
       gap: 8px;
+      height: 100%;
+      min-height: 100%;
     }
 
     .dash-panel {
@@ -2290,8 +2293,10 @@ BASE_HTML = """
     .dash-panel-body-map {
     padding: 6px;
     box-sizing: border-box;
-    min-height: auto;
+    min-height: 100%;
     height: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
     .dash-table-mini {
@@ -3438,7 +3443,6 @@ def admin_dashboard():
                             Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
                             Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
                           </div>
-                          {render_parametros_comerciais_box_html(parametros_comerciais, compact=True)}
                         </div>
                       </div>
                     </div>
@@ -3446,7 +3450,7 @@ def admin_dashboard():
                     <div class="dash-row-bottom">
                       <div class="dash-panel">
                         <div class="dash-panel-title">30 Maiores Clientes sem Compra</div>
-                        <div class="dash-panel-body">
+                        <div class="dash-panel-body" style="height:100%;">
                           {clientes_sem_compra_html}
                         </div>
                       </div>
