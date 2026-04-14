@@ -1467,13 +1467,15 @@ def get_nome_rep_info_by_rep(rep_code):
         if not col_rep:
             raise RuntimeError("Coluna REP não encontrada na planilha de representantes.")
 
-        rep_num = re.sub(r"\D", "", rep_code).lstrip("0") or (rep_code.lstrip("0") or "0")
+        rep_busca = str(rep_code).strip()
+        rep_busca_num = re.sub(r"\D", "", rep_busca).lstrip("0") or (rep_busca.lstrip("0") or "0")
 
         for row in rows:
-            row_rep = norm(row.get(col_rep, ""))
-            row_rep_num = re.sub(r"\D", "", row_rep).lstrip("0") or (row_rep.lstrip("0") or "0")
+            row_rep = str(row.get(col_rep, "")).strip()
+            row_rep_norm = norm(row_rep)
+            row_rep_num = re.sub(r"\D", "", row_rep_norm).lstrip("0") or (row_rep_norm.lstrip("0") or "0")
 
-            if row_rep == rep_code or row_rep_num == rep_num:
+            if row_rep_norm == rep_busca or row_rep_num == rep_busca_num:
                 info["nome_rep"] = norm(row.get(col_nome, "")) if col_nome else ""
                 info["supervisor"] = norm(row.get(col_sup, "")) if col_sup else ""
                 info["regiao"] = norm(row.get(col_reg, "")) if col_reg else ""
