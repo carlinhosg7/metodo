@@ -3260,6 +3260,7 @@ def admin_dashboard():
         header_percentual = "0,00%"
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
 
+        nome_rep_info = {"ok": False, "error": ""}
         if header_rep_code:
             nome_rep_info = get_nome_rep_info_by_rep(header_rep_code)
             if nome_rep_info.get("ok"):
@@ -3641,6 +3642,11 @@ def admin_dashboard():
                     <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
                     <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
                     <div class="dash-subline"><b>Região:</b> {h(header_region or "A definir")}</div>
+                    {
+                        f'<div class="dash-subline" style="color:#b91c1c;"><b>Diag. nome rep:</b> {h(nome_rep_info.get("error", ""))}</div>'
+                        if header_rep_code and not nome_rep_info.get("ok") and norm(nome_rep_info.get("error", ""))
+                        else ""
+                    }
                     <div class="dash-subline"><b>Dias úteis:</b> Inverno {h(parametros_comerciais.get("dias_uteis_inverno", "") or "-")} | Verão {h(parametros_comerciais.get("dias_uteis_verao", "") or "-")} | <b>Saldo:</b> Inv {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_inverno_txt', '-'))} | Ver {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_verao_txt', '-'))}</div>
                   </div>
 
