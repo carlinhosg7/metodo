@@ -4020,7 +4020,6 @@ def dashboard():
     <div class="card rep-table-wrap">
       <table class="rep-table">
         <thead>
-          {f"""
           <tr>
             <th class="sticky-col">Codigo Grupo Cliente</th>
             <th class="sticky-col-2">Grupo Cliente</th>
@@ -4028,8 +4027,226 @@ def dashboard():
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
-                        <th>Mês</th>
+            <th>Mês</th>
             <th>Semana Atendimento</th>
             <th>Observações</th>
           </tr>
-     
+        </thead>
+        <tbody>
+          {''.join(table_rows)}
+        </tbody>
+      </table>
+    </div>
+    """
+
+    return render_template_string(
+        BASE_HTML,
+        title=APP_TITLE,
+        subtitle=f"Planilha: {WS_BASE}",
+        logged=True,
+        user_login=session.get("user_login"),
+        user_name=session.get("rep_name", ""),
+        user_type=session.get("user_type"),
+        user_photo_url=current_user_photo,
+        body=body
+    )
+
+
+@app.route("/salvar", methods=["POST"])
+def salvar():
+    if not require_login():
+        flash("Sessão expirada. Faça login novamente.", "err")
+        return redirect(url_for("login"))
+
+    user_type = session.get("user_type")
+    user_login = session.get("user_login")
+
+    client_key = norm(request.form.get("client_key", ""))
+    rep_code_form = norm(request.form.get("rep_code", ""))
+    base_row_number = norm(request.form.get("base_row_number", ""))
+
+    sup = norm(request.form.get("sup", ""))
+    rep = norm(request.form.get("rep", ""))
+    q = norm(request.form.get("q", ""))
+
+    data_ini = norm(request.form.get("data_ini", ""))
+    data_fim = norm(request.form.get("data_fim", ""))
+    filtro_mes = norm(request.form.get("filtro_mes", ""))
+    filtro_semana = norm(request.form.get("filtro_semana", ""))
+
+    redirect_args = {
+        k: v for k, v in {
+            "sup": sup,
+            "rep": rep,
+            "q": q,
+            "data_ini": data_ini,
+            "data_fim": data_fim,
+            "filtro_mes": filtro_mes,
+            "filtro_semana": filtro_semana
+        }.items() if v
+    }
+
+    if not client_key:
+        flash("client_key vazio.", "err")
+        return redirect(url_for("dashboard", **redirect_args))
+
+    if not base_row_number.isdigit():
+        flash("Linha da BASE inválida para gravação.", "err")
+        return redirect(url_for("dashboard", **redirect_args))
+
+    if user_type == "rep" and rep_code_form != norm(session.get("rep_code", "")):
+        flash("Você não pode gravar alterações em clientes de outro representante.", "err")
+        return redirect(url_for("dashboard", **redirect_args))
+
+    try:
+        sh = connect_gs()
+        ws_base = sh.worksheet(WS_BASE)
+
+        try:
+            ws_ed = ensure_edicoes_worksheet(sh)
+            edicoes_ok = True
+        except Exception:
+            ws_ed = None
+            edicoes_ok = False
+
+        headers = ensure_base_tracking_columns(ws_base)
+        headers_norm = [norm(x) for x in headers]
+
+        data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
+        mes = norm(request.form.get("Mês", ""))
+        semana = norm(request.form.get("Semana Atendimento", ""))
+        status_cliente = norm(request.form.get("Status Cliente", ""))
+        observacoes = norm(request.form.get("Observações", ""))
+
+        row_num = int(base_row_number)
+
+        col_data = headers_norm.index("Data Agenda Visita") + 1
+        col_mes = headers_norm.index("Mês") + 1
+        col_semana = headers_norm.index("Semana Atendimento") + 1
+        col_status = headers_norm.index("Status Cliente") + 1
+        col_obs = headers_norm.index("Observações") + 1
+
+        ws_base.batch_update(
+            [
+                {"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]},
+                {"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]},
+                {"range": rowcol_to_a1(row_num, col_semana), "values": [[semana]]},
+                {"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]},
+                {"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]},
+            ],
+            value_input_option="RAW"
+        )
+
+        esperado_data = normalizar_data_comparacao(data_agenda)
+        esperado_mes = norm(mes)
+        esperado_semana = norm(semana)
+        esperado_status = norm(status_cliente)
+        esperado_obs = norm(observacoes)
+
+        gravado_data = ""
+        gravado_mes = ""
+        gravado_semana = ""
+        gravado_status = ""
+        gravado_obs = ""
+        conferiu = False
+
+        for _ in range(5):
+            time.sleep(0.35)
+
+            gravado_data = norm(ws_base.acell(rowcol_to_a1(row_num, col_data)).value or "")
+            gravado_mes = norm(ws_base.acell(rowcol_to_a1(row_num, col_mes)).value or "")
+            gravado_semana = norm(ws_base.acell(rowcol_to_a1(row_num, col_semana)).value or "")
+            gravado_status = norm(ws_base.acell(rowcol_to_a1(row_num, col_status)).value or "")
+            gravado_obs = norm(ws_base.acell(rowcol_to_a1(row_num, col_obs)).value or "")
+
+            conferiu = (
+                normalizar_data_comparacao(gravado_data) == esperado_data and
+                normalize_text_for_match(gravado_mes) == normalize_text_for_match(esperado_mes) and
+                normalize_text_for_match(gravado_semana) == normalize_text_for_match(esperado_semana) and
+                normalize_text_for_match(gravado_status) == normalize_text_for_match(esperado_status) and
+                norm(gravado_obs) == norm(esperado_obs)
+            )
+
+            if conferiu:
+                break
+
+        if not conferiu:
+            set_last_save_debug({
+                "row_num": row_num,
+                "client_key": client_key,
+                "data_agenda": gravado_data,
+                "mes": gravado_mes,
+                "semana": gravado_semana,
+                "semana_esperada": esperado_semana,
+                "status_cliente": gravado_status,
+                "observacoes": gravado_obs,
+                "result": "FALHA NA CONFIRMAÇÃO",
+            })
+            raise RuntimeError(
+                "A gravação não foi confirmada na BASE. "
+                f"Linha={row_num} | "
+                f"Data='{gravado_data}' | "
+                f"Mês='{gravado_mes}' | "
+                f"Semana='{gravado_semana}' | "
+                f"Status='{gravado_status}' | "
+                f"Obs='{gravado_obs}'"
+            )
+
+        if edicoes_ok and ws_ed is not None:
+            row_log = [
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                user_type,
+                user_login,
+                rep_code_form,
+                client_key,
+                data_agenda,
+                mes,
+                semana,
+                status_cliente,
+                observacoes
+            ]
+            ws_ed.append_row(row_log, value_input_option="USER_ENTERED")
+            result_txt = "BASE OK / EDICOES OK"
+        else:
+            result_txt = "BASE OK / EDICOES NÃO DISPONÍVEL"
+
+        set_last_save_debug({
+            "row_num": row_num,
+            "client_key": client_key,
+            "data_agenda": gravado_data,
+            "mes": gravado_mes,
+            "semana": gravado_semana,
+            "status_cliente": gravado_status,
+            "observacoes": gravado_obs,
+            "result": result_txt,
+        })
+
+        invalidate_main_sheet_cache()
+
+        flash(f"Gravado com sucesso na BASE na linha {row_num}.", "ok")
+        if not edicoes_ok:
+            flash("A BASE foi gravada, mas a aba EDICOES não pôde ser usada. Crie a aba manualmente ou ajuste a permissão da service account.", "err")
+
+    except Exception as e:
+        app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
+        set_last_save_debug({
+            "row_num": base_row_number,
+            "client_key": client_key,
+            "data_agenda": request.form.get("Data Agenda Visita", ""),
+            "mes": request.form.get("Mês", ""),
+            "semana": request.form.get("Semana Atendimento", ""),
+            "status_cliente": request.form.get("Status Cliente", ""),
+            "observacoes": request.form.get("Observações", ""),
+            "result": f"ERRO: {str(e)}",
+        })
+        flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
+
+    return redirect(url_for("dashboard", **redirect_args))
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "5000")),
+        debug=DEBUG_MODE
+    )#
