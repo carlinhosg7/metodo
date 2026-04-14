@@ -1914,12 +1914,58 @@ def get_parametros_comerciais(sh=None):
         return info
 
 
-def render_parametros_comerciais_box_html(parametros, compact=False):
+def contar_dias_uteis_ano_ate_hoje(ref_date=None):
+    hoje = ref_date.date() if isinstance(ref_date, datetime) else (ref_date or datetime.now().date())
+    inicio = hoje.replace(month=1, day=1)
+    total = 0
+    atual = inicio
+    while atual <= hoje:
+        if atual.weekday() < 5:
+            total += 1
+        atual += timedelta(days=1)
+    return total
+
+
+def montar_metricas_parametros(parametros, clientes_sem_compra=""):
+    dias_inverno = int(parse_number_br(parametros.get("dias_uteis_inverno", "") or 0) or 0)
+    dias_verao = int(parse_number_br(parametros.get("dias_uteis_verao", "") or 0) or 0)
+
+    clientes_sem_compra_num = parse_number_br(clientes_sem_compra)
+    if clientes_sem_compra_num <= 0:
+        clientes_sem_compra_num = 0.0
+
+    dias_uteis_ate_hoje = contar_dias_uteis_ano_ate_hoje()
+
+    saldo_inverno = max(dias_inverno - dias_uteis_ate_hoje, 0)
+    saldo_verao = max(dias_verao - dias_uteis_ate_hoje, 0)
+
+    positivacao_inverno = (saldo_inverno / clientes_sem_compra_num) if clientes_sem_compra_num > 0 else 0.0
+    positivacao_verao = (saldo_verao / clientes_sem_compra_num) if clientes_sem_compra_num > 0 else 0.0
+
+    return {
+        "dias_uteis_inverno": dias_inverno,
+        "dias_uteis_verao": dias_verao,
+        "dias_uteis_ate_hoje": dias_uteis_ate_hoje,
+        "saldo_dias_uteis_inverno": saldo_inverno,
+        "saldo_dias_uteis_verao": saldo_verao,
+        "clientes_sem_compra": clientes_sem_compra_num,
+        "positivacao_inverno": positivacao_inverno,
+        "positivacao_verao": positivacao_verao,
+        "positivacao_inverno_txt": format_number_br(positivacao_inverno),
+        "positivacao_verao_txt": format_number_br(positivacao_verao),
+        "saldo_inverno_txt": str(saldo_inverno),
+        "saldo_verao_txt": str(saldo_verao),
+        "dias_ate_hoje_txt": str(dias_uteis_ate_hoje),
+        "clientes_sem_compra_txt": format_number_br(clientes_sem_compra_num),
+    }
+
+
+def render_parametros_comerciais_box_html(parametros, clientes_sem_compra="", compact=False):
     inverno = norm(parametros.get("dias_uteis_inverno", "")) or "-"
     verao = norm(parametros.get("dias_uteis_verao", "")) or "-"
-    positivacao = norm(parametros.get("qtd_positivacao_carteira", "")) or "-"
     atualizado_em = norm(parametros.get("atualizado_em", ""))
     atualizado_por = norm(parametros.get("atualizado_por", ""))
+    metricas = montar_metricas_parametros(parametros, clientes_sem_compra)
 
     rodape = ""
     if atualizado_em or atualizado_por:
@@ -1929,8 +1975,9 @@ def render_parametros_comerciais_box_html(parametros, compact=False):
         return f"""
         <div class="dash-coverage-box" style="display:flex; flex-wrap:wrap; gap:10px; justify-content:center;">
           <span>Inverno: <b>{h(inverno)}</b></span>
+          <span>Posit. Inv: <b>{h(metricas['positivacao_inverno_txt'])}</b></span>
           <span>Verão: <b>{h(verao)}</b></span>
-          <span>Positivação: <b>{h(positivacao)}</b></span>
+          <span>Posit. Ver: <b>{h(metricas['positivacao_verao_txt'])}</b></span>
         </div>
         {rodape}
         """
@@ -1938,39 +1985,56 @@ def render_parametros_comerciais_box_html(parametros, compact=False):
     return f"""
     <div class="card">
       <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Parâmetros Comerciais</div>
-      <div class="grid-2" style="grid-template-columns: repeat(3, 1fr);">
-        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção inverno: <b>{h(inverno)}</b></div>
-        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção verão: <b>{h(verao)}</b></div>
-        <div class="pill" style="padding:12px; border-radius:12px;">Positivação p/ cobrir carteira: <b>{h(positivacao)}</b></div>
+      <div class="grid-2" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px;">
+        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção Inverno: <b>{h(inverno)}</b></div>
+        <div class="pill" style="padding:12px; border-radius:12px;">Qtd. positivação p/ cobrir carteira Inverno: <b>{h(metricas['positivacao_inverno_txt'])}</b></div>
+        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção Verão: <b>{h(verao)}</b></div>
+        <div class="pill" style="padding:12px; border-radius:12px;">Qtd. positivação p/ cobrir carteira Verão: <b>{h(metricas['positivacao_verao_txt'])}</b></div>
       </div>
+      <div class="grid-2" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; margin-top:12px;">
+        <div class="pill" style="padding:12px; border-radius:12px;">Saldo dias úteis Inverno: <b>{h(metricas['saldo_inverno_txt'])}</b></div>
+        <div class="pill" style="padding:12px; border-radius:12px;">Saldo dias úteis Verão: <b>{h(metricas['saldo_verao_txt'])}</b></div>
+      </div>
+      <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis da coleção - dias úteis úteis corridos no ano até hoje. Positivação = saldo de dias úteis ÷ clientes sem compra.</div>
       {rodape}
     </div>
     """
 
 
-def render_parametros_comerciais_form_html(parametros):
+def render_parametros_comerciais_form_html(parametros, clientes_sem_compra=""):
+    metricas = montar_metricas_parametros(parametros, clientes_sem_compra)
     return f"""
     <div class="card no-print">
       <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Parâmetros Comerciais</div>
       <form method="post" action="{url_for('salvar_parametros_comerciais')}">
-        <div class="grid">
+        <div class="grid-2" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; align-items:end;">
           <div>
-            <label>Dias úteis coleção inverno</label>
-            <input type="number" min="0" step="1" name="dias_uteis_inverno" value="{h(parametros.get('dias_uteis_inverno', ''))}" placeholder="Ex.: 22">
+            <label>Dias úteis coleção Inverno</label>
+            <input type="number" min="0" step="1" name="dias_uteis_inverno" value="{h(parametros.get('dias_uteis_inverno', ''))}" placeholder="Ex.: 104">
           </div>
           <div>
-            <label>Dias úteis coleção verão</label>
-            <input type="number" min="0" step="1" name="dias_uteis_verao" value="{h(parametros.get('dias_uteis_verao', ''))}" placeholder="Ex.: 24">
+            <label>Qtd. positivação para cobrir carteira Inverno</label>
+            <input type="text" value="{h(metricas['positivacao_inverno_txt'])}" readonly style="background:#f8fafc; color:#111827; font-weight:700;">
           </div>
           <div>
-            <label>Qtd. positivação para cobrir carteira</label>
-            <input type="number" min="0" step="1" name="qtd_positivacao_carteira" value="{h(parametros.get('qtd_positivacao_carteira', ''))}" placeholder="Ex.: 180">
+            <label>Dias úteis coleção Verão</label>
+            <input type="number" min="0" step="1" name="dias_uteis_verao" value="{h(parametros.get('dias_uteis_verao', ''))}" placeholder="Ex.: 126">
+          </div>
+          <div>
+            <label>Qtd. positivação para cobrir carteira Verão</label>
+            <input type="text" value="{h(metricas['positivacao_verao_txt'])}" readonly style="background:#f8fafc; color:#111827; font-weight:700;">
           </div>
           <div style="display:flex; align-items:flex-end; gap:8px;">
             <button type="submit">Salvar parâmetros</button>
           </div>
         </div>
-        <div class="small" style="margin-top:8px;">Esses campos aparecem no cabeçalho do dashboard, no bloco de cobertura e também na carteira.</div>
+        <div class="grid-2" style="grid-template-columns: repeat(4, minmax(0, 1fr)); gap:10px; margin-top:12px;">
+          <div class="pill" style="padding:10px; border-radius:12px;">Dias úteis até hoje: <b>{h(metricas['dias_ate_hoje_txt'])}</b></div>
+          <div class="pill" style="padding:10px; border-radius:12px;">Saldo Inverno: <b>{h(metricas['saldo_inverno_txt'])}</b></div>
+          <div class="pill" style="padding:10px; border-radius:12px;">Saldo Verão: <b>{h(metricas['saldo_verao_txt'])}</b></div>
+          <div class="pill" style="padding:10px; border-radius:12px;">Clientes sem compra: <b>{h(metricas['clientes_sem_compra_txt'])}</b></div>
+        </div>
+        <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis da coleção - dias úteis corridos no ano até hoje. Positivação = saldo de dias úteis ÷ clientes sem compra.</div>
       </form>
     </div>
     """
@@ -2932,7 +2996,7 @@ def salvar_parametros_comerciais():
 
     dias_uteis_inverno = norm(request.form.get("dias_uteis_inverno", ""))
     dias_uteis_verao = norm(request.form.get("dias_uteis_verao", ""))
-    qtd_positivacao_carteira = norm(request.form.get("qtd_positivacao_carteira", ""))
+    qtd_positivacao_carteira = ""
 
     try:
         sh = connect_gs()
@@ -3408,7 +3472,7 @@ def admin_dashboard():
             </div>
             """
 
-        parametros_form_html = render_parametros_comerciais_form_html(parametros_comerciais)
+        parametros_form_html = render_parametros_comerciais_form_html(parametros_comerciais, total_sem_compra)
 
         body = f"""
         <div class="dash-page">
@@ -3465,7 +3529,7 @@ def admin_dashboard():
                     <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
                     <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
                     <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
-                    <div class="dash-subline"><b>Dias úteis:</b> Inverno {h(parametros_comerciais.get("dias_uteis_inverno", "") or "-")} | Verão {h(parametros_comerciais.get("dias_uteis_verao", "") or "-")} | <b>Positivação:</b> {h(parametros_comerciais.get("qtd_positivacao_carteira", "") or "-")}</div>
+                    <div class="dash-subline"><b>Dias úteis:</b> Inverno {h(parametros_comerciais.get("dias_uteis_inverno", "") or "-")} | Verão {h(parametros_comerciais.get("dias_uteis_verao", "") or "-")} | <b>Saldo:</b> Inv {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_inverno_txt', '-'))} | Ver {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_verao_txt', '-'))}</div>
                   </div>
 
                   <div class="dash-meta-box">
@@ -3482,8 +3546,12 @@ def admin_dashboard():
                       <div class="dash-metric-value">{h(header_percentual)}</div>
                     </div>
                     <div class="dash-metric">
-                      <div class="dash-metric-label">Positivação</div>
-                      <div class="dash-metric-value">{h(parametros_comerciais.get("qtd_positivacao_carteira", "") or "-")}</div>
+                      <div class="dash-metric-label">Posit. Inverno</div>
+                      <div class="dash-metric-value">{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('positivacao_inverno_txt', '-'))}</div>
+                    </div>
+                    <div class="dash-metric">
+                      <div class="dash-metric-label">Posit. Verão</div>
+                      <div class="dash-metric-value">{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('positivacao_verao_txt', '-'))}</div>
                     </div>
                   </div>
 
@@ -3525,11 +3593,20 @@ def admin_dashboard():
                       <div class="dash-panel">
                         <div class="dash-panel-title">Cobertura da Carteira</div>
                         <div class="dash-panel-body">
-                          <div class="dash-coverage-box">
-                            Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                            Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                            Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                            Cobertura: <b style="margin-left:6px;">{h(cobertura_pct)}</b>
+                          <div class="dash-coverage-box" style="display:flex; flex-direction:column; align-items:flex-start; gap:8px;">
+                            <div>
+                              Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                              Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                              Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                              Cobertura: <b style="margin-left:6px;">{h(cobertura_pct)}</b>
+                            </div>
+                            <div class="small" style="font-weight:700; color:#334155;">
+                              Saldo dias úteis: Inverno <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_inverno_txt', '-'))}</b> |
+                              Verão <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_verao_txt', '-'))}</b>
+                              &nbsp; | &nbsp;
+                              Posit.: Inverno <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('positivacao_inverno_txt', '-'))}</b> |
+                              Verão <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('positivacao_verao_txt', '-'))}</b>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -3842,16 +3919,25 @@ def dashboard():
     carteira_parametros_html = f"""
     <div class="card">
       <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Cobertura da Carteira</div>
-      <div class="dash-coverage-box">
-        Carteira: <b style="margin:0 6px;">{h(total_carteira_dashboard)}</b> |
-        Com compra: <b style="margin:0 6px;">{h(total_com_compra_dashboard)}</b> |
-        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra_dashboard)}</b> |
-        Cobertura: <b style="margin-left:6px;">{h(cobertura_pct_dashboard)}</b>
+      <div class="dash-coverage-box" style="display:flex; flex-direction:column; align-items:flex-start; gap:8px;">
+        <div>
+          Carteira: <b style="margin:0 6px;">{h(total_carteira_dashboard)}</b> |
+          Com compra: <b style="margin:0 6px;">{h(total_com_compra_dashboard)}</b> |
+          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra_dashboard)}</b> |
+          Cobertura: <b style="margin-left:6px;">{h(cobertura_pct_dashboard)}</b>
+        </div>
+        <div class="small" style="font-weight:700; color:#334155;">
+          Saldo dias úteis: Inverno <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra_dashboard).get('saldo_inverno_txt', '-'))}</b> |
+          Verão <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra_dashboard).get('saldo_verao_txt', '-'))}</b>
+          &nbsp; | &nbsp;
+          Posit.: Inverno <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra_dashboard).get('positivacao_inverno_txt', '-'))}</b> |
+          Verão <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra_dashboard).get('positivacao_verao_txt', '-'))}</b>
+        </div>
       </div>
     </div>
     """
 
-    parametros_card_html = render_parametros_comerciais_box_html(parametros_comerciais)
+    parametros_card_html = render_parametros_comerciais_box_html(parametros_comerciais, total_sem_compra_dashboard)
 
     debug_html = ""
     if DEBUG_MODE:
