@@ -11,7 +11,7 @@ from io import StringIO
 import csv as csvlib
 
 import requests
-from flask import Flask, request, redirect, url_for, session, render_template_string, flash
+from flask import Flask, request, redirect, url_for, session, render_template_string, flash, send_from_directory
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -1935,6 +1935,22 @@ def contar_dias_uteis_periodo_ate_hoje(inicio, fim, ref_date=None):
     return contar_dias_uteis_periodo(inicio, fim_real)
 
 
+def contar_dias_uteis_restantes_periodo(inicio, fim, ref_date=None):
+    hoje = ref_date.date() if isinstance(ref_date, datetime) else (ref_date or datetime.now().date())
+
+    if hoje < inicio:
+        return contar_dias_uteis_periodo(inicio, fim)
+
+    if hoje > fim:
+        return 0
+
+    proximo_dia = hoje + timedelta(days=1)
+    if proximo_dia > fim:
+        return 0
+
+    return contar_dias_uteis_periodo(proximo_dia, fim)
+
+
 def montar_metricas_parametros(parametros, clientes_sem_compra=""):
     dias_inverno = int(parse_number_br(parametros.get("dias_uteis_inverno", "") or 0) or 0)
     dias_verao = int(parse_number_br(parametros.get("dias_uteis_verao", "") or 0) or 0)
@@ -1951,11 +1967,11 @@ def montar_metricas_parametros(parametros, clientes_sem_compra=""):
     dias_uteis_ate_hoje_inverno = contar_dias_uteis_periodo_ate_hoje(inicio_inverno, fim_inverno)
     dias_uteis_ate_hoje_verao = contar_dias_uteis_periodo_ate_hoje(inicio_verao, fim_verao)
 
-    saldo_inverno = max(dias_inverno - dias_uteis_ate_hoje_inverno, 0)
-    saldo_verao = max(dias_verao - dias_uteis_ate_hoje_verao, 0)
+    saldo_inverno = contar_dias_uteis_restantes_periodo(inicio_inverno, fim_inverno)
+    saldo_verao = contar_dias_uteis_restantes_periodo(inicio_verao, fim_verao)
 
-    positivacao_inverno = (saldo_inverno / clientes_sem_compra_num) if clientes_sem_compra_num > 0 else 0.0
-    positivacao_verao = (saldo_verao / clientes_sem_compra_num) if clientes_sem_compra_num > 0 else 0.0
+    positivacao_inverno = (clientes_sem_compra_num / saldo_inverno) if saldo_inverno > 0 and clientes_sem_compra_num > 0 else 0.0
+    positivacao_verao = (clientes_sem_compra_num / saldo_verao) if saldo_verao > 0 and clientes_sem_compra_num > 0 else 0.0
 
     return {
         "dias_uteis_inverno": dias_inverno,
@@ -2012,7 +2028,7 @@ def render_parametros_comerciais_box_html(parametros, clientes_sem_compra="", co
         <div class="pill" style="padding:12px; border-radius:12px;">Saldo dias úteis Inverno: <b>{h(metricas['saldo_inverno_txt'])}</b></div>
         <div class="pill" style="padding:12px; border-radius:12px;">Saldo dias úteis Verão: <b>{h(metricas['saldo_verao_txt'])}</b></div>
       </div>
-      <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis da coleção - dias úteis corridos do período até hoje. Positivação = saldo de dias úteis ÷ clientes sem compra.</div>
+      <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis restantes do período até a data final da coleção. Positivação = clientes sem compra ÷ saldo de dias úteis restantes.</div>
       {rodape}
     </div>
     """
@@ -2052,7 +2068,7 @@ def render_parametros_comerciais_form_html(parametros, clientes_sem_compra=""):
           <div class="pill" style="padding:10px; border-radius:12px;">Saldo Verão: <b>{h(metricas['saldo_verao_txt'])}</b></div>
           <div class="pill" style="padding:10px; border-radius:12px;">Clientes sem compra: <b>{h(metricas['clientes_sem_compra_txt'])}</b></div>
         </div>
-        <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis da coleção - dias úteis corridos do período até hoje. Positivação = saldo de dias úteis ÷ clientes sem compra.</div>
+        <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis restantes do período até a data final da coleção. Positivação = clientes sem compra ÷ saldo de dias úteis restantes.</div>
       </form>
     </div>
     """
@@ -2946,6 +2962,18 @@ def login():
         user_photo_url="",
         body=body
     )
+
+
+@app.route("/favicon.ico")
+def favicon():
+    favicon_name = "logo_kidy_icon.ico"
+    static_dir = os.path.join(app.root_path, "static")
+    favicon_path = os.path.join(static_dir, favicon_name)
+
+    if os.path.exists(favicon_path):
+        return send_from_directory(static_dir, favicon_name, mimetype="image/vnd.microsoft.icon")
+
+    return ("", 204)
 
 
 @app.route("/logout")
