@@ -1449,19 +1449,27 @@ def get_nome_rep_info_by_rep(rep_code):
         ws = sh.worksheet(WS_NOME_REP)
         headers, rows = safe_get_raw_rows(ws)
 
-        col_rep = pick_col_flexible(headers, ["REP", "Rep", "Código", "Codigo", "Codigo Representante", "Código Representante"])
-        col_nome = pick_col_flexible(headers, ["NOME REP", "Nome Rep", "Representante", "Nome Representante"])
-        col_sup = pick_col_flexible(headers, ["SUPERVISOR", "Supervisor"])
-        col_reg = pick_col_flexible(headers, ["REGIÃO", "REGIAO", "Região", "Regiao", "ÁREA", "AREA", "Região / Área", "Regiao / Area"])
+        col_rep = pick_col_flexible(headers, [
+            "REP", "Rep", "Cód Rep", "Cod Rep", "Código Representante", "Codigo Representante"
+        ])
+        col_nome = pick_col_flexible(headers, [
+            "NOME REP", "Nome Rep", "Nome do Representante", "Representante", "Nome Representante"
+        ])
+        col_sup = pick_col_flexible(headers, [
+            "SUPERVISOR", "Supervisor", "Nome Supervisor"
+        ])
+        col_reg = pick_col_flexible(headers, [
+            "REGIÃO", "REGIAO", "Região", "Regiao", "REGIÃO / ÁREA", "REGIAO / AREA", "ÁREA", "AREA"
+        ])
 
         if not col_rep:
-            raise RuntimeError("Coluna REP não encontrada na planilha de nome do representante.")
+            raise RuntimeError("Coluna REP não encontrada na planilha de representantes.")
 
-        rep_num = rep_code.lstrip("0") or "0"
+        rep_num = re.sub(r"\D", "", rep_code).lstrip("0") or (rep_code.lstrip("0") or "0")
 
         for row in rows:
             row_rep = norm(row.get(col_rep, ""))
-            row_rep_num = row_rep.lstrip("0") or "0"
+            row_rep_num = re.sub(r"\D", "", row_rep).lstrip("0") or (row_rep.lstrip("0") or "0")
 
             if row_rep == rep_code or row_rep_num == rep_num:
                 info["nome_rep"] = norm(row.get(col_nome, "")) if col_nome else ""
@@ -1470,7 +1478,7 @@ def get_nome_rep_info_by_rep(rep_code):
                 info["ok"] = True
                 return info
 
-        info["error"] = f"Representante {rep_code} não encontrado na planilha de nomes."
+        info["error"] = f"Representante {rep_code} não encontrado na planilha de representantes."
         return info
 
     except Exception as e:
@@ -3241,33 +3249,21 @@ def admin_dashboard():
 
         header_rep_code = rep_sel
         header_rep_name = ""
-        header_sup = sup_sel
-        header_region = "REGIÃO / ÁREA"
+        header_sup = ""
+        header_region = ""
         header_meta = "R$ 0,00"
         header_realizado = "R$ 0,00"
         header_percentual = "0,00%"
         rep_photo = get_rep_photo_src(header_rep_code) if header_rep_code else ""
 
-        vendas_info = {
-            "ok": False,
-            "error": "",
-            "representante": "",
-            "supervisor": "",
-            "meta": 0.0,
-            "realizado": 0.0,
-            "percentual": 0.0,
-        }
-
         if header_rep_code:
             nome_rep_info = get_nome_rep_info_by_rep(header_rep_code)
-
             if nome_rep_info.get("ok"):
-                header_rep_name = nome_rep_info.get("nome_rep", "") or header_rep_name
-                header_sup = nome_rep_info.get("supervisor", "") or header_sup
-                header_region = nome_rep_info.get("regiao", "") or header_region
+                header_rep_name = nome_rep_info.get("nome_rep", "") or ""
+                header_sup = nome_rep_info.get("supervisor", "") or ""
+                header_region = nome_rep_info.get("regiao", "") or ""
 
             vendas_info = get_vendas_info_by_rep(header_rep_code)
-
             if vendas_info.get("ok"):
                 header_meta = format_money_br(vendas_info.get("meta", 0.0))
                 header_realizado = format_money_br(vendas_info.get("realizado", 0.0))
@@ -3640,7 +3636,7 @@ def admin_dashboard():
                     <div class="dash-main-title">Acompanhamento de Representante</div>
                     <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
                     <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
-                    <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
+                    <div class="dash-subline"><b>Região:</b> {h(header_region or "A definir")}</div>
                     <div class="dash-subline"><b>Dias úteis:</b> Inverno {h(parametros_comerciais.get("dias_uteis_inverno", "") or "-")} | Verão {h(parametros_comerciais.get("dias_uteis_verao", "") or "-")} | <b>Saldo:</b> Inv {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_inverno_txt', '-'))} | Ver {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_verao_txt', '-'))}</div>
                   </div>
 
