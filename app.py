@@ -210,6 +210,8 @@ def normalize_header(s):
          .replace("ú", "u")
          .replace("ç", "c")
     )
+    s = s.replace(".", " ").replace("/", " ").replace("-", " ").replace("_", " ")
+    s = re.sub(r"\s+", " ", s).strip()
     return s
 
 
@@ -1465,21 +1467,44 @@ def get_nome_rep_info_by_rep(rep_code):
             "REGIÃO", "REGIAO", "Região", "Regiao", "REGIÃO / ÁREA", "REGIAO / AREA", "ÁREA", "AREA"
         ])
 
+        headers_map = {normalize_header(h): h for h in headers}
+        col_rep = col_rep or headers_map.get("rep")
+        col_nome = col_nome or headers_map.get("nome rep")
+        col_sup = col_sup or headers_map.get("supervisor")
+        col_reg = col_reg or headers_map.get("regiao")
+
+        if not col_rep and headers:
+            col_rep = headers[0]
+        if not col_nome and len(headers) > 1:
+            col_nome = headers[1]
+        if not col_sup and len(headers) > 2:
+            col_sup = headers[2]
+        if not col_reg and len(headers) > 3:
+            col_reg = headers[3]
+
         if not col_rep:
-            raise RuntimeError("Coluna REP não encontrada na planilha de representantes.")
+            info["error"] = "Não consegui localizar a coluna REP na planilha de representantes."
+            return info
 
         rep_busca = str(rep_code).strip()
         rep_busca_num = re.sub(r"\D", "", rep_busca).lstrip("0") or (rep_busca.lstrip("0") or "0")
 
         for row in rows:
             row_rep = str(row.get(col_rep, "")).strip()
-            row_rep_norm = norm(row_rep)
-            row_rep_num = re.sub(r"\D", "", row_rep_norm).lstrip("0") or (row_rep_norm.lstrip("0") or "0")
+            row_rep_num = re.sub(r"\D", "", row_rep).lstrip("0") or (row_rep.lstrip("0") or "0")
 
-            if row_rep_norm == rep_busca or row_rep_num == rep_busca_num:
+            if row_rep == rep_busca or row_rep_num == rep_busca_num:
                 info["nome_rep"] = norm(row.get(col_nome, "")) if col_nome else ""
                 info["supervisor"] = norm(row.get(col_sup, "")) if col_sup else ""
                 info["regiao"] = norm(row.get(col_reg, "")) if col_reg else ""
+
+                if not info["nome_rep"] and len(headers) > 1:
+                    info["nome_rep"] = norm(row.get(headers[1], ""))
+                if not info["supervisor"] and len(headers) > 2:
+                    info["supervisor"] = norm(row.get(headers[2], ""))
+                if not info["regiao"] and len(headers) > 3:
+                    info["regiao"] = norm(row.get(headers[3], ""))
+
                 info["ok"] = True
                 return info
 
@@ -1489,7 +1514,6 @@ def get_nome_rep_info_by_rep(rep_code):
     except Exception as e:
         info["error"] = norm(str(e))
         return info
-
 
 def format_percent_from_sheet(value):
     s = norm(value)
@@ -3643,11 +3667,6 @@ def admin_dashboard():
                     <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
                     <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
                     <div class="dash-subline"><b>Região:</b> {h(header_region or "A definir")}</div>
-                    {
-                        f'<div class="dash-subline" style="color:#b91c1c;"><b>Diag. nome rep:</b> {h(nome_rep_info.get("error", ""))}</div>'
-                        if header_rep_code and not nome_rep_info.get("ok") and norm(nome_rep_info.get("error", ""))
-                        else ""
-                    }
                     <div class="dash-subline"><b>Dias úteis:</b> Inverno {h(parametros_comerciais.get("dias_uteis_inverno", "") or "-")} | Verão {h(parametros_comerciais.get("dias_uteis_verao", "") or "-")} | <b>Saldo:</b> Inv {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_inverno_txt', '-'))} | Ver {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_verao_txt', '-'))}</div>
                   </div>
 
