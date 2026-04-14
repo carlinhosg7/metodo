@@ -3873,6 +3873,8 @@ def dashboard():
           <td class="money nowrap">{h(t24)}</td>
           <td class="money nowrap">{h(t25)}</td>
           <td class="money nowrap">{h(t26)}</td>
+          <td class="nowrap"><b>{h(status_cor)}</b></td>
+
           <td>
             <form id="{form_id}" method="post" action="{url_for('salvar')}">
               <input type="hidden" name="client_key" value="{h(ck)}">
@@ -4020,6 +4022,7 @@ def dashboard():
     <div class="card rep-table-wrap">
       <table class="rep-table">
         <thead>
+          {f"""
           <tr>
             <th class="sticky-col">Codigo Grupo Cliente</th>
             <th class="sticky-col-2">Grupo Cliente</th>
@@ -4027,10 +4030,12 @@ def dashboard():
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
+            <th>Status Cor</th>
             <th>Mês</th>
             <th>Semana Atendimento</th>
             <th>Observações</th>
           </tr>
+          """}
         </thead>
         <tbody>
           {''.join(table_rows)}
