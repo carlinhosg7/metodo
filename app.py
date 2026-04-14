@@ -1914,16 +1914,25 @@ def get_parametros_comerciais(sh=None):
         return info
 
 
-def contar_dias_uteis_ano_ate_hoje(ref_date=None):
-    hoje = ref_date.date() if isinstance(ref_date, datetime) else (ref_date or datetime.now().date())
-    inicio = hoje.replace(month=1, day=1)
+def contar_dias_uteis_periodo(inicio, fim):
+    if not inicio or not fim or fim < inicio:
+        return 0
+
     total = 0
     atual = inicio
-    while atual <= hoje:
+    while atual <= fim:
         if atual.weekday() < 5:
             total += 1
         atual += timedelta(days=1)
     return total
+
+
+def contar_dias_uteis_periodo_ate_hoje(inicio, fim, ref_date=None):
+    hoje = ref_date.date() if isinstance(ref_date, datetime) else (ref_date or datetime.now().date())
+    if hoje < inicio:
+        return 0
+    fim_real = min(hoje, fim)
+    return contar_dias_uteis_periodo(inicio, fim_real)
 
 
 def montar_metricas_parametros(parametros, clientes_sem_compra=""):
@@ -1934,10 +1943,16 @@ def montar_metricas_parametros(parametros, clientes_sem_compra=""):
     if clientes_sem_compra_num <= 0:
         clientes_sem_compra_num = 0.0
 
-    dias_uteis_ate_hoje = contar_dias_uteis_ano_ate_hoje()
+    inicio_inverno = datetime(2025, 11, 1).date()
+    fim_inverno = datetime(2026, 4, 30).date()
+    inicio_verao = datetime(2026, 5, 1).date()
+    fim_verao = datetime(2026, 10, 31).date()
 
-    saldo_inverno = max(dias_inverno - dias_uteis_ate_hoje, 0)
-    saldo_verao = max(dias_verao - dias_uteis_ate_hoje, 0)
+    dias_uteis_ate_hoje_inverno = contar_dias_uteis_periodo_ate_hoje(inicio_inverno, fim_inverno)
+    dias_uteis_ate_hoje_verao = contar_dias_uteis_periodo_ate_hoje(inicio_verao, fim_verao)
+
+    saldo_inverno = max(dias_inverno - dias_uteis_ate_hoje_inverno, 0)
+    saldo_verao = max(dias_verao - dias_uteis_ate_hoje_verao, 0)
 
     positivacao_inverno = (saldo_inverno / clientes_sem_compra_num) if clientes_sem_compra_num > 0 else 0.0
     positivacao_verao = (saldo_verao / clientes_sem_compra_num) if clientes_sem_compra_num > 0 else 0.0
@@ -1945,7 +1960,8 @@ def montar_metricas_parametros(parametros, clientes_sem_compra=""):
     return {
         "dias_uteis_inverno": dias_inverno,
         "dias_uteis_verao": dias_verao,
-        "dias_uteis_ate_hoje": dias_uteis_ate_hoje,
+        "dias_uteis_ate_hoje_inverno": dias_uteis_ate_hoje_inverno,
+        "dias_uteis_ate_hoje_verao": dias_uteis_ate_hoje_verao,
         "saldo_dias_uteis_inverno": saldo_inverno,
         "saldo_dias_uteis_verao": saldo_verao,
         "clientes_sem_compra": clientes_sem_compra_num,
@@ -1955,7 +1971,8 @@ def montar_metricas_parametros(parametros, clientes_sem_compra=""):
         "positivacao_verao_txt": format_number_br(positivacao_verao),
         "saldo_inverno_txt": str(saldo_inverno),
         "saldo_verao_txt": str(saldo_verao),
-        "dias_ate_hoje_txt": str(dias_uteis_ate_hoje),
+        "dias_ate_hoje_inverno_txt": str(dias_uteis_ate_hoje_inverno),
+        "dias_ate_hoje_verao_txt": str(dias_uteis_ate_hoje_verao),
         "clientes_sem_compra_txt": format_number_br(clientes_sem_compra_num),
     }
 
