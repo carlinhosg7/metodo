@@ -2012,7 +2012,7 @@ def render_parametros_comerciais_box_html(parametros, clientes_sem_compra="", co
         <div class="pill" style="padding:12px; border-radius:12px;">Saldo dias úteis Inverno: <b>{h(metricas['saldo_inverno_txt'])}</b></div>
         <div class="pill" style="padding:12px; border-radius:12px;">Saldo dias úteis Verão: <b>{h(metricas['saldo_verao_txt'])}</b></div>
       </div>
-      <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis da coleção - dias úteis úteis corridos no ano até hoje. Positivação = saldo de dias úteis ÷ clientes sem compra.</div>
+      <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis da coleção - dias úteis corridos do período até hoje. Positivação = saldo de dias úteis ÷ clientes sem compra.</div>
       {rodape}
     </div>
     """
@@ -2045,13 +2045,14 @@ def render_parametros_comerciais_form_html(parametros, clientes_sem_compra=""):
             <button type="submit">Salvar parâmetros</button>
           </div>
         </div>
-        <div class="grid-2" style="grid-template-columns: repeat(4, minmax(0, 1fr)); gap:10px; margin-top:12px;">
-          <div class="pill" style="padding:10px; border-radius:12px;">Dias úteis até hoje: <b>{h(metricas['dias_ate_hoje_txt'])}</b></div>
+        <div class="grid-2" style="grid-template-columns: repeat(5, minmax(0, 1fr)); gap:10px; margin-top:12px;">
+          <div class="pill" style="padding:10px; border-radius:12px;">Dias úteis até hoje Inverno: <b>{h(metricas['dias_ate_hoje_inverno_txt'])}</b></div>
+          <div class="pill" style="padding:10px; border-radius:12px;">Dias úteis até hoje Verão: <b>{h(metricas['dias_ate_hoje_verao_txt'])}</b></div>
           <div class="pill" style="padding:10px; border-radius:12px;">Saldo Inverno: <b>{h(metricas['saldo_inverno_txt'])}</b></div>
           <div class="pill" style="padding:10px; border-radius:12px;">Saldo Verão: <b>{h(metricas['saldo_verao_txt'])}</b></div>
           <div class="pill" style="padding:10px; border-radius:12px;">Clientes sem compra: <b>{h(metricas['clientes_sem_compra_txt'])}</b></div>
         </div>
-        <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis da coleção - dias úteis corridos no ano até hoje. Positivação = saldo de dias úteis ÷ clientes sem compra.</div>
+        <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis da coleção - dias úteis corridos do período até hoje. Positivação = saldo de dias úteis ÷ clientes sem compra.</div>
       </form>
     </div>
     """
