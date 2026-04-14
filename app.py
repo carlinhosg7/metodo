@@ -11,7 +11,7 @@ from io import StringIO
 import csv as csvlib
 
 import requests
-from flask import Flask, request, redirect, url_for, session, render_template_string, flash, send_from_directory
+from flask import Flask, request, redirect, url_for, session, render_template_string, flash
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -35,10 +35,6 @@ WS_BASE = os.getenv("WS_BASE", "BASE").strip()
 WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 WS_PARAMETROS_COMERCIAIS = os.getenv("WS_PARAMETROS_COMERCIAIS", "PARAMETROS_COMERCIAIS").strip()
-
-# ===== COBERTURA DE CARTEIRA =====
-SHEET_COBERTURA_ID = os.getenv("SHEET_COBERTURA_ID", "").strip()
-WS_COBERTURA = os.getenv("WS_COBERTURA", "COBERTURA").strip()
 
 # ===== CLIENTES GOLD =====
 GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
@@ -638,7 +634,7 @@ def build_cidades_resumo_html(filtered_rows, cidade_col=None, cnpj_col=None, val
     )
 
     html = f"""
-    <div style="height:100%; min-height:100%; overflow:auto; width:100%;">
+    <div style="max-height:180px; overflow:auto; width:100%;">
         <table class="dash-table-mini">
         <thead>
           <tr>
@@ -1411,89 +1407,6 @@ def connect_gs():
     return connect_gs_by_key(SHEET_ID)
 
 
-def connect_cobertura_gs():
-    cobertura_id = extract_google_sheet_id(SHEET_COBERTURA_ID)
-    if not cobertura_id:
-        raise RuntimeError("Faltou SHEET_COBERTURA_ID nas variáveis de ambiente.")
-    return connect_gs_by_key(cobertura_id)
-
-
-def format_percent_from_sheet(value):
-    s = norm(value)
-    if not s:
-        return "0,00%"
-    if "%" in s:
-        return s
-
-    n = parse_float_any(s)
-    if n is None:
-        return s
-
-    if n <= 1:
-        n *= 100.0
-
-    return f"{format_number_br(n)}%"
-
-
-def get_cobertura_info_by_rep(rep_code):
-    rep_code = norm(rep_code)
-    info = {
-        "ok": False,
-        "error": "",
-        "carteira": "",
-        "com_compra": "",
-        "sem_compra": "",
-        "cobertura_pct": "",
-    }
-
-    if not rep_code:
-        info["error"] = "Representante não informado."
-        return info
-
-    try:
-        sh = connect_cobertura_gs()
-        ws = sh.worksheet(WS_COBERTURA)
-        headers, rows = safe_get_raw_rows(ws)
-
-        col_rep = pick_col_flexible(headers, [
-            "Rep", "REP", "Codigo Representante", "Código Representante", "Cod Representante"
-        ])
-        col_carteira = pick_col_flexible(headers, [
-            "Saldo de Carteira", "Carteira"
-        ])
-        col_com = pick_col_flexible(headers, [
-            "cobertura", "Cobertura", "Com compra", "Clientes Positivados"
-        ])
-        col_sem = pick_col_flexible(headers, [
-            "Clientes Não Positivados", "Clientes Nao Positivados", "Sem compra"
-        ])
-        col_pct = pick_col_flexible(headers, [
-            "% Cobertura", "Cobertura %", "%Cobertura"
-        ])
-
-        if not col_rep:
-            raise RuntimeError("Coluna do representante não encontrada na planilha de cobertura.")
-
-        rep_num = rep_code.lstrip("0") or "0"
-
-        for row in rows:
-            row_rep = norm(row.get(col_rep, ""))
-            row_rep_num = row_rep.lstrip("0") or "0"
-            if row_rep == rep_code or row_rep_num == rep_num:
-                info["carteira"] = norm(row.get(col_carteira, "")) if col_carteira else ""
-                info["com_compra"] = norm(row.get(col_com, "")) if col_com else ""
-                info["sem_compra"] = norm(row.get(col_sem, "")) if col_sem else ""
-                info["cobertura_pct"] = format_percent_from_sheet(row.get(col_pct, "")) if col_pct else ""
-                info["ok"] = True
-                return info
-
-        raise RuntimeError(f"Representante {rep_code} não encontrado na planilha de cobertura.")
-
-    except Exception as e:
-        info["error"] = norm(str(e))
-        return info
-
-
 def connect_gold_gs():
     gold_target = resolve_gold_sheet_target()
     if not gold_target:
@@ -1914,91 +1827,12 @@ def get_parametros_comerciais(sh=None):
         return info
 
 
-def contar_dias_uteis_periodo(inicio, fim):
-    if not inicio or not fim or fim < inicio:
-        return 0
-
-    total = 0
-    atual = inicio
-    while atual <= fim:
-        if atual.weekday() < 5:
-            total += 1
-        atual += timedelta(days=1)
-    return total
-
-
-def contar_dias_uteis_periodo_ate_hoje(inicio, fim, ref_date=None):
-    hoje = ref_date.date() if isinstance(ref_date, datetime) else (ref_date or datetime.now().date())
-    if hoje < inicio:
-        return 0
-    fim_real = min(hoje, fim)
-    return contar_dias_uteis_periodo(inicio, fim_real)
-
-
-def contar_dias_uteis_restantes_periodo(inicio, fim, ref_date=None):
-    hoje = ref_date.date() if isinstance(ref_date, datetime) else (ref_date or datetime.now().date())
-
-    if hoje < inicio:
-        return contar_dias_uteis_periodo(inicio, fim)
-
-    if hoje > fim:
-        return 0
-
-    proximo_dia = hoje + timedelta(days=1)
-    if proximo_dia > fim:
-        return 0
-
-    return contar_dias_uteis_periodo(proximo_dia, fim)
-
-
-def montar_metricas_parametros(parametros, clientes_sem_compra=""):
-    dias_inverno = int(parse_number_br(parametros.get("dias_uteis_inverno", "") or 0) or 0)
-    dias_verao = int(parse_number_br(parametros.get("dias_uteis_verao", "") or 0) or 0)
-
-    clientes_sem_compra_num = parse_number_br(clientes_sem_compra)
-    if clientes_sem_compra_num <= 0:
-        clientes_sem_compra_num = 0.0
-
-    inicio_inverno = datetime(2025, 11, 1).date()
-    fim_inverno = datetime(2026, 4, 30).date()
-    inicio_verao = datetime(2026, 5, 1).date()
-    fim_verao = datetime(2026, 10, 31).date()
-
-    dias_uteis_ate_hoje_inverno = contar_dias_uteis_periodo_ate_hoje(inicio_inverno, fim_inverno)
-    dias_uteis_ate_hoje_verao = contar_dias_uteis_periodo_ate_hoje(inicio_verao, fim_verao)
-
-    saldo_inverno = contar_dias_uteis_restantes_periodo(inicio_inverno, fim_inverno)
-    saldo_verao = contar_dias_uteis_restantes_periodo(inicio_verao, fim_verao)
-
-    positivacao_inverno = (clientes_sem_compra_num / saldo_inverno) if saldo_inverno > 0 and clientes_sem_compra_num > 0 else 0.0
-    positivacao_verao = (clientes_sem_compra_num / saldo_verao) if saldo_verao > 0 and clientes_sem_compra_num > 0 else 0.0
-
-    return {
-        "dias_uteis_inverno": dias_inverno,
-        "dias_uteis_verao": dias_verao,
-        "dias_uteis_ate_hoje_inverno": dias_uteis_ate_hoje_inverno,
-        "dias_uteis_ate_hoje_verao": dias_uteis_ate_hoje_verao,
-        "saldo_dias_uteis_inverno": saldo_inverno,
-        "saldo_dias_uteis_verao": saldo_verao,
-        "clientes_sem_compra": clientes_sem_compra_num,
-        "positivacao_inverno": positivacao_inverno,
-        "positivacao_verao": positivacao_verao,
-        "positivacao_inverno_txt": format_number_br(positivacao_inverno),
-        "positivacao_verao_txt": format_number_br(positivacao_verao),
-        "saldo_inverno_txt": str(saldo_inverno),
-        "saldo_verao_txt": str(saldo_verao),
-        "dias_ate_hoje_inverno_txt": str(dias_uteis_ate_hoje_inverno),
-        "dias_ate_hoje_verao_txt": str(dias_uteis_ate_hoje_verao),
-        "clientes_sem_compra_txt": format_number_br(clientes_sem_compra_num),
-    }
-
-
-def render_parametros_comerciais_box_html(parametros, clientes_sem_compra="", compact=False):
+def render_parametros_comerciais_box_html(parametros, compact=False):
     inverno = norm(parametros.get("dias_uteis_inverno", "")) or "-"
     verao = norm(parametros.get("dias_uteis_verao", "")) or "-"
+    positivacao = norm(parametros.get("qtd_positivacao_carteira", "")) or "-"
     atualizado_em = norm(parametros.get("atualizado_em", ""))
     atualizado_por = norm(parametros.get("atualizado_por", ""))
-    metricas = montar_metricas_parametros(parametros, clientes_sem_compra)
 
     rodape = ""
     if atualizado_em or atualizado_por:
@@ -2008,9 +1842,8 @@ def render_parametros_comerciais_box_html(parametros, clientes_sem_compra="", co
         return f"""
         <div class="dash-coverage-box" style="display:flex; flex-wrap:wrap; gap:10px; justify-content:center;">
           <span>Inverno: <b>{h(inverno)}</b></span>
-          <span>Posit. Inv: <b>{h(metricas['positivacao_inverno_txt'])}</b></span>
           <span>Verão: <b>{h(verao)}</b></span>
-          <span>Posit. Ver: <b>{h(metricas['positivacao_verao_txt'])}</b></span>
+          <span>Positivação: <b>{h(positivacao)}</b></span>
         </div>
         {rodape}
         """
@@ -2018,57 +1851,39 @@ def render_parametros_comerciais_box_html(parametros, clientes_sem_compra="", co
     return f"""
     <div class="card">
       <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Parâmetros Comerciais</div>
-      <div class="grid-2" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px;">
-        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção Inverno: <b>{h(inverno)}</b></div>
-        <div class="pill" style="padding:12px; border-radius:12px;">Qtd. positivação p/ cobrir carteira Inverno: <b>{h(metricas['positivacao_inverno_txt'])}</b></div>
-        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção Verão: <b>{h(verao)}</b></div>
-        <div class="pill" style="padding:12px; border-radius:12px;">Qtd. positivação p/ cobrir carteira Verão: <b>{h(metricas['positivacao_verao_txt'])}</b></div>
+      <div class="grid-2" style="grid-template-columns: repeat(3, 1fr);">
+        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção inverno: <b>{h(inverno)}</b></div>
+        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção verão: <b>{h(verao)}</b></div>
+        <div class="pill" style="padding:12px; border-radius:12px;">Positivação p/ cobrir carteira: <b>{h(positivacao)}</b></div>
       </div>
-      <div class="grid-2" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; margin-top:12px;">
-        <div class="pill" style="padding:12px; border-radius:12px;">Saldo dias úteis Inverno: <b>{h(metricas['saldo_inverno_txt'])}</b></div>
-        <div class="pill" style="padding:12px; border-radius:12px;">Saldo dias úteis Verão: <b>{h(metricas['saldo_verao_txt'])}</b></div>
-      </div>
-      <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis restantes do período até a data final da coleção. Positivação = clientes sem compra ÷ saldo de dias úteis restantes.</div>
       {rodape}
     </div>
     """
 
 
-def render_parametros_comerciais_form_html(parametros, clientes_sem_compra=""):
-    metricas = montar_metricas_parametros(parametros, clientes_sem_compra)
+def render_parametros_comerciais_form_html(parametros):
     return f"""
     <div class="card no-print">
       <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Parâmetros Comerciais</div>
       <form method="post" action="{url_for('salvar_parametros_comerciais')}">
-        <div class="grid-2" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; align-items:end;">
+        <div class="grid">
           <div>
-            <label>Dias úteis coleção Inverno</label>
-            <input type="number" min="0" step="1" name="dias_uteis_inverno" value="{h(parametros.get('dias_uteis_inverno', ''))}" placeholder="Ex.: 104">
+            <label>Dias úteis coleção inverno</label>
+            <input type="number" min="0" step="1" name="dias_uteis_inverno" value="{h(parametros.get('dias_uteis_inverno', ''))}" placeholder="Ex.: 22">
           </div>
           <div>
-            <label>Qtd. positivação para cobrir carteira Inverno</label>
-            <input type="text" value="{h(metricas['positivacao_inverno_txt'])}" readonly style="background:#f8fafc; color:#111827; font-weight:700;">
+            <label>Dias úteis coleção verão</label>
+            <input type="number" min="0" step="1" name="dias_uteis_verao" value="{h(parametros.get('dias_uteis_verao', ''))}" placeholder="Ex.: 24">
           </div>
           <div>
-            <label>Dias úteis coleção Verão</label>
-            <input type="number" min="0" step="1" name="dias_uteis_verao" value="{h(parametros.get('dias_uteis_verao', ''))}" placeholder="Ex.: 126">
-          </div>
-          <div>
-            <label>Qtd. positivação para cobrir carteira Verão</label>
-            <input type="text" value="{h(metricas['positivacao_verao_txt'])}" readonly style="background:#f8fafc; color:#111827; font-weight:700;">
+            <label>Qtd. positivação para cobrir carteira</label>
+            <input type="number" min="0" step="1" name="qtd_positivacao_carteira" value="{h(parametros.get('qtd_positivacao_carteira', ''))}" placeholder="Ex.: 180">
           </div>
           <div style="display:flex; align-items:flex-end; gap:8px;">
             <button type="submit">Salvar parâmetros</button>
           </div>
         </div>
-        <div class="grid-2" style="grid-template-columns: repeat(5, minmax(0, 1fr)); gap:10px; margin-top:12px;">
-          <div class="pill" style="padding:10px; border-radius:12px;">Dias úteis até hoje Inverno: <b>{h(metricas['dias_ate_hoje_inverno_txt'])}</b></div>
-          <div class="pill" style="padding:10px; border-radius:12px;">Dias úteis até hoje Verão: <b>{h(metricas['dias_ate_hoje_verao_txt'])}</b></div>
-          <div class="pill" style="padding:10px; border-radius:12px;">Saldo Inverno: <b>{h(metricas['saldo_inverno_txt'])}</b></div>
-          <div class="pill" style="padding:10px; border-radius:12px;">Saldo Verão: <b>{h(metricas['saldo_verao_txt'])}</b></div>
-          <div class="pill" style="padding:10px; border-radius:12px;">Clientes sem compra: <b>{h(metricas['clientes_sem_compra_txt'])}</b></div>
-        </div>
-        <div class="small" style="margin-top:8px;">Cálculo automático: saldo de dias úteis = dias úteis restantes do período até a data final da coleção. Positivação = clientes sem compra ÷ saldo de dias úteis restantes.</div>
+        <div class="small" style="margin-top:8px;">Esses campos aparecem no cabeçalho do dashboard, no bloco de cobertura e também na carteira.</div>
       </form>
     </div>
     """
@@ -2442,15 +2257,12 @@ BASE_HTML = """
 
     .dash-row-bottom {
       display: block;
-      flex: 1;
     }
 
     .dash-right-stack {
-      display: flex;
-      flex-direction: column;
+      display: grid;
+      grid-template-rows: auto auto;
       gap: 8px;
-      height: 100%;
-      min-height: 100%;
     }
 
     .dash-panel {
@@ -2478,10 +2290,8 @@ BASE_HTML = """
     .dash-panel-body-map {
     padding: 6px;
     box-sizing: border-box;
-    min-height: 100%;
+    min-height: auto;
     height: 100%;
-    display: flex;
-    flex-direction: column;
 }
 
     .dash-table-mini {
@@ -2964,18 +2774,6 @@ def login():
     )
 
 
-@app.route("/favicon.ico")
-def favicon():
-    favicon_name = "logo_kidy_icon.ico"
-    static_dir = os.path.join(app.root_path, "static")
-    favicon_path = os.path.join(static_dir, favicon_name)
-
-    if os.path.exists(favicon_path):
-        return send_from_directory(static_dir, favicon_name, mimetype="image/vnd.microsoft.icon")
-
-    return ("", 204)
-
-
 @app.route("/logout")
 def logout():
     session.clear()
@@ -3042,7 +2840,7 @@ def salvar_parametros_comerciais():
 
     dias_uteis_inverno = norm(request.form.get("dias_uteis_inverno", ""))
     dias_uteis_verao = norm(request.form.get("dias_uteis_verao", ""))
-    qtd_positivacao_carteira = ""
+    qtd_positivacao_carteira = norm(request.form.get("qtd_positivacao_carteira", ""))
 
     try:
         sh = connect_gs()
@@ -3318,11 +3116,10 @@ def admin_dashboard():
         gold_info = get_gold_info_by_rep(header_rep_code)
         total_gold = gold_info.get("total_gold", 0)
 
-        cobertura_info = get_cobertura_info_by_rep(header_rep_code)
-        total_carteira = cobertura_info.get("carteira", "")
-        total_com_compra = cobertura_info.get("com_compra", "")
-        total_sem_compra = cobertura_info.get("sem_compra", "")
-        cobertura_pct = cobertura_info.get("cobertura_pct", "")
+        total_carteira = len(filtered_rows)
+        total_sem_compra = len(clientes_sem_compra)
+        total_com_compra = max(total_carteira - total_sem_compra, 0)
+        cobertura_pct = (total_com_compra / total_carteira * 100.0) if total_carteira > 0 else 0.0
 
         def chip_class(status_cor):
             s = normalize_text_for_match(status_cor)
@@ -3518,7 +3315,7 @@ def admin_dashboard():
             </div>
             """
 
-        parametros_form_html = render_parametros_comerciais_form_html(parametros_comerciais, total_sem_compra)
+        parametros_form_html = render_parametros_comerciais_form_html(parametros_comerciais)
 
         body = f"""
         <div class="dash-page">
@@ -3575,7 +3372,7 @@ def admin_dashboard():
                     <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
                     <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
                     <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
-                    <div class="dash-subline"><b>Dias úteis:</b> Inverno {h(parametros_comerciais.get("dias_uteis_inverno", "") or "-")} | Verão {h(parametros_comerciais.get("dias_uteis_verao", "") or "-")} | <b>Saldo:</b> Inv {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_inverno_txt', '-'))} | Ver {h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_verao_txt', '-'))}</div>
+                    <div class="dash-subline"><b>Dias úteis:</b> Inverno {h(parametros_comerciais.get("dias_uteis_inverno", "") or "-")} | Verão {h(parametros_comerciais.get("dias_uteis_verao", "") or "-")} | <b>Positivação:</b> {h(parametros_comerciais.get("qtd_positivacao_carteira", "") or "-")}</div>
                   </div>
 
                   <div class="dash-meta-box">
@@ -3592,12 +3389,8 @@ def admin_dashboard():
                       <div class="dash-metric-value">{h(header_percentual)}</div>
                     </div>
                     <div class="dash-metric">
-                      <div class="dash-metric-label">Posit. Inverno</div>
-                      <div class="dash-metric-value">{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('positivacao_inverno_txt', '-'))}</div>
-                    </div>
-                    <div class="dash-metric">
-                      <div class="dash-metric-label">Posit. Verão</div>
-                      <div class="dash-metric-value">{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('positivacao_verao_txt', '-'))}</div>
+                      <div class="dash-metric-label">Positivação</div>
+                      <div class="dash-metric-value">{h(parametros_comerciais.get("qtd_positivacao_carteira", "") or "-")}</div>
                     </div>
                   </div>
 
@@ -3609,17 +3402,12 @@ def admin_dashboard():
                 <div class="dash-main-grid">
                   <div class="dash-left-stack">
                     <div class="dash-row-top">
+                    </div>
+
                       <div class="dash-panel">
                         <div class="dash-panel-title">10 Maiores Clientes 2025</div>
                         <div class="dash-panel-body">
                           {ranking_2025_html}
-                        </div>
-                      </div>
-
-                      <div class="dash-panel">
-                        <div class="dash-panel-title">10 Maiores Clientes 2026</div>
-                        <div class="dash-panel-body">
-                          {ranking_2026_html}
                         </div>
                       </div>
                     </div>
@@ -3639,21 +3427,13 @@ def admin_dashboard():
                       <div class="dash-panel">
                         <div class="dash-panel-title">Cobertura da Carteira</div>
                         <div class="dash-panel-body">
-                          <div class="dash-coverage-box" style="display:flex; flex-direction:column; align-items:flex-start; gap:8px;">
-                            <div>
-                              Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
-                              Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
-                              Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
-                              Cobertura: <b style="margin-left:6px;">{h(cobertura_pct)}</b>
-                            </div>
-                            <div class="small" style="font-weight:700; color:#334155;">
-                              Saldo dias úteis: Inverno <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_inverno_txt', '-'))}</b> |
-                              Verão <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('saldo_verao_txt', '-'))}</b>
-                              &nbsp; | &nbsp;
-                              Posit.: Inverno <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('positivacao_inverno_txt', '-'))}</b> |
-                              Verão <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra).get('positivacao_verao_txt', '-'))}</b>
-                            </div>
+                          <div class="dash-coverage-box">
+                            Carteira: <b style="margin:0 6px;">{h(total_carteira)}</b> |
+                            Com compra: <b style="margin:0 6px;">{h(total_com_compra)}</b> |
+                            Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
+                            Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
                           </div>
+                          {render_parametros_comerciais_box_html(parametros_comerciais, compact=True)}
                         </div>
                       </div>
                     </div>
@@ -3661,22 +3441,45 @@ def admin_dashboard():
                     <div class="dash-row-bottom">
                       <div class="dash-panel">
                         <div class="dash-panel-title">30 Maiores Clientes sem Compra</div>
-                        <div class="dash-panel-body" style="height:100%;">
+                        <div class="dash-panel-body">
                           {clientes_sem_compra_html}
                         </div>
                       </div>
                     </div>
-                  </div>
+                  </div><div class="dash-row-bottom">
 
-                  <div class="dash-right-stack">
-                    <div class="dash-panel" style="height:100%; display:flex; flex-direction:column;">
-                      <div class="dash-panel-title">Resumo por Cidade</div>
-                      <div class="dash-panel-body-map" style="flex:1; overflow:auto;">
-                        {mapa_svg_html}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+        <div class="dash-panel">
+            <div class="dash-panel-title">Clientes sem Compra</div>
+            <div class="dash-panel-body">
+            {clientes_sem_compra_html}
+            </div>
+        </div>
+
+        <div class="dash-right-stack">
+
+            <div class="dash-panel">
+            <div class="dash-panel-title">Resumo por Cidade</div>
+            <div class="dash-panel-body-map">
+                {mapa_svg_html}
+            </div>
+            </div>
+
+            <div class="dash-panel">
+            <div class="dash-panel-title">Clientes Gold</div>
+            <div class="dash-panel-body">
+                ...
+            </div>
+            </div>
+
+            <div class="dash-panel">
+            <div class="dash-panel-title">Cobertura da Carteira</div>
+            <div class="dash-panel-body">
+                ...
+            </div>
+            </div>
+
+        </div>
+        </div>
         """
 
         if DEBUG_MODE:
@@ -3956,34 +3759,29 @@ def dashboard():
         </div>
         """
 
-    cobertura_info_dashboard = get_cobertura_info_by_rep(selected_rep_code)
-    total_carteira_dashboard = cobertura_info_dashboard.get("carteira", "")
-    total_com_compra_dashboard = cobertura_info_dashboard.get("com_compra", "")
-    total_sem_compra_dashboard = cobertura_info_dashboard.get("sem_compra", "")
-    cobertura_pct_dashboard = cobertura_info_dashboard.get("cobertura_pct", "")
+    total_carteira_dashboard = len(prepared_rows)
+    total_sem_compra_dashboard = 0
+    if t2026_col:
+        for r in prepared_rows:
+            if parse_number_br(r.get(t2026_col, "")) <= 0:
+                total_sem_compra_dashboard += 1
+    total_com_compra_dashboard = max(total_carteira_dashboard - total_sem_compra_dashboard, 0)
+    cobertura_pct_dashboard = (total_com_compra_dashboard / total_carteira_dashboard * 100.0) if total_carteira_dashboard > 0 else 0.0
 
     carteira_parametros_html = f"""
     <div class="card">
       <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Cobertura da Carteira</div>
-      <div class="dash-coverage-box" style="display:flex; flex-direction:column; align-items:flex-start; gap:8px;">
-        <div>
-          Carteira: <b style="margin:0 6px;">{h(total_carteira_dashboard)}</b> |
-          Com compra: <b style="margin:0 6px;">{h(total_com_compra_dashboard)}</b> |
-          Sem compra: <b style="margin:0 6px;">{h(total_sem_compra_dashboard)}</b> |
-          Cobertura: <b style="margin-left:6px;">{h(cobertura_pct_dashboard)}</b>
-        </div>
-        <div class="small" style="font-weight:700; color:#334155;">
-          Saldo dias úteis: Inverno <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra_dashboard).get('saldo_inverno_txt', '-'))}</b> |
-          Verão <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra_dashboard).get('saldo_verao_txt', '-'))}</b>
-          &nbsp; | &nbsp;
-          Posit.: Inverno <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra_dashboard).get('positivacao_inverno_txt', '-'))}</b> |
-          Verão <b>{h(montar_metricas_parametros(parametros_comerciais, total_sem_compra_dashboard).get('positivacao_verao_txt', '-'))}</b>
-        </div>
+      <div class="dash-coverage-box">
+        Carteira: <b style="margin:0 6px;">{h(total_carteira_dashboard)}</b> |
+        Com compra: <b style="margin:0 6px;">{h(total_com_compra_dashboard)}</b> |
+        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra_dashboard)}</b> |
+        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct_dashboard))}%</b>
       </div>
+      {render_parametros_comerciais_box_html(parametros_comerciais, compact=True)}
     </div>
     """
 
-    parametros_card_html = render_parametros_comerciais_box_html(parametros_comerciais, total_sem_compra_dashboard)
+    parametros_card_html = render_parametros_comerciais_box_html(parametros_comerciais)
 
     debug_html = ""
     if DEBUG_MODE:
@@ -4222,6 +4020,7 @@ def dashboard():
     <div class="card rep-table-wrap">
       <table class="rep-table">
         <thead>
+          {f"""
           <tr>
             <th class="sticky-col">Codigo Grupo Cliente</th>
             <th class="sticky-col-2">Grupo Cliente</th>
@@ -4229,278 +4028,8 @@ def dashboard():
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
-            <th>Mês</th>
+                        <th>Mês</th>
             <th>Semana Atendimento</th>
             <th>Observações</th>
           </tr>
-        </thead>
-        <tbody>
-          {''.join(table_rows)}
-        </tbody>
-      </table>
-    </div>
-    """
-
-    return render_template_string(
-        BASE_HTML,
-        title=APP_TITLE,
-        subtitle=f"Planilha: {WS_BASE}",
-        logged=True,
-        user_login=session.get("user_login"),
-        user_name=session.get("rep_name", ""),
-        user_type=session.get("user_type"),
-        user_photo_url=current_user_photo,
-        body=body
-    )
-
-
-@app.route("/salvar", methods=["POST"])
-def salvar():
-    if not require_login():
-        flash("Sessão expirada. Faça login novamente.", "err")
-        return redirect(url_for("login"))
-
-    user_type = session.get("user_type")
-    user_login = session.get("user_login")
-
-    client_key = norm(request.form.get("client_key", ""))
-    rep_code_form = norm(request.form.get("rep_code", ""))
-    base_row_number = norm(request.form.get("base_row_number", ""))
-
-    sup = norm(request.form.get("sup", ""))
-    rep = norm(request.form.get("rep", ""))
-    q = norm(request.form.get("q", ""))
-
-    data_ini = norm(request.form.get("data_ini", ""))
-    data_fim = norm(request.form.get("data_fim", ""))
-    filtro_mes = norm(request.form.get("filtro_mes", ""))
-    filtro_semana = norm(request.form.get("filtro_semana", ""))
-
-    redirect_args = {
-        k: v for k, v in {
-            "sup": sup,
-            "rep": rep,
-            "q": q,
-            "data_ini": data_ini,
-            "data_fim": data_fim,
-            "filtro_mes": filtro_mes,
-            "filtro_semana": filtro_semana
-        }.items() if v
-    }
-
-    if not client_key:
-        flash("client_key vazio.", "err")
-        return redirect(url_for("dashboard", **redirect_args))
-
-    if not base_row_number.isdigit():
-        flash("Linha da BASE inválida para gravação.", "err")
-        return redirect(url_for("dashboard", **redirect_args))
-
-    if user_type == "rep" and rep_code_form != norm(session.get("rep_code", "")):
-        flash("Você não pode gravar alterações em clientes de outro representante.", "err")
-        return redirect(url_for("dashboard", **redirect_args))
-
-    try:
-        sh = connect_gs()
-        ws_base = sh.worksheet(WS_BASE)
-
-        try:
-            ws_ed = ensure_edicoes_worksheet(sh)
-            edicoes_ok = True
-        except Exception:
-            ws_ed = None
-            edicoes_ok = False
-
-        headers = ensure_base_tracking_columns(ws_base)
-        headers_norm = [norm(x) for x in headers]
-
-        data_agenda = from_input_date(request.form.get("Data Agenda Visita", ""))
-        mes = norm(request.form.get("Mês", ""))
-        semana = norm(request.form.get("Semana Atendimento", ""))
-        status_cliente = norm(request.form.get("Status Cliente", ""))
-        observacoes = norm(request.form.get("Observações", ""))
-
-        # Na tela da carteira do representante, Data Agenda Visita e Status Cliente
-        # são mantidos apenas como apoio e não devem forçar atualização/confirmação
-        # quando o usuário grava somente Mês, Semana ou Observações.
-        is_admin_user = is_admin()
-        campos_enviados = {
-            "data": is_admin_user and ("Data Agenda Visita" in request.form),
-            "mes": "Mês" in request.form,
-            "semana": "Semana Atendimento" in request.form,
-            "status": is_admin_user and ("Status Cliente" in request.form),
-            "obs": "Observações" in request.form,
-        }
-
-        row_num = int(base_row_number)
-
-        col_data = headers_norm.index("Data Agenda Visita") + 1
-        col_mes = headers_norm.index("Mês") + 1
-        col_semana = headers_norm.index("Semana Atendimento") + 1
-        col_status = headers_norm.index("Status Cliente") + 1
-        col_obs = headers_norm.index("Observações") + 1
-
-        updates = []
-        confirmacoes = {}
-
-        # Regra prática para a carteira e dashboard:
-        # só atualiza/confirma campos que realmente vieram preenchidos.
-        # Isso evita falso erro ao gravar quando o usuário altera apenas Mês/Obs
-        # e os demais campos chegam vazios no formulário.
-        if campos_enviados["data"] and norm(data_agenda):
-            updates.append({"range": rowcol_to_a1(row_num, col_data), "values": [[data_agenda]]})
-            confirmacoes["data"] = normalizar_data_comparacao(data_agenda)
-
-        if campos_enviados["mes"] and norm(mes):
-            updates.append({"range": rowcol_to_a1(row_num, col_mes), "values": [[mes]]})
-            confirmacoes["mes"] = norm(mes)
-
-        if campos_enviados["semana"] and norm(semana):
-            updates.append({"range": rowcol_to_a1(row_num, col_semana), "values": [[semana]]})
-            confirmacoes["semana"] = norm(semana)
-
-        if campos_enviados["status"] and norm(status_cliente):
-            updates.append({"range": rowcol_to_a1(row_num, col_status), "values": [[status_cliente]]})
-            confirmacoes["status"] = norm(status_cliente)
-
-        # Observações pode ser gravada mesmo vazia quando o campo existir,
-        # para permitir ajuste do texto na mesma linha.
-        if campos_enviados["obs"]:
-            updates.append({"range": rowcol_to_a1(row_num, col_obs), "values": [[observacoes]]})
-            confirmacoes["obs"] = norm(observacoes)
-
-        if updates:
-            ws_base.batch_update(updates, value_input_option="RAW")
-
-        esperado_data = confirmacoes.get("data", "")
-        esperado_mes = confirmacoes.get("mes", "")
-        esperado_semana = confirmacoes.get("semana", "")
-        esperado_status = confirmacoes.get("status", "")
-        esperado_obs = confirmacoes.get("obs", "")
-
-        gravado_data = ""
-        gravado_mes = ""
-        gravado_semana = ""
-        gravado_status = ""
-        gravado_obs = ""
-        conferiu = False
-
-        for _ in range(5):
-            time.sleep(0.35)
-
-            gravado_data = norm(ws_base.acell(rowcol_to_a1(row_num, col_data)).value or "")
-            gravado_mes = norm(ws_base.acell(rowcol_to_a1(row_num, col_mes)).value or "")
-            gravado_semana = norm(ws_base.acell(rowcol_to_a1(row_num, col_semana)).value or "")
-            gravado_status = norm(ws_base.acell(rowcol_to_a1(row_num, col_status)).value or "")
-            gravado_obs = norm(ws_base.acell(rowcol_to_a1(row_num, col_obs)).value or "")
-
-            conferiu = True
-
-            if "data" in confirmacoes:
-                conferiu = conferiu and (
-                    normalizar_data_comparacao(gravado_data) == esperado_data
-                )
-
-            if "mes" in confirmacoes:
-                conferiu = conferiu and (
-                    normalize_text_for_match(gravado_mes) == normalize_text_for_match(esperado_mes)
-                )
-
-            if "semana" in confirmacoes:
-                conferiu = conferiu and (
-                    normalize_text_for_match(gravado_semana) == normalize_text_for_match(esperado_semana)
-                )
-
-            if "status" in confirmacoes:
-                conferiu = conferiu and (
-                    normalize_text_for_match(gravado_status) == normalize_text_for_match(esperado_status)
-                )
-
-            if "obs" in confirmacoes:
-                conferiu = conferiu and (
-                    norm(gravado_obs) == norm(esperado_obs)
-                )
-
-            if conferiu:
-                break
-
-        if not conferiu:
-            set_last_save_debug({
-                "row_num": row_num,
-                "client_key": client_key,
-                "data_agenda": gravado_data,
-                "mes": gravado_mes,
-                "semana": gravado_semana,
-                "semana_esperada": esperado_semana,
-                "status_cliente": gravado_status,
-                "observacoes": gravado_obs,
-                "result": "FALHA NA CONFIRMAÇÃO",
-            })
-            raise RuntimeError(
-                "A gravação não foi confirmada na BASE. "
-                f"Linha={row_num} | "
-                f"Data='{gravado_data}' | "
-                f"Mês='{gravado_mes}' | "
-                f"Semana='{gravado_semana}' | "
-                f"Status='{gravado_status}' | "
-                f"Obs='{gravado_obs}'"
-            )
-
-        if edicoes_ok and ws_ed is not None:
-            row_log = [
-                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                user_type,
-                user_login,
-                rep_code_form,
-                client_key,
-                data_agenda,
-                mes,
-                semana,
-                status_cliente,
-                observacoes
-            ]
-            ws_ed.append_row(row_log, value_input_option="USER_ENTERED")
-            result_txt = "BASE OK / EDICOES OK"
-        else:
-            result_txt = "BASE OK / EDICOES NÃO DISPONÍVEL"
-
-        set_last_save_debug({
-            "row_num": row_num,
-            "client_key": client_key,
-            "data_agenda": gravado_data,
-            "mes": gravado_mes,
-            "semana": gravado_semana,
-            "status_cliente": gravado_status,
-            "observacoes": gravado_obs,
-            "result": result_txt,
-        })
-
-        invalidate_main_sheet_cache()
-
-        flash(f"Gravado com sucesso na BASE na linha {row_num}.", "ok")
-        if not edicoes_ok:
-            flash("A BASE foi gravada, mas a aba EDICOES não pôde ser usada. Crie a aba manualmente ou ajuste a permissão da service account.", "err")
-
-    except Exception as e:
-        app.logger.error("Erro ao gravar na planilha:\n%s", traceback.format_exc())
-        set_last_save_debug({
-            "row_num": base_row_number,
-            "client_key": client_key,
-            "data_agenda": request.form.get("Data Agenda Visita", ""),
-            "mes": request.form.get("Mês", ""),
-            "semana": request.form.get("Semana Atendimento", ""),
-            "status_cliente": request.form.get("Status Cliente", ""),
-            "observacoes": request.form.get("Observações", ""),
-            "result": f"ERRO: {str(e)}",
-        })
-        flash(f"Erro ao gravar na planilha: {norm(str(e))}", "err")
-
-    return redirect(url_for("dashboard", **redirect_args))
-
-
-if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "5000")),
-        debug=DEBUG_MODE
-    )#
+     
