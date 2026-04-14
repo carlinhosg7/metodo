@@ -799,10 +799,11 @@ def get_vendas_info_by_rep(rep_code):
         col_rep = pick_col_flexible(headers, [
             "Codigo Representante", "Código Representante", "Cod Representante", "COD_REP"
         ])
-        ccol_nome = pick_col_flexible(headers, [
+        col_nome = pick_col_flexible(headers, [
             "NOME REP", "Nome Rep", "Nome Rep.", "Nome Rep .",
             "Nome do Representante", "Representante", "Nome Representante"
         ])
+
         col_sup = pick_col_flexible(headers, [
             "Supervisor", "Supervisão"
         ])
