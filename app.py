@@ -36,6 +36,10 @@ WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
 WS_PARAMETROS_COMERCIAIS = os.getenv("WS_PARAMETROS_COMERCIAIS", "PARAMETROS_COMERCIAIS").strip()
 
+# ===== NOME / SUPERVISOR / REGIÃO DO REPRESENTANTE =====
+SHEET_NOME_REP = os.getenv("SHEET_NOME_REP", "").strip()
+WS_NOME_REP = os.getenv("WS_NOME_REP", "REP").strip()
+
 # ===== COBERTURA DE CARTEIRA =====
 SHEET_COBERTURA_ID = os.getenv("SHEET_COBERTURA_ID", "").strip()
 WS_COBERTURA = os.getenv("WS_COBERTURA", "COBERTURA").strip()
@@ -1416,6 +1420,62 @@ def connect_cobertura_gs():
     if not cobertura_id:
         raise RuntimeError("Faltou SHEET_COBERTURA_ID nas variáveis de ambiente.")
     return connect_gs_by_key(cobertura_id)
+
+
+def connect_nome_rep_gs():
+    nome_rep_id = extract_google_sheet_id(SHEET_NOME_REP)
+    if not nome_rep_id:
+        raise RuntimeError("Faltou SHEET_NOME_REP nas variáveis de ambiente.")
+    return connect_gs_by_key(nome_rep_id)
+
+
+def get_nome_rep_info_by_rep(rep_code):
+    rep_code = norm(rep_code)
+    info = {
+        "ok": False,
+        "error": "",
+        "rep": rep_code,
+        "nome_rep": "",
+        "supervisor": "",
+        "regiao": "",
+    }
+
+    if not rep_code:
+        info["error"] = "Representante não informado."
+        return info
+
+    try:
+        sh = connect_nome_rep_gs()
+        ws = sh.worksheet(WS_NOME_REP)
+        headers, rows = safe_get_raw_rows(ws)
+
+        col_rep = pick_col_flexible(headers, ["REP", "Rep", "Código", "Codigo", "Codigo Representante", "Código Representante"])
+        col_nome = pick_col_flexible(headers, ["NOME REP", "Nome Rep", "Representante", "Nome Representante"])
+        col_sup = pick_col_flexible(headers, ["SUPERVISOR", "Supervisor"])
+        col_reg = pick_col_flexible(headers, ["REGIÃO", "REGIAO", "Região", "Regiao", "ÁREA", "AREA", "Região / Área", "Regiao / Area"])
+
+        if not col_rep:
+            raise RuntimeError("Coluna REP não encontrada na planilha de nome do representante.")
+
+        rep_num = rep_code.lstrip("0") or "0"
+
+        for row in rows:
+            row_rep = norm(row.get(col_rep, ""))
+            row_rep_num = row_rep.lstrip("0") or "0"
+
+            if row_rep == rep_code or row_rep_num == rep_num:
+                info["nome_rep"] = norm(row.get(col_nome, "")) if col_nome else ""
+                info["supervisor"] = norm(row.get(col_sup, "")) if col_sup else ""
+                info["regiao"] = norm(row.get(col_reg, "")) if col_reg else ""
+                info["ok"] = True
+                return info
+
+        info["error"] = f"Representante {rep_code} não encontrado na planilha de nomes."
+        return info
+
+    except Exception as e:
+        info["error"] = norm(str(e))
+        return info
 
 
 def format_percent_from_sheet(value):
@@ -3199,23 +3259,20 @@ def admin_dashboard():
         }
 
         if header_rep_code:
+            nome_rep_info = get_nome_rep_info_by_rep(header_rep_code)
+
+            if nome_rep_info.get("ok"):
+                header_rep_name = nome_rep_info.get("nome_rep", "") or header_rep_name
+                header_sup = nome_rep_info.get("supervisor", "") or header_sup
+                header_region = nome_rep_info.get("regiao", "") or header_region
+
             vendas_info = get_vendas_info_by_rep(header_rep_code)
 
             if vendas_info.get("ok"):
-                header_rep_name = vendas_info.get("representante", "") or header_rep_name
-                header_sup = vendas_info.get("supervisor", "") or header_sup
                 header_meta = format_money_br(vendas_info.get("meta", 0.0))
                 header_realizado = format_money_br(vendas_info.get("realizado", 0.0))
                 header_percentual = f"{format_number_br(vendas_info.get('percentual', 0.0))}%"
             else:
-                if rep_col:
-                    for r in filtered_rows:
-                        if norm(r.get(rep_col, "")) == header_rep_code:
-                            header_rep_name = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-                            if not header_sup and sup_col:
-                                header_sup = norm(r.get(sup_col, ""))
-                            break
-
                 total_realizado_2026 = sum(parse_number_br(r.get(t2026_col, "")) for r in filtered_rows) if t2026_col else 0.0
                 header_realizado = format_money_br(total_realizado_2026)
 
@@ -3923,24 +3980,16 @@ def dashboard():
     rep_card_html = ""
     selected_rep_code = rep_sel if is_admin() else norm(session.get("rep_code", ""))
 
-    if selected_rep_code and rep_col:
+    if selected_rep_code:
         rep_name_base = ""
         rep_sup_base = ""
         rep_reg_base = ""
 
-        vendas_info_rep = get_vendas_info_by_rep(selected_rep_code)
-
-        if vendas_info_rep.get("ok"):
-            rep_name_base = vendas_info_rep.get("representante", "") or ""
-            rep_sup_base = vendas_info_rep.get("supervisor", "") or ""
-        else:
-            for r in base_rows:
-                if norm(r.get(rep_col, "")) == selected_rep_code:
-                    rep_name_base = norm(r.get(nome_rep_col, "")) if nome_rep_col else ""
-                    rep_sup_base = norm(r.get(sup_col, "")) if sup_col else ""
-                    rep_reg_base = ""
-                    if rep_name_base:
-                        break
+        nome_rep_info = get_nome_rep_info_by_rep(selected_rep_code)
+        if nome_rep_info.get("ok"):
+            rep_name_base = nome_rep_info.get("nome_rep", "") or ""
+            rep_sup_base = nome_rep_info.get("supervisor", "") or ""
+            rep_reg_base = nome_rep_info.get("regiao", "") or ""
 
         foto_url = get_rep_photo_src(selected_rep_code)
         nome_card = rep_name_base or f"Representante {selected_rep_code}"
