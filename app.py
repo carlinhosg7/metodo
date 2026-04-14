@@ -34,7 +34,6 @@ SECRET_KEY = os.getenv("SECRET_KEY", "troque-esta-chave").strip()
 WS_BASE = os.getenv("WS_BASE", "BASE").strip()
 WS_EDICOES = os.getenv("WS_EDICOES", "EDICOES").strip()
 WS_LISTAS = os.getenv("WS_LISTAS", "__LISTAS_VALIDACAO__").strip()
-WS_PARAMETROS_COMERCIAIS = os.getenv("WS_PARAMETROS_COMERCIAIS", "PARAMETROS_COMERCIAIS").strip()
 
 # ===== CLIENTES GOLD =====
 GOLD_SHEET_ID = os.getenv("GOLD_SHEET_ID", "").strip()
@@ -1759,137 +1758,6 @@ def build_debug_sheet_info(sh=None):
 
 
 # =========================
-# PARÂMETROS COMERCIAIS
-# =========================
-def ensure_parametros_comerciais_worksheet(sh):
-    headers = [
-        "dias_uteis_inverno",
-        "dias_uteis_verao",
-        "qtd_positivacao_carteira",
-        "atualizado_em",
-        "atualizado_por"
-    ]
-
-    try:
-        ws = sh.worksheet(WS_PARAMETROS_COMERCIAIS)
-    except WorksheetNotFound:
-        try:
-            ws = sh.add_worksheet(title=WS_PARAMETROS_COMERCIAIS, rows="50", cols="10")
-        except Exception as e:
-            raise RuntimeError(
-                f"Não foi possível acessar/criar a aba '{WS_PARAMETROS_COMERCIAIS}'. "
-                f"Detalhe: {friendly_gspread_error(e)}"
-            )
-
-    ensure_headers(ws, headers)
-
-    vals = ws.get_all_values()
-    if len(vals) < 2:
-        ws.update("A2:E2", [["", "", "", "", ""]], value_input_option="USER_ENTERED")
-
-    return ws
-
-
-def get_parametros_comerciais(sh=None):
-    info = {
-        "dias_uteis_inverno": "",
-        "dias_uteis_verao": "",
-        "qtd_positivacao_carteira": "",
-        "atualizado_em": "",
-        "atualizado_por": "",
-        "ok": False,
-        "error": "",
-    }
-
-    try:
-        if sh is None:
-            sh = connect_gs()
-
-        ws = ensure_parametros_comerciais_worksheet(sh)
-        values = ws.get_all_values()
-        headers = [norm(x) for x in values[0]] if values else []
-        row = values[1] if len(values) > 1 else []
-        if len(row) < len(headers):
-            row = row + [""] * (len(headers) - len(row))
-
-        data = {headers[i]: row[i] for i in range(len(headers))}
-        info.update({
-            "dias_uteis_inverno": norm(data.get("dias_uteis_inverno", "")),
-            "dias_uteis_verao": norm(data.get("dias_uteis_verao", "")),
-            "qtd_positivacao_carteira": norm(data.get("qtd_positivacao_carteira", "")),
-            "atualizado_em": norm(data.get("atualizado_em", "")),
-            "atualizado_por": norm(data.get("atualizado_por", "")),
-            "ok": True,
-        })
-        return info
-    except Exception as e:
-        info["error"] = norm(str(e))
-        return info
-
-
-def render_parametros_comerciais_box_html(parametros, compact=False):
-    inverno = norm(parametros.get("dias_uteis_inverno", "")) or "-"
-    verao = norm(parametros.get("dias_uteis_verao", "")) or "-"
-    positivacao = norm(parametros.get("qtd_positivacao_carteira", "")) or "-"
-    atualizado_em = norm(parametros.get("atualizado_em", ""))
-    atualizado_por = norm(parametros.get("atualizado_por", ""))
-
-    rodape = ""
-    if atualizado_em or atualizado_por:
-        rodape = f'<div class="small" style="margin-top:8px;">Atualizado em: <b>{h(atualizado_em or "-")}</b> | Por: <b>{h(atualizado_por or "-")}</b></div>'
-
-    if compact:
-        return f"""
-        <div class="dash-coverage-box" style="display:flex; flex-wrap:wrap; gap:10px; justify-content:center;">
-          <span>Inverno: <b>{h(inverno)}</b></span>
-          <span>Verão: <b>{h(verao)}</b></span>
-          <span>Positivação: <b>{h(positivacao)}</b></span>
-        </div>
-        {rodape}
-        """
-
-    return f"""
-    <div class="card">
-      <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Parâmetros Comerciais</div>
-      <div class="grid-2" style="grid-template-columns: repeat(3, 1fr);">
-        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção inverno: <b>{h(inverno)}</b></div>
-        <div class="pill" style="padding:12px; border-radius:12px;">Dias úteis coleção verão: <b>{h(verao)}</b></div>
-        <div class="pill" style="padding:12px; border-radius:12px;">Positivação p/ cobrir carteira: <b>{h(positivacao)}</b></div>
-      </div>
-      {rodape}
-    </div>
-    """
-
-
-def render_parametros_comerciais_form_html(parametros):
-    return f"""
-    <div class="card no-print">
-      <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Parâmetros Comerciais</div>
-      <form method="post" action="{url_for('salvar_parametros_comerciais')}">
-        <div class="grid">
-          <div>
-            <label>Dias úteis coleção inverno</label>
-            <input type="number" min="0" step="1" name="dias_uteis_inverno" value="{h(parametros.get('dias_uteis_inverno', ''))}" placeholder="Ex.: 22">
-          </div>
-          <div>
-            <label>Dias úteis coleção verão</label>
-            <input type="number" min="0" step="1" name="dias_uteis_verao" value="{h(parametros.get('dias_uteis_verao', ''))}" placeholder="Ex.: 24">
-          </div>
-          <div>
-            <label>Qtd. positivação para cobrir carteira</label>
-            <input type="number" min="0" step="1" name="qtd_positivacao_carteira" value="{h(parametros.get('qtd_positivacao_carteira', ''))}" placeholder="Ex.: 180">
-          </div>
-          <div style="display:flex; align-items:flex-end; gap:8px;">
-            <button type="submit">Salvar parâmetros</button>
-          </div>
-        </div>
-        <div class="small" style="margin-top:8px;">Esses campos aparecem no cabeçalho do dashboard, no bloco de cobertura e também na carteira.</div>
-      </form>
-    </div>
-    """
-
-
-# =========================
 # ERROR HANDLER
 # =========================
 @app.errorhandler(Exception)
@@ -2216,29 +2084,28 @@ BASE_HTML = """
       justify-self: end;
     }
 
-    .dash-main-grid {
+    .dash-dashboard-grid {
       display: grid;
-      grid-template-columns: 2fr 1fr;
+      grid-template-columns: 1.9fr 1fr;
+      grid-template-areas: "left city";
       gap: 8px;
       align-items: stretch;
       margin-bottom: 8px;
     }
 
-    .dash-left-stack {
-      display: flex;
-      flex-direction: column;
+    .dash-layout-left {
+      grid-area: left;
+      display: grid;
+      grid-template-rows: auto auto auto;
       gap: 8px;
-      min-width: 0;
+      align-items: stretch;
     }
 
-    .dash-city-column {
+    .dash-layout-right {
+      grid-area: city;
       display: flex;
-      flex-direction: column;
-      min-width: 0;
-    }
-
-    .dash-city-column .dash-panel {
-      flex: 1;
+      align-items: stretch;
+      min-height: 100%;
     }
 
     .dash-row-top {
@@ -2260,9 +2127,16 @@ BASE_HTML = """
     }
 
     .dash-right-stack {
-      display: grid;
-      grid-template-rows: auto auto;
+      display: flex;
+      flex-direction: column;
       gap: 8px;
+      width: 100%;
+      height: 100%;
+      min-height: 100%;
+    }
+
+    .dash-right-stack .dash-panel {
+      flex: 1;
     }
 
     .dash-panel {
@@ -2828,37 +2702,6 @@ def salvar_agenda():
     return redirect(url_for("admin_dashboard", **args))
 
 
-@app.route("/salvar_parametros_comerciais", methods=["POST"])
-def salvar_parametros_comerciais():
-    if not require_login():
-        flash("Sessão expirada. Faça login novamente.", "err")
-        return redirect(url_for("login"))
-
-    if not is_admin():
-        flash("Somente admin pode salvar os parâmetros comerciais.", "err")
-        return redirect(url_for("dashboard"))
-
-    dias_uteis_inverno = norm(request.form.get("dias_uteis_inverno", ""))
-    dias_uteis_verao = norm(request.form.get("dias_uteis_verao", ""))
-    qtd_positivacao_carteira = norm(request.form.get("qtd_positivacao_carteira", ""))
-
-    try:
-        sh = connect_gs()
-        ws = ensure_parametros_comerciais_worksheet(sh)
-        atualizado_em = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        atualizado_por = norm(session.get("user_login", "")) or "admin"
-        ws.update(
-            "A2:E2",
-            [[dias_uteis_inverno, dias_uteis_verao, qtd_positivacao_carteira, atualizado_em, atualizado_por]],
-            value_input_option="USER_ENTERED"
-        )
-        flash("Parâmetros comerciais salvos com sucesso.", "ok")
-    except Exception as e:
-        flash(f"Erro ao salvar parâmetros comerciais: {norm(str(e))}", "err")
-
-    return redirect(url_for("admin_dashboard"))
-
-
 @app.route("/admin-dashboard", methods=["GET"])
 def admin_dashboard():
     if not require_login():
@@ -2876,7 +2719,6 @@ def admin_dashboard():
 
     try:
         debug_info = build_debug_sheet_info(sh) if DEBUG_MODE else {"worksheets": [], "sheet_id": "", "spreadsheet_title": ""}
-        parametros_comerciais = get_parametros_comerciais(sh)
         headers, base_rows = get_base_structure_cached(sh)
 
         key_col = pick_col_flexible(headers, [
@@ -3315,12 +3157,8 @@ def admin_dashboard():
             </div>
             """
 
-        parametros_form_html = render_parametros_comerciais_form_html(parametros_comerciais)
-
         body = f"""
         <div class="dash-page">
-
-          {parametros_form_html}
 
           <div class="card no-print a3-page">
             <form method="get">
@@ -3372,7 +3210,6 @@ def admin_dashboard():
                     <div class="dash-subline"><b>Representante:</b> {h(header_rep_name or "A definir")}</div>
                     <div class="dash-subline"><b>Código:</b> {h(header_rep_code or "A definir")} &nbsp; | &nbsp; <b>Supervisor:</b> {h(header_sup or "A definir")}</div>
                     <div class="dash-subline"><b>Região:</b> {h(header_region)}</div>
-                    <div class="dash-subline"><b>Dias úteis:</b> Inverno {h(parametros_comerciais.get("dias_uteis_inverno", "") or "-")} | Verão {h(parametros_comerciais.get("dias_uteis_verao", "") or "-")} | <b>Positivação:</b> {h(parametros_comerciais.get("qtd_positivacao_carteira", "") or "-")}</div>
                   </div>
 
                   <div class="dash-meta-box">
@@ -3388,10 +3225,6 @@ def admin_dashboard():
                       <div class="dash-metric-label">% Realizado</div>
                       <div class="dash-metric-value">{h(header_percentual)}</div>
                     </div>
-                    <div class="dash-metric">
-                      <div class="dash-metric-label">Positivação</div>
-                      <div class="dash-metric-value">{h(parametros_comerciais.get("qtd_positivacao_carteira", "") or "-")}</div>
-                    </div>
                   </div>
 
                   <div>
@@ -3399,10 +3232,16 @@ def admin_dashboard():
                   </div>
                 </div>
 
-                <div class="dash-main-grid">
-                  <div class="dash-left-stack">
+                <div class="dash-dashboard-grid">
+                  <div class="dash-layout-left">
+
                     <div class="dash-row-top">
-                    </div>
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">10 Maiores Clientes</div>
+                        <div class="dash-panel-body">
+                          {ranking_2026_html}
+                        </div>
+                      </div>
 
                       <div class="dash-panel">
                         <div class="dash-panel-title">10 Maiores Clientes 2025</div>
@@ -3433,7 +3272,6 @@ def admin_dashboard():
                             Sem compra: <b style="margin:0 6px;">{h(total_sem_compra)}</b> |
                             Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct))}%</b>
                           </div>
-                          {render_parametros_comerciais_box_html(parametros_comerciais, compact=True)}
                         </div>
                       </div>
                     </div>
@@ -3446,39 +3284,37 @@ def admin_dashboard():
                         </div>
                       </div>
                     </div>
-                  </div><div class="dash-row-bottom">
 
-        <div class="dash-panel">
-            <div class="dash-panel-title">Clientes sem Compra</div>
-            <div class="dash-panel-body">
-            {clientes_sem_compra_html}
-            </div>
-        </div>
+                  </div>
 
-        <div class="dash-right-stack">
+                  <div class="dash-layout-right">
+                    <div class="dash-right-stack">
+                      <div class="dash-panel">
+                        <div class="dash-panel-title">Resumo por Cidade</div>
+                        <div class="dash-panel-body-map">
+                          {mapa_svg_html}
+                          <div style="margin-top:6px; text-align:center; font-size:10px; color:#6b7280;">
+                            Cidades: <b>{h(cidades_mapa_qtd)}</b>
+                            {" | " + h(mapa_info_msg) if mapa_info_msg else ""}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
-            <div class="dash-panel">
-            <div class="dash-panel-title">Resumo por Cidade</div>
-            <div class="dash-panel-body-map">
-                {mapa_svg_html}
-            </div>
-            </div>
+                <div style="margin-top:8px;">
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Agenda Semanal do Representante</div>
+                    <div class="dash-panel-body">
+                      {agenda_semanal_html}
+                    </div>
+                  </div>
+                </div>
 
-            <div class="dash-panel">
-            <div class="dash-panel-title">Clientes Gold</div>
-            <div class="dash-panel-body">
-                ...
+              </div>
             </div>
-            </div>
-
-            <div class="dash-panel">
-            <div class="dash-panel-title">Cobertura da Carteira</div>
-            <div class="dash-panel-body">
-                ...
-            </div>
-            </div>
-
-        </div>
+          </div>
         </div>
         """
 
@@ -3561,7 +3397,6 @@ def dashboard():
 
     debug_info = build_debug_sheet_info(sh) if DEBUG_MODE else {"worksheets": [], "sheet_id": "", "spreadsheet_title": ""}
     last_save = get_last_save_debug()
-    parametros_comerciais = get_parametros_comerciais(sh)
 
     try:
         headers, base_rows = get_base_structure_cached(sh)
@@ -3759,30 +3594,6 @@ def dashboard():
         </div>
         """
 
-    total_carteira_dashboard = len(prepared_rows)
-    total_sem_compra_dashboard = 0
-    if t2026_col:
-        for r in prepared_rows:
-            if parse_number_br(r.get(t2026_col, "")) <= 0:
-                total_sem_compra_dashboard += 1
-    total_com_compra_dashboard = max(total_carteira_dashboard - total_sem_compra_dashboard, 0)
-    cobertura_pct_dashboard = (total_com_compra_dashboard / total_carteira_dashboard * 100.0) if total_carteira_dashboard > 0 else 0.0
-
-    carteira_parametros_html = f"""
-    <div class="card">
-      <div style="font-size:18px; font-weight:700; margin-bottom:10px;">Cobertura da Carteira</div>
-      <div class="dash-coverage-box">
-        Carteira: <b style="margin:0 6px;">{h(total_carteira_dashboard)}</b> |
-        Com compra: <b style="margin:0 6px;">{h(total_com_compra_dashboard)}</b> |
-        Sem compra: <b style="margin:0 6px;">{h(total_sem_compra_dashboard)}</b> |
-        Cobertura: <b style="margin-left:6px;">{h(format_number_br(cobertura_pct_dashboard))}%</b>
-      </div>
-      {render_parametros_comerciais_box_html(parametros_comerciais, compact=True)}
-    </div>
-    """
-
-    parametros_card_html = render_parametros_comerciais_box_html(parametros_comerciais)
-
     debug_html = ""
     if DEBUG_MODE:
         abas = ", ".join(debug_info.get("worksheets", []))
@@ -3867,8 +3678,11 @@ def dashboard():
         if is_admin():
             row_html = f"""
         <tr class="{h(klass)}">
-          <td class="nowrap sticky-col">{h(ck)}</td>
-          <td class="sticky-col-2">{h(grupo)}</td>
+          <td class="nowrap">{h(ck)}</td>
+          <td>{h(grupo)}</td>
+          <td class="nowrap">{h(repc)}</td>
+          <td>{h(nome_rep)}</td>
+          <td class="nowrap">{h(supv)}</td>
           <td>{h(cidade)}</td>
           <td class="money nowrap">{h(t24)}</td>
           <td class="money nowrap">{h(t25)}</td>
@@ -3880,10 +3694,12 @@ def dashboard():
               <input type="hidden" name="client_key" value="{h(ck)}">
               <input type="hidden" name="rep_code" value="{h(repc)}">
               <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
-              <input type="hidden" name="Data Agenda Visita" value="{h(to_input_date(dav))}">
-              <input type="hidden" name="Status Cliente" value="{h(stc)}">
               {hidden_filters}
             </form>
+            <input type="date" name="Data Agenda Visita" value="{h(to_input_date(dav))}" form="{form_id}" style="min-width:155px;">
+          </td>
+
+          <td>
             <select name="Mês" form="{form_id}" style="min-width:140px;">
               {opt_html(meses, mes)}
             </select>
@@ -3892,6 +3708,12 @@ def dashboard():
           <td>
             <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
               {opt_html(semanas, sem)}
+            </select>
+          </td>
+
+          <td>
+            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
+              {opt_html(status_list, stc)}
             </select>
           </td>
 
@@ -3923,8 +3745,6 @@ def dashboard():
               <input type="hidden" name="client_key" value="{h(ck)}">
               <input type="hidden" name="rep_code" value="{h(repc)}">
               <input type="hidden" name="base_row_number" value="{h(base_row_number)}">
-              <input type="hidden" name="Data Agenda Visita" value="{h(to_input_date(dav))}">
-              <input type="hidden" name="Status Cliente" value="{h(stc)}">
               {hidden_filters}
             </form>
             <select name="Mês" form="{form_id}" style="min-width:140px;">
@@ -3935,6 +3755,12 @@ def dashboard():
           <td>
             <select name="Semana Atendimento" form="{form_id}" style="min-width:160px;">
               {opt_html(semanas, sem)}
+            </select>
+          </td>
+
+          <td>
+            <select name="Status Cliente" form="{form_id}" style="min-width:260px;">
+              {opt_html(status_list, stc)}
             </select>
           </td>
 
@@ -3975,8 +3801,6 @@ def dashboard():
     body = f"""
     {debug_html}
     {rep_card_html}
-    {parametros_card_html}
-    {carteira_parametros_html}
 
     <div class="card">
       <form method="get">
@@ -4024,15 +3848,33 @@ def dashboard():
         <thead>
           {f"""
           <tr>
+            <th>Codigo Grupo Cliente</th>
+            <th>Grupo Cliente</th>
+            <th>Codigo Representante</th>
+            <th>Representante</th>
+            <th>Supervisor</th>
+            <th>Cidade</th>
+            <th>Total 2024</th>
+            <th>Total 2025</th>
+            <th>Total 2026</th>
+            <th>Status Cor</th>
+            <th>Data Agenda Visita</th>
+            <th>Mês</th>
+            <th>Semana Atendimento</th>
+            <th>Status Cliente</th>
+            <th>Observações</th>
+          </tr>
+          """ if is_admin() else f"""
+          <tr>
             <th class="sticky-col">Codigo Grupo Cliente</th>
             <th class="sticky-col-2">Grupo Cliente</th>
             <th>Cidade</th>
             <th>Total 2024</th>
             <th>Total 2025</th>
             <th>Total 2026</th>
-            <th>Status Cor</th>
             <th>Mês</th>
             <th>Semana Atendimento</th>
+            <th>Status Cliente</th>
             <th>Observações</th>
           </tr>
           """}
