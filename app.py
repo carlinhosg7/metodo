@@ -1968,10 +1968,19 @@ def montar_metricas_parametros(parametros, clientes_sem_compra=""):
     dias_uteis_ate_hoje_verao = contar_dias_uteis_periodo_ate_hoje(inicio_verao, fim_verao)
 
     saldo_inverno = contar_dias_uteis_restantes_periodo(inicio_inverno, fim_inverno)
-    saldo_verao = contar_dias_uteis_restantes_periodo(inicio_verao, fim_verao)
+
+    hoje = datetime.now().date()
+    if hoje < inicio_verao:
+        saldo_verao = 0
+        positivacao_verao = 0.0
+    else:
+        saldo_verao = contar_dias_uteis_restantes_periodo(inicio_verao, fim_verao)
+        positivacao_verao = (
+            clientes_sem_compra_num / saldo_verao
+            if saldo_verao > 0 and clientes_sem_compra_num > 0 else 0.0
+        )
 
     positivacao_inverno = (clientes_sem_compra_num / saldo_inverno) if saldo_inverno > 0 and clientes_sem_compra_num > 0 else 0.0
-    positivacao_verao = (clientes_sem_compra_num / saldo_verao) if saldo_verao > 0 and clientes_sem_compra_num > 0 else 0.0
 
     return {
         "dias_uteis_inverno": dias_inverno,
@@ -3674,6 +3683,15 @@ def admin_dashboard():
                       <div class="dash-panel-body-map" style="flex:1; overflow:auto;">
                         {mapa_svg_html}
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="margin-top:8px;">
+                  <div class="dash-panel">
+                    <div class="dash-panel-title">Agenda Semanal do Representante</div>
+                    <div class="dash-panel-body">
+                      {agenda_semanal_html}
                     </div>
                   </div>
                 </div>
