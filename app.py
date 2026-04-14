@@ -1454,7 +1454,8 @@ def get_nome_rep_info_by_rep(rep_code):
             "REP", "Rep", "Cód Rep", "Cod Rep", "Código Representante", "Codigo Representante"
         ])
         col_nome = pick_col_flexible(headers, [
-            "NOME REP", "Nome Rep", "Nome do Representante", "Representante", "Nome Representante"
+            "NOME REP", "Nome Rep", "Nome Rep.", "Nome Rep .",
+            "Nome do Representante", "Representante", "Nome Representante"
         ])
         col_sup = pick_col_flexible(headers, [
             "SUPERVISOR", "Supervisor", "Nome Supervisor"
